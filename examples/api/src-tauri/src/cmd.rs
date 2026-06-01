@@ -616,3 +616,23 @@ pub fn test_async_spawn<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<(
   });
   Ok(())
 }
+
+/// Test command for webview.create_pdf (OHOS only)
+#[command]
+pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<()> {
+  log::info!("test_create_pdf called");
+
+  if let Some(window) = app.get_webview_window("main") {
+    let app_clone = app.clone();
+
+    // Use app sandbox path: /data/storage/el2/base/cache/test.pdf
+    let path = "/data/storage/el2/base/cache/test.pdf";
+
+    window.create_pdf(path, move |success| {
+      log::info!("create_pdf callback: success={}, path={}", success, path);
+      let _ = app_clone.emit("create-pdf-result", format!("{}:{}", success, path));
+    })?;
+  }
+
+  Ok(())
+}

@@ -689,6 +689,15 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
     Ok(())
   }
 
+  fn create_pdf(
+    &self,
+    _path: String,
+    callback: Box<dyn Fn(bool) + Send + 'static>,
+  ) -> Result<()> {
+    callback(true);
+    Ok(())
+  }
+
   fn hide(&self) -> Result<()> {
     Ok(())
   }

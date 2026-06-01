@@ -1568,6 +1568,7 @@ pub enum WebviewMessage {
   SetZoom(f64),
   SetBackgroundColor(Option<Color>),
   ClearAllBrowsingData,
+  CreatePdf(String, Box<dyn Fn(bool) + Send + 'static>),
   // Getters
   Url(Sender<Result<String>>),
   Bounds(Sender<Result<tauri_runtime::dpi::Rect>>),
@@ -1960,6 +1961,21 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
         *self.window_id.lock().unwrap(),
         self.webview_id,
         WebviewMessage::ClearAllBrowsingData,
+      ),
+    )
+  }
+
+  fn create_pdf(
+    &self,
+    path: String,
+    callback: Box<dyn Fn(bool) + Send + 'static>,
+  ) -> Result<()> {
+    send_user_message(
+      &self.context,
+      Message::Webview(
+        *self.window_id.lock().unwrap(),
+        self.webview_id,
+        WebviewMessage::CreatePdf(path, callback),
       ),
     )
   }
@@ -3985,6 +4001,11 @@ fn handle_user_message<T: UserEvent>(
           WebviewMessage::ClearAllBrowsingData => {
             if let Err(e) = webview.clear_all_browsing_data() {
               log::error!("failed to clear webview browsing data: {e}");
+            }
+          }
+          WebviewMessage::CreatePdf(path, callback) => {
+            if let Err(e) = webview.create_pdf(&path, None, callback) {
+              log::error!("failed to create PDF: {e}");
             }
           }
           // Getters

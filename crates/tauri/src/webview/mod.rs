@@ -2141,6 +2141,26 @@ tauri::Builder::default()
       .map_err(Into::into)
   }
 
+  /// Create a PDF from the current webview content and save to the given path.
+  ///
+  /// The callback receives `true` on success, `false` on failure.
+  ///
+  /// Currently only supported on OpenHarmony.
+  pub fn create_pdf(
+    &self,
+    path: impl AsRef<std::path::Path>,
+    callback: impl Fn(bool) + Send + 'static,
+  ) -> crate::Result<()> {
+    self
+      .webview
+      .dispatcher
+      .create_pdf(
+        path.as_ref().to_string_lossy().to_string(),
+        Box::new(callback),
+      )
+      .map_err(Into::into)
+  }
+
   /// Returns all cookies in the runtime's cookie store including HTTP-only and secure cookies.
   ///
   /// Note that cookies will only be returned for URLs with an http or https scheme.

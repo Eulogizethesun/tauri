@@ -650,6 +650,14 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
 
   /// Clear all browsing data for this webview.
   fn clear_all_browsing_data(&self) -> Result<()>;
+
+  /// Create a PDF from the current webview content and save to the given path.
+  /// The callback receives `true` on success, `false` on failure.
+  fn create_pdf(
+    &self,
+    path: String,
+    callback: Box<dyn Fn(bool) + Send + 'static>,
+  ) -> Result<()>;
 }
 
 /// Window dispatcher. A thread-safe handle to the window APIs.

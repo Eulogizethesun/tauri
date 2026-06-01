@@ -685,6 +685,34 @@ Expected behavior:
     });
   }
 
+  // ─── Create PDF Manual Test (OHOS only) ───
+  async function manualCreatePdf() {
+    await wrapManual('createPdf', async () => {
+      let resolvePromise;
+      const resultPromise = new Promise((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      const unlisten = await listen('create-pdf-result', (event) => {
+        unlisten();
+        resolvePromise(event.payload);
+      });
+
+      await invoke('test_create_pdf');
+      const result = await resultPromise;
+
+      const success = result.startsWith('true:');
+      const path = result.split(':')[1];
+
+      manualResult = `createPdf result: ${success ? 'SUCCESS' : 'FAILED'}\nPath: ${path}\n\n` +
+        `To verify file exists on device:\n` +
+        `hdc shell "ls -la ${path}"\n\n` +
+        `To pull file to local:\n` +
+        `hdc file recv ${path} ./test.pdf`;
+      onMessage(manualResult);
+    });
+  }
+
   // ─── QuickOperation Manual Tests (OHOS only) ───
   async function manualQuickOperationEnable() {
     await wrapManual('quickOperationEnable', async () => {
@@ -791,6 +819,12 @@ Expected behavior:
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualRelaunch}>relaunch() (app will restart)</button>
         <button class="btn" onclick={manualDownloadAndInstall}>downloadAndInstall() (system dialog)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Create PDF Manual Test (OHOS only)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualCreatePdf}>Create PDF & Verify (check file on device)</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">

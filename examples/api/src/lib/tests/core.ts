@@ -607,4 +607,24 @@ export const coreTests: TestCase[] = [
       // To test manually: launch the app via deep link (e.g., hdc shell aa start -a EntryAbility -b com.tauri.api -U myapp://test)
     },
   },
+
+  // webview.createPdf (OHOS only)
+  {
+    name: 'webview.createPdf (default A4)',
+    category: 'auto',
+    async fn() {
+      const resultPromise = new Promise<string>((resolve) => {
+        const unlisten = listen<string>('create-pdf-result', (event) => {
+          unlisten.then((fn) => fn());
+          resolve(event.payload);
+        });
+      });
+
+      await invoke('test_create_pdf');
+
+      const result = await resultPromise;
+      assert(result.startsWith('true:'), `Expected success, got: ${result}`);
+      assert(result.includes('.pdf'), `Expected path in result, got: ${result}`);
+    },
+  },
 ];
