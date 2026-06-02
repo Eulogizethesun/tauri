@@ -488,6 +488,17 @@ pub fn dummy_command() -> tauri::Result<()> {
   Ok(())
 }
 
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn get_ohos_version_info() -> serde_json::Value {
+  use tauri::ohos::openharmony_ability::version;
+  serde_json::json!({
+    "sdkApiVersion": version::sdk_api_version(),
+    "distributionApiVersion": version::distribution_api_version(),
+    "canIUseWindowManager": version::can_i_use("SystemCapability.Window.SessionManager"),
+  })
+}
+
 #[command]
 pub fn create_window_with_custom_ua<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,

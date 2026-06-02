@@ -1,6 +1,6 @@
-# Tauri OHOS 开发约束与限制
+# OHOS 适配通用约束
 
-> 本文档记录 Tauri OpenHarmony 适配中所有架构约束、平台限制和开发规则。
+> 本文档是 Tauri OpenHarmony 适配的完整约束参考，自包含于 Skill 体系中。
 > 修改 OHOS 相关代码前必须先阅读并遵守这些规则。
 
 ---
@@ -71,6 +71,7 @@
 | NAPI `Env` 只在获取它的线程有效 | `MAIN_THREAD_ENV` 存储在 `thread_local!` 中, 其他线程调用 `get_main_thread_env()` 返回 `None` |
 | `ObjectRef` (napi_ref) 不是 Send/Sync | 必须通过 `Mutex<SendableHelper>` + `ptr::read` 跨线程共享, `unsafe impl Send/Sync` |
 
+---
 
 ## 3. 构建与环境规则
 
@@ -103,7 +104,7 @@
 | `hvigorw` 需要 `JAVA_HOME` 和 `DEVECO_SDK_HOME` 环境变量 | 签名步骤需要 Java (`spawn java ENOENT`) |
 | `tauriPlugin` 在独立构建时必须禁用 | hvigorfile.ts 中的 tauriPlugin 需要 TCP 回调 tauri CLI |
 
-### 3.5 日志规则
+### 3.4 日志规则
 
 | 规则 | 说明 |
 |------|------|
@@ -180,9 +181,58 @@
 
 ---
 
-## 6. 测试约束
+## 6. API 版本管理
 
-### 6.1 Rust 单元测试
+OHOS 平台存在多版本 API（OpenHarmony 底座 + HarmonyOS 发行版），使用高版本 API 时必须添加版本守卫，确保低版本设备不会崩溃。
+
+### 6.1 三个版本检测 API
+
+```rust
+use openharmony_ability::version;
+
+version::sdk_api_version()           // OpenHarmony 底座 API Level（12, 14, 20...）
+version::distribution_api_version()  // HarmonyOS 发行版 API 版本（50000, 50001, 60000...）
+version::can_i_use("SystemCapability.xxx")  // 设备硬件能力检测
+```
+
+### 6.2 选择哪个 API？
+
+| API 文档标注 | 使用 | 示例 |
+|-------------|------|------|
+| `openharmony/` 模块 + `since N` | `sdk_api_version() >= N` | `@ohos.multimedia.image` |
+| `hms/` 模块 + `since 5.0.1(13)` | `distribution_api_version() >= 50001` | `@hms.core.xxx` |
+| `SystemCapability.xxx` | `can_i_use("SystemCapability.xxx")` | NFC、传感器、摄像头 |
+
+### 6.3 降级模式速查
+
+| 模式 | 说明 | 示例 |
+|------|------|------|
+| 静默跳过 | 版本不满足时直接跳过，不写 else，不打日志 | 视觉效果、增强功能 |
+| 函数降级 | 新旧 API 都有实现 | `activate_v2()` vs `activate()` |
+| 强制回退值 | 返回安全的默认值 | 主题回退为 Light |
+| 参数覆写 | 修改参数使功能安全降级 | 低版本强制不透明 |
+| canIUse + 版本号 | 先硬件能力，后软件版本 | 定位服务 |
+
+### 6.4 关键规则
+
+| 规则 | 说明 |
+|------|------|
+| **tauri api demo 默认 API 版本为 12** | 应用 `compileSdkVersion` / `compatibleSdkVersion` 配置为 API 12（最低版本）。使用 > 12 的 API 必须加版本守卫，否则低版本设备崩溃 |
+| **版本隔离是底层仓的职责** | 给 tao/wry/muda/openharmony-ability 内部使用，不是给应用开发者用的 |
+| **静默跳过是默认策略** | 与 Windows/macOS 一致：不满足条件时直接跳过，不写 else 分支，不打日志 |
+| **区分版本体系** | OpenHarmony 接口用 `sdk_api_version()`，HarmonyOS 专有用 `distribution_api_version()`，不要混用 |
+| **组合检查先硬件后软件** | 先 `can_i_use()`，后版本号 |
+| **ArkTS 侧也有版本守卫** | `deviceInfo.sdkApiVersion` / `deviceInfo.distributionOSApiVersion` / `canIUse()` |
+
+### 6.5 完整参考
+
+详细的决策矩阵、版本号计算、6 种降级模式的代码示例（含 Windows/macOS 真实参考），参见 [ohos-version-isolation Skill](../../ohos-version-isolation/SKILL.md)。
+
+---
+
+## 7. 测试约束
+
+### 7.1 Rust 单元测试
 
 | 规则 | 说明 |
 |------|------|
@@ -191,12 +241,10 @@
 | 设备上 `--test-threads=1` | 设备端不支持并行测试执行 |
 | `OnceLock` 语义: 只能设置一次 | `crate::ohos::BASE_PATH` 等 `OnceLock` 变量在测试进程中只能初始化一次 |
 
-### 6.2 前端测试
+### 7.2 前端测试
 
 | 规则 | 说明 |
 |------|------|
 | 每个测试 5 秒超时 | `TEST_TIMEOUT_MS = 5000`。防止 API stub 导致无限挂起 |
 | 测试分类: `auto` / `side-effect` / `manual` | `auto`: 可断言; `side-effect`: 有副作用但可验证; `manual`: 需人工确认 |
 | 不支持的 plugin 用 `cfg(not(target_env = "ohos"))` 排除 | JS 侧用动态 `import()` 防止加载失败阻塞其他测试 |
-
----

@@ -39,6 +39,27 @@ function assert(condition: boolean, msg: string) {
 }
 
 export const coreTests: TestCase[] = [
+  // OHOS version info (prints to console on OHOS, skipped on other platforms)
+  {
+    name: '@tauri-apps/ohos.versionInfo',
+    category: 'auto',
+    async fn() {
+      try {
+        const info = await invoke<{
+          sdkApiVersion: number;
+          distributionApiVersion: number;
+          canIUseWindowManager: boolean;
+        }>('get_ohos_version_info');
+        console.log(`[OHOS Version] sdk_api=${info.sdkApiVersion}, distribution_api=${info.distributionApiVersion}, canIUse(WindowManager)=${info.canIUseWindowManager}`);
+        assert(info.sdkApiVersion >= 12, `sdkApiVersion should be >= 12, got ${info.sdkApiVersion}`);
+        assert(info.distributionApiVersion > 0, `distributionApiVersion should be > 0, got ${info.distributionApiVersion}`);
+        assert(typeof info.canIUseWindowManager === 'boolean', 'canIUse should return boolean');
+      } catch {
+        // Not on OHOS — command doesn't exist, skip silently
+      }
+    },
+  },
+
   // @tauri-apps/api/app
   {
     name: '@tauri-apps/api/app.getVersion',

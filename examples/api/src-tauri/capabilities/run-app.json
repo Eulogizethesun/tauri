@@ -39,6 +39,7 @@
     "allow-get-tracked-menu-events",
     "allow-get-tracked-run-events",
     "allow-clear-tracked-events",
+    "allow-simulate-tray-click",
     "allow-emit-test-event",
     "allow-setup-app-listener",
     "allow-test-async-spawn",

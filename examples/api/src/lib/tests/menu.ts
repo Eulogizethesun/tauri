@@ -1,4 +1,5 @@
 import type { TestCase } from '../test-runner';
+import { invoke } from '@tauri-apps/api/core';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
@@ -6,6 +7,19 @@ function assert(condition: boolean, msg: string) {
 
 // 1x1 transparent PNG in base64
 const TEST_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Skip test silently if simulate_menu_click is not available (non-OHOS). */
+async function skipIfNoSimulate(): Promise<boolean> {
+  try {
+    await invoke('plugin:app-menu|simulate_menu_click', { itemId: '__probe__' });
+    return false; // available
+  } catch (e: any) {
+    if (String(e).includes('only available on OHOS')) return true;
+    return false; // available (probe item just not found)
+  }
+}
 
 export const menuTests: TestCase[] = [
   // ==================== Menu 测试 ====================
@@ -1003,6 +1017,182 @@ export const menuTests: TestCase[] = [
         `selectAll should select all textarea content, got "${selectedAll}"`);
 
       document.body.removeChild(textarea);
+    },
+  },
+
+  // ==================== NEW AUTO TESTS ====================
+
+  // --- Popup tests (side-effect) ---
+  {
+    name: '@tauri-apps/api/menu.Menu.popup_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
+      const menu = await Menu.new({
+        items: [
+          await MenuItem.new({ text: 'Auto Item 1' }),
+          await MenuItem.new({ text: 'Auto Item 2' }),
+          await MenuItem.new({ text: 'Auto Item 3' }),
+        ],
+      });
+      await menu.popup();
+      const items = await menu.items();
+      assert(items.length === 3, `expected 3 items after popup, got ${items.length}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/menu.Menu.popup_at_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
+      const { LogicalPosition } = await import('@tauri-apps/api/dpi');
+      const menu = await Menu.new({
+        items: [
+          await MenuItem.new({ text: 'Pos Item 1' }),
+          await MenuItem.new({ text: 'Pos Item 2' }),
+        ],
+      });
+      await menu.popup(new LogicalPosition(100, 200));
+      const items = await menu.items();
+      assert(items.length === 2, `expected 2 items after popup_at, got ${items.length}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/menu.Submenu.popup_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Submenu, MenuItem } = await import('@tauri-apps/api/menu');
+      const submenu = await Submenu.new({
+        text: 'Sub Auto',
+        items: [
+          await MenuItem.new({ text: 'Sub Auto Item 1' }),
+          await MenuItem.new({ text: 'Sub Auto Item 2' }),
+        ],
+      });
+      await submenu.popup();
+      const items = await submenu.items();
+      assert(items.length === 2, `expected 2 submenu items after popup, got ${items.length}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/menu.Submenu.popup_at_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Submenu, MenuItem } = await import('@tauri-apps/api/menu');
+      const { LogicalPosition } = await import('@tauri-apps/api/dpi');
+      const submenu = await Submenu.new({
+        text: 'Sub Pos Auto',
+        items: [
+          await MenuItem.new({ text: 'Sub Pos Item 1' }),
+          await MenuItem.new({ text: 'Sub Pos Item 2' }),
+        ],
+      });
+      await submenu.popup(new LogicalPosition(100, 200));
+      const items = await submenu.items();
+      assert(items.length === 2, `expected 2 submenu items after popup_at, got ${items.length}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/menu.Submenu.nested_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Submenu, MenuItem } = await import('@tauri-apps/api/menu');
+      const childSub = await Submenu.new({
+        text: 'Nested Child',
+        items: [
+          await MenuItem.new({ text: 'Deep Item 1' }),
+          await MenuItem.new({ text: 'Deep Item 2' }),
+        ],
+      });
+      const parentSub = await Submenu.new({
+        text: 'Nested Parent',
+        items: [
+          await MenuItem.new({ text: 'Parent Item' }),
+          childSub,
+        ],
+      });
+      await parentSub.popup();
+      const parentItems = await parentSub.items();
+      assert(parentItems.length === 2, `expected 2 parent items, got ${parentItems.length}`);
+      const childItems = await childSub.items();
+      assert(childItems.length === 2, `expected 2 child items, got ${childItems.length}`);
+    },
+  },
+
+  // --- About test (side-effect) ---
+  {
+    name: '@tauri-apps/api/menu.PredefinedMenuItem.about_exec_auto',
+    category: 'side-effect',
+    async fn() {
+      const { Menu, PredefinedMenuItem } = await import('@tauri-apps/api/menu');
+      const aboutItem = await PredefinedMenuItem.new({
+        item: { About: { name: 'TestApp', version: '1.0.0' } },
+      });
+      assert(aboutItem.id.length > 0, `about item id should not be empty, got "${aboutItem.id}"`);
+      const text = await aboutItem.text();
+      assert(text.length > 0, `about item text should not be empty, got "${text}"`);
+      const menu = await Menu.new({ items: [aboutItem] });
+      await menu.popup();
+      const items = await menu.items();
+      assert(items.length === 1, `expected 1 item in menu after popup, got ${items.length}`);
+    },
+  },
+
+  // --- Integration tests (auto, OHOS-only) ---
+  {
+    name: '@tauri-apps/api/menu.Menu.full_workflow_auto',
+    category: 'auto',
+    async fn() {
+      if (await skipIfNoSimulate()) return; // skip on non-OHOS
+
+      const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
+
+      let callbackFired = false;
+      const item = await MenuItem.new({
+        text: 'Workflow Item',
+        action: (_id: string) => { callbackFired = true; },
+      });
+      const menu = await Menu.new({ items: [item] });
+      await menu.popup();
+
+      await invoke('clear_tracked_events');
+      await invoke('plugin:app-menu|simulate_menu_click', { itemId: item.id });
+      await delay(1000);
+
+      assert(callbackFired === true, 'action callback should have been invoked via simulate_menu_click');
+      const tracked = await invoke('get_tracked_menu_events') as string[];
+      assert(tracked.includes(item.id),
+        `get_tracked_menu_events should contain "${item.id}", got: ${JSON.stringify(tracked)}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/menu.Menu.with_submenu_auto',
+    category: 'auto',
+    async fn() {
+      if (await skipIfNoSimulate()) return; // skip on non-OHOS
+
+      const { Menu, Submenu, MenuItem } = await import('@tauri-apps/api/menu');
+
+      let subCallbackFired = false;
+      const subItem = await MenuItem.new({
+        text: 'Sub Workflow Item',
+        action: (_id: string) => { subCallbackFired = true; },
+      });
+      const submenu = await Submenu.new({
+        text: 'Workflow Sub',
+        items: [subItem],
+      });
+      const menu = await Menu.new({ items: [submenu] });
+      await menu.popup();
+
+      await invoke('clear_tracked_events');
+      await invoke('plugin:app-menu|simulate_menu_click', { itemId: subItem.id });
+      await delay(1000);
+
+      assert(subCallbackFired === true, 'submenu item action callback should have been invoked');
+      const tracked = await invoke('get_tracked_menu_events') as string[];
+      assert(tracked.includes(subItem.id),
+        `get_tracked_menu_events should contain "${subItem.id}", got: ${JSON.stringify(tracked)}`);
     },
   },
 ];

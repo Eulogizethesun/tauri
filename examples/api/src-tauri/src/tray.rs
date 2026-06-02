@@ -12,6 +12,33 @@ use tauri::{
   Emitter, EventTarget, Manager, Runtime, WebviewUrl,
 };
 
+#[cfg(target_env = "ohos")]
+#[tauri::command]
+pub fn simulate_tray_click<R: Runtime>(
+  _app: tauri::AppHandle<R>,
+  button: String,
+) -> Result<(), String> {
+  let click_type = match button.as_str() {
+    "Right" => "rightClick",
+    _ => "leftClick",
+  };
+  tauri::ohos::openharmony_ability::statusbar::icon_click_sender()
+    .send(tauri::ohos::openharmony_ability::statusbar::StatusBarClickEvent::IconClick {
+      click_type: click_type.to_string(),
+    })
+    .map_err(|e| format!("Failed to send tray click event: {}", e))?;
+  Ok(())
+}
+
+#[cfg(not(target_env = "ohos"))]
+#[tauri::command]
+pub fn simulate_tray_click<R: Runtime>(
+  _app: tauri::AppHandle<R>,
+  _button: String,
+) -> Result<(), String> {
+  Err("simulate_tray_click is only available on OHOS".to_string())
+}
+
 pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
   let toggle_i = MenuItem::with_id(app, "toggle", "Toggle", true, None::<&str>)?;
   let new_window_i = MenuItem::with_id(app, "new-window", "New window", true, None::<&str>)?;

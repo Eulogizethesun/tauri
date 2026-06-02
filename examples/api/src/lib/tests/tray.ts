@@ -1,4 +1,5 @@
 import type { TestCase } from '../test-runner';
+import { invoke } from '@tauri-apps/api/core';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
@@ -6,6 +7,17 @@ function assert(condition: boolean, msg: string) {
 
 const TEST_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Skip test silently if simulate commands are not available (non-OHOS). */
+async function skipIfNoSimulate(): Promise<boolean> {
+  try {
+    await invoke('plugin:app-menu|simulate_menu_click', { itemId: '__probe__' });
+    return false;
+  } catch (e: any) {
+    if (String(e).includes('only available on OHOS')) return true;
+    return false;
+  }
+}
 
 let sharedTray: any = null;
 
@@ -289,6 +301,157 @@ export const trayTests: TestCase[] = [
       assert(sharedTray !== null, 'sharedTray not initialized');
       sharedTray.close();
       sharedTray = null;
+    },
+  },
+
+  // ==================== NEW AUTO TESTS ====================
+
+  // --- Full Test Tray (cross-platform) ---
+  {
+    name: '@tauri-apps/api/tray.TrayIcon.full_test_tray',
+    category: 'auto',
+    async fn() {
+      await delay(500);
+      const { TrayIcon } = await import('@tauri-apps/api/tray');
+      const { Menu, MenuItem, CheckMenuItem, IconMenuItem, PredefinedMenuItem } = await import('@tauri-apps/api/menu');
+
+      const normalItem = await MenuItem.new({ text: 'Normal Item' });
+      const checkItem = await CheckMenuItem.new({ text: 'Check Item', checked: false });
+      const iconItem = await IconMenuItem.new({ text: 'Icon Item', icon: TEST_ICON });
+      const sep1 = await PredefinedMenuItem.new({ item: 'Separator' });
+      const copy = await PredefinedMenuItem.new({ item: 'Copy' });
+      const cut = await PredefinedMenuItem.new({ item: 'Cut' });
+      const paste = await PredefinedMenuItem.new({ item: 'Paste' });
+      const undo = await PredefinedMenuItem.new({ item: 'Undo' });
+      const redo = await PredefinedMenuItem.new({ item: 'Redo' });
+      const sep2 = await PredefinedMenuItem.new({ item: 'Separator' });
+      const minimize = await PredefinedMenuItem.new({ item: 'Minimize' });
+      const maximize = await PredefinedMenuItem.new({ item: 'Maximize' });
+      const fullscreen = await PredefinedMenuItem.new({ item: 'Fullscreen' });
+      const closeWindow = await PredefinedMenuItem.new({ item: 'CloseWindow' });
+      const sep3 = await PredefinedMenuItem.new({ item: 'Separator' });
+      const hide = await PredefinedMenuItem.new({ item: 'Hide' });
+      const quit = await PredefinedMenuItem.new({ item: 'Quit' });
+
+      const menu = await Menu.new({
+        items: [
+          normalItem, checkItem, iconItem, sep1,
+          copy, cut, paste, sep2,
+          undo, redo, sep3,
+          minimize, maximize, fullscreen, closeWindow,
+          hide, quit,
+        ],
+      });
+
+      const tray = await TrayIcon.new({
+        id: 'full-test-tray-auto',
+        icon: TEST_ICON,
+        tooltip: 'Full Test Tray Auto',
+        menu,
+      });
+
+      assert(tray.id === 'full-test-tray-auto', `tray id mismatch: "${tray.id}"`);
+      const found = await TrayIcon.getById('full-test-tray-auto');
+      assert(found !== null, 'full test tray not found by getById');
+
+      await TrayIcon.removeById('full-test-tray-auto');
+      const gone = await TrayIcon.getById('full-test-tray-auto');
+      assert(gone === null, 'full test tray should be removed');
+    },
+  },
+
+  // --- Tray event chain (OHOS-only) ---
+  {
+    name: '@tauri-apps/api/tray.TrayIcon.tray_event_chain',
+    category: 'auto',
+    async fn() {
+      if (await skipIfNoSimulate()) return;
+      await delay(500);
+
+      const { TrayIcon } = await import('@tauri-apps/api/tray');
+
+      let callbackFired = false;
+      const tray = await TrayIcon.new({
+        id: 'event-chain-tray',
+        icon: TEST_ICON,
+        action: (_event: any) => { callbackFired = true; },
+      });
+
+      await invoke('simulate_tray_click', { button: 'Left' });
+      await delay(1000);
+
+      assert(callbackFired === true, 'tray action callback should have been invoked via simulate_tray_click');
+
+      await TrayIcon.removeById('event-chain-tray');
+    },
+  },
+
+  // --- Tray menu item click (OHOS-only) ---
+  {
+    name: '@tauri-apps/api/tray.TrayIcon.tray_menu_item_click',
+    category: 'auto',
+    async fn() {
+      if (await skipIfNoSimulate()) return;
+      await delay(500);
+
+      const { TrayIcon } = await import('@tauri-apps/api/tray');
+      const { Menu, MenuItem } = await import('@tauri-apps/api/menu');
+
+      const menuItem = await MenuItem.new({ text: 'Tray Menu Click Item' });
+      const menu = await Menu.new({ items: [menuItem] });
+
+      const tray = await TrayIcon.new({
+        id: 'menu-click-tray',
+        icon: TEST_ICON,
+        menu,
+      });
+
+      await invoke('clear_tracked_events');
+      await invoke('plugin:app-menu|simulate_menu_click', { itemId: menuItem.id });
+      await delay(1000);
+
+      const tracked = await invoke('get_tracked_menu_events') as string[];
+      assert(tracked.includes(menuItem.id),
+        `get_tracked_menu_events should contain "${menuItem.id}", got: ${JSON.stringify(tracked)}`);
+
+      await TrayIcon.removeById('menu-click-tray');
+    },
+  },
+
+  // --- Tray multi-item menu (cross-platform) ---
+  {
+    name: '@tauri-apps/api/tray.TrayIcon.tray_multi_item_menu',
+    category: 'auto',
+    async fn() {
+      await delay(500);
+      const { TrayIcon } = await import('@tauri-apps/api/tray');
+      const { Menu, MenuItem, CheckMenuItem, IconMenuItem, PredefinedMenuItem } = await import('@tauri-apps/api/menu');
+
+      const menu = await Menu.new({
+        items: [
+          await MenuItem.new({ text: 'Multi 1' }),
+          await MenuItem.new({ text: 'Multi 2' }),
+          await CheckMenuItem.new({ text: 'Multi Check', checked: true }),
+          await IconMenuItem.new({ text: 'Multi Icon', icon: TEST_ICON }),
+          await PredefinedMenuItem.new({ item: 'Separator' }),
+          await PredefinedMenuItem.new({ item: 'Copy' }),
+        ],
+      });
+
+      const tray = await TrayIcon.new({
+        id: 'multi-item-tray',
+        icon: TEST_ICON,
+        tooltip: 'Multi Item Tray',
+        menu,
+      });
+
+      assert(tray.id === 'multi-item-tray', `tray id mismatch: "${tray.id}"`);
+      const found = await TrayIcon.getById('multi-item-tray');
+      assert(found !== null, 'multi item tray not found');
+
+      await TrayIcon.removeById('multi-item-tray');
+      const gone = await TrayIcon.getById('multi-item-tray');
+      assert(gone === null, 'multi item tray should be removed');
     },
   },
 ];

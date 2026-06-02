@@ -78,6 +78,25 @@ pub fn is_menu_visible<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> bool {
   app.is_menu_visible().unwrap_or(true)
 }
 
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn simulate_menu_click<R: tauri::Runtime>(
+  _app: tauri::AppHandle<R>,
+  item_id: String,
+) -> Result<(), String> {
+  tauri::ohos::openharmony_ability::menu::send_menu_event(item_id);
+  Ok(())
+}
+
+#[cfg(not(target_env = "ohos"))]
+#[command]
+pub fn simulate_menu_click<R: tauri::Runtime>(
+  _app: tauri::AppHandle<R>,
+  _item_id: String,
+) -> Result<(), String> {
+  Err("simulate_menu_click is only available on OHOS".to_string())
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
   Builder::new("app-menu")
     .invoke_handler(tauri::generate_handler![
@@ -86,7 +105,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       toggle,
       hide_menu,
       show_menu,
-      is_menu_visible
+      is_menu_visible,
+      simulate_menu_click
     ])
     .build()
 }
