@@ -1568,6 +1568,7 @@ pub enum WebviewMessage {
   SetZoom(f64),
   SetBackgroundColor(Option<Color>),
   ClearAllBrowsingData,
+  #[cfg(target_env = "ohos")]
   CreatePdf(String, Box<dyn Fn(bool) + Send + 'static>),
   // Getters
   Url(Sender<Result<String>>),
@@ -1965,6 +1966,7 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
     )
   }
 
+  #[cfg(target_env = "ohos")]
   fn create_pdf(
     &self,
     path: String,
@@ -4003,6 +4005,7 @@ fn handle_user_message<T: UserEvent>(
               log::error!("failed to clear webview browsing data: {e}");
             }
           }
+          #[cfg(target_env = "ohos")]
           WebviewMessage::CreatePdf(path, callback) => {
             if let Err(e) = webview.create_pdf(&path, callback) {
               log::error!("failed to create PDF: {e}");

@@ -2145,7 +2145,8 @@ tauri::Builder::default()
   ///
   /// The callback receives `true` on success, `false` on failure.
   ///
-  /// Currently only supported on OpenHarmony.
+  /// Only available on OpenHarmony.
+  #[cfg(target_env = "ohos")]
   pub fn create_pdf(
     &self,
     path: impl AsRef<std::path::Path>,

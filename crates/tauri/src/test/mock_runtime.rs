@@ -689,6 +689,7 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
     Ok(())
   }
 
+  #[cfg(target_env = "ohos")]
   fn create_pdf(
     &self,
     _path: String,

@@ -629,6 +629,7 @@ pub fn test_async_spawn<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<(
 }
 
 /// Test command for webview.create_pdf (OHOS only)
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<()> {
   log::info!("test_create_pdf called");

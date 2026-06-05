@@ -653,6 +653,7 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
 
   /// Create a PDF from the current webview content and save to the given path.
   /// The callback receives `true` on success, `false` on failure.
+  #[cfg(target_env = "ohos")]
   fn create_pdf(
     &self,
     path: String,

@@ -426,6 +426,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_tracked_menu_events,
       cmd::get_tracked_run_events,
       cmd::clear_tracked_events,
+      #[cfg(target_env = "ohos")]
       cmd::test_create_pdf,
       #[cfg(target_env = "ohos")]
       cmd::get_ohos_version_info,
