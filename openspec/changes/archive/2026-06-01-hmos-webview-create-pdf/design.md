@@ -362,7 +362,7 @@ Rust 侧:
 controller.createPdf(mergedConfig)
   .then((result) => {
     try {
-      const buffer = result.pdfArrayBuffer().buffer;
+      const buffer = result.pdfArrayBuffer();
       const file = fileIo.openSync(path, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
       try {
         fileIo.writeSync(file.fd, buffer);
