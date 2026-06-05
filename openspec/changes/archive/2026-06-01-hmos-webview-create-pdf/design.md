@@ -466,32 +466,25 @@ ProxyJsHelper {
 
 ## 检视发现
 
-### 问题 #1：平台 stub 的 callback 泄漏
+### ~~问题 #1：平台 stub 的 callback 泄漏~~ (已修复)
 
-**严重程度：⚠️ 中**
+~~**严重程度：⚠️ 中**~~
 
-wry 四个平台 stub（webkitgtk / webview2 / wkwebview / android）的 `create_pdf` 返回 `Ok(())` 但**永远不会调用 callback**。如果调用方在等待回调，会永远挂起。
+~~wry 四个平台 stub（webkitgtk / webview2 / wkwebview / android）的 `create_pdf` 返回 `Ok(())` 但**永远不会调用 callback**。如果调用方在等待回调，会永远挂起。~~
 
-**当前影响：** 无。目前只在 OHOS 设备上运行。
+~~**当前影响：** 无。目前只在 OHOS 设备上运行。~~
 
-**修复建议（未来）：**
-```rust
-// ~~pub fn create_pdf(&self, _path: &str, _config: Option<()>, callback: Box<dyn Fn(bool) + Send + 'static>) -> Result<()> {~~
-pub fn create_pdf(&self, _path: &str, callback: Box<dyn Fn(bool) + Send + 'static>) -> Result<()> {
-    callback(false);  // 通知失败
-    Ok(())
-}
-```
+**修复：** 公共 API `create_pdf()` 已加 `#[cfg(target_env = "ohos")]` 门控，四个平台 stub 已删除。非 OHOS 平台编译期不可调用。
 
-### 问题 #2：NAPI 层异常路径的 callback 泄漏
+### 问题 #2：~~NAPI 层异常路径的 callback 泄漏~~ → callback 异常路径处理
 
-**严重程度：⚠️ 中**
+~~**严重程度：⚠️ 中**~~
 
-`openharmony-ability/crates/ability/src/helper/webview.rs` 中，如果 `get_main_thread_env()` 返回 `None`，直接返回 `Err`，callback 不会被调用。
+~~`openharmony-ability/crates/ability/src/helper/webview.rs` 中，如果 `get_main_thread_env()` 返回 `None`，直接返回 `Err`，callback 不会被调用。~~
 
-**当前影响：** 极低。`get_main_thread_env()` 在正常运行时不会返回 `None`。
+**已修复：** `create_pdf()` 重构为在 callback 被 move 消费前的所有错误路径（env 不可用、NAPI 函数获取失败）调用 `callback(false)` 后再返回 `Err`。
 
-**修复建议（未来）：** 在 NAPI 层确保 `Err` 路径也调用 `callback(false)`。
+**已知限制：** callback 被 move 进 NAPI closure 后，如果 `create_function_from_closure` 或 `call()` 发生灾难性失败（极罕见），callback 无法回收调用。tauri dispatch 层已添加注释说明。
 
 ### 问题 #3：窗口不存在时静默返回
 

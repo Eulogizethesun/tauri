@@ -4007,6 +4007,10 @@ fn handle_user_message<T: UserEvent>(
           }
           #[cfg(target_env = "ohos")]
           WebviewMessage::CreatePdf(path, callback) => {
+            // callback is moved into wry's create_pdf(). On common error paths
+            // (env unavailable, function not found), the native layer invokes
+            // callback(false) before returning Err. On catastrophic NAPI failures
+            // after the callback is consumed, it cannot be recovered.
             if let Err(e) = webview.create_pdf(&path, callback) {
               log::error!("failed to create PDF: {e}");
             }

@@ -155,12 +155,12 @@
 **未完成:** 0  
 **完成率:** 100%
 
-## 已知问题
+## ~~已知问题~~ (已修复)
 
 以下问题已记录在 design.md 的"检视发现"章节中：
 
-1. **⚠️ 中** - 平台 stub 的 callback 泄漏（非 OHOS 平台）
-2. **⚠️ 中** - NAPI 层异常路径的 callback 泄漏
+1. ~~**⚠️ 中** - 平台 stub 的 callback 泄漏（非 OHOS 平台）~~ → **已修复**：stub 已删除，公共 API 加 `#[cfg(target_env = "ohos")]` 门控
+2. ~~**⚠️ 中** - NAPI 层异常路径的 callback 泄漏~~ → **已修复**：常见错误路径（env/函数获取失败）在 callback 被 move 前调用 `callback(false)`；灾难性 NAPI 失败后的 callback 无法回收为已知限制
 3. **💡 低** - 窗口不存在时静默返回
 
 这些问题当前不影响 OHOS 平台功能，已记录供未来修复。
