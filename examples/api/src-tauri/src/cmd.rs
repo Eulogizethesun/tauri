@@ -644,6 +644,8 @@ pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<()
       log::info!("create_pdf callback: success={}, path={}", success, path);
       let _ = app_clone.emit("create-pdf-result", format!("{}:{}", success, path));
     })?;
+  } else {
+    let _ = app.emit("create-pdf-result", "false:window not found");
   }
 
   Ok(())
