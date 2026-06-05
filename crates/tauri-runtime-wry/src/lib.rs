@@ -4004,7 +4004,7 @@ fn handle_user_message<T: UserEvent>(
             }
           }
           WebviewMessage::CreatePdf(path, callback) => {
-            if let Err(e) = webview.create_pdf(&path, None, callback) {
+            if let Err(e) = webview.create_pdf(&path, callback) {
               log::error!("failed to create PDF: {e}");
             }
           }

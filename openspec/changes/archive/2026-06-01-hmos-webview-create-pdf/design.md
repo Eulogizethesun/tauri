@@ -50,52 +50,66 @@
 ### 调用链路
 
 ```
+~~Tauri App (Rust)~~
+~~  webview.create_pdf("/path/to/output.pdf", config, callback)~~
+~~       │~~
+~~       ▼~~
+~~wry InnerWebView::create_pdf(path, config, callback)~~
+~~       │~~
+~~       ▼~~
+~~openharmony-ability Webview::create_pdf(path, config, callback)~~
+~~       │  PdfConfig → HashMap<camelCase keys> → NAPI~~
+~~       ▼~~
+~~ArkTS JsHelper.createPdf(path, configMap, callback)~~
+~~       │  { ...DEFAULT_PDF_CONFIG, ...configMap }~~
+~~       ▼~~
+~~controller.createPdf(merged) → PdfData → pdfArrayBuffer() → fileIo.write → callback(true/false)~~
+
 Tauri App (Rust)
-  webview.create_pdf("/path/to/output.pdf", config, callback)
+  webview.create_pdf("/path/to/output.pdf", callback)
        │
        ▼
-wry InnerWebView::create_pdf(path, config, callback)
+wry InnerWebView::create_pdf(path, callback)
        │
        ▼
-openharmony-ability Webview::create_pdf(path, config, callback)
-       │  PdfConfig → HashMap<camelCase keys> → NAPI
+openharmony-ability Webview::create_pdf(path, callback)
+       │  NAPI
        ▼
-ArkTS JsHelper.createPdf(path, configMap, callback)
-       │  { ...DEFAULT_PDF_CONFIG, ...configMap }
+ArkTS JsHelper.createPdf(path, callback)
+       │  固定使用 DEFAULT_PDF_CONFIG (A4)
        ▼
-controller.createPdf(merged) → PdfData → pdfArrayBuffer() → fileIo.write → callback(true/false)
+controller.createPdf(DEFAULT_PDF_CONFIG) → PdfData → pdfArrayBuffer() → fileIo.write → callback(true/false)
 ```
 
-### 配置参数流转
+~~### 配置参数流转~~
+~~```~~
+~~Rust 调用方:~~
+~~  create_pdf("/path/to/out.pdf", Some(PdfConfig {~~
+~~    width: Some(11.69),       // 横向 A4~~
+~~    height: Some(8.27),~~
+~~    ..Default::default()      // 其余用默认值~~
+~~  }))~~
 
-```
-Rust 调用方:
-  create_pdf("/path/to/out.pdf", Some(PdfConfig {
-    width: Some(11.69),       // 横向 A4
-    height: Some(8.27),
-    ..Default::default()      // 其余用默认值
-  }))
+~~       │~~
+~~       ▼  NAPI 传输 (HashMap<String, Either<f64, bool>>)~~
 
-       │
-       ▼  NAPI 传输 (HashMap<String, Either<f64, bool>>)
+~~ArkTS 侧接收:~~
+~~  createPdf(path, { width: 11.69, height: 8.27 }, callback)~~
+~~  ~~
+~~       │~~
+~~       ▼  合并默认值~~
 
-ArkTS 侧接收:
-  createPdf(path, { width: 11.69, height: 8.27 }, callback)
-  
-       │
-       ▼  合并默认值
-
-实际调用:
-  controller.createPdf({
-    width: 11.69,
-    height: 8.27,
-    marginTop: 0,         ← 默认值补全
-    marginBottom: 0,
-    marginRight: 0,
-    marginLeft: 0,
-    shouldPrintBackground: true
-  })
-```
+~~实际调用:~~
+~~  controller.createPdf({~~
+~~    width: 11.69,~~
+~~    height: 8.27,~~
+~~    marginTop: 0,         ← 默认值补全~~
+~~    marginBottom: 0,~~
+~~    marginRight: 0,~~
+~~    marginLeft: 0,~~
+~~    shouldPrintBackground: true~~
+~~  })~~
+~~```~~
 
 ## 核心设计决策
 
@@ -105,7 +119,8 @@ ArkTS 侧接收:
 
 ```
 Rust 侧:
-  webview.create_pdf("/data/storage/myfile.pdf", config)
+  // ~~webview.create_pdf("/data/storage/myfile.pdf", config)~~
+  webview.create_pdf("/data/storage/myfile.pdf", callback)
        │
        ▼
   NAPI 传输路径字符串
@@ -131,46 +146,97 @@ Rust 调用方需要在 `onPageEnd` 回调触发后再调用 `create_pdf()`。Ar
 - Rust 侧已有 `on_page_end` 回调机制
 - 避免跨层状态同步的复杂性
 
-### 3. 配置参数
+### 3. ~~配置参数~~ → 配置参数策略
 
-**选择：用户可输入具体配置，未输入时使用默认 A4**
+~~**选择：用户可输入具体配置，未输入时使用默认 A4**~~
 
-#### Rust 侧定义
+~~#### Rust 侧定义~~
 
-```rust
-#[derive(Default)]
-pub struct PdfConfig {
-    pub width: Option<f64>,               // 页面宽度（英寸），默认 8.27
-    pub height: Option<f64>,              // 页面高度（英寸），默认 11.69
-    pub margin_top: Option<f64>,          // 上边距（英寸），默认 0
-    pub margin_bottom: Option<f64>,       // 下边距（英寸），默认 0
-    pub margin_left: Option<f64>,         // 左边距（英寸），默认 0
-    pub margin_right: Option<f64>,        // 右边距（英寸），默认 0
-    pub should_print_background: Option<bool>, // 是否打印背景，默认 true
-}
-```
+~~```rust~~
+~~#[derive(Default)]~~
+~~pub struct PdfConfig {~~
+~~    pub width: Option<f64>,               // 页面宽度（英寸），默认 8.27~~
+~~    pub height: Option<f64>,              // 页面高度（英寸），默认 11.69~~
+~~    pub margin_top: Option<f64>,          // 上边距（英寸），默认 0~~
+~~    pub margin_bottom: Option<f64>,       // 下边距（英寸），默认 0~~
+~~    pub margin_left: Option<f64>,         // 左边距（英寸），默认 0~~
+~~    pub margin_right: Option<f64>,        // 右边距（英寸），默认 0~~
+~~    pub should_print_background: Option<bool>, // 是否打印背景，默认 true~~
+~~}~~
+~~```~~
 
-所有字段均为 `Option`，`None` 表示使用默认值。`PdfConfig` 自身实现 `Default`，`PdfConfig::default()` 等价于全部字段为 `None`。
+~~所有字段均为 `Option`，`None` 表示使用默认值。`PdfConfig` 自身实现 `Default`，`PdfConfig::default()` 等价于全部字段为 `None`。~~
+
+~~#### 调用方式~~
+
+~~```rust~~
+~~// 方式 1：不传配置 → 全部使用默认 A4~~
+~~webview.create_pdf("/path/to/output.pdf", None, callback)?;~~
+
+~~// 方式 2：传部分配置 → 未指定的字段使用默认值~~
+~~webview.create_pdf("/path/to/output.pdf", Some(PdfConfig {~~
+~~    width: Some(11.69),   // 横向 A4~~
+~~    height: Some(8.27),~~
+~~    margin_top: Some(0.5),~~
+~~    ..Default::default()  // 其余用默认值~~
+~~}), callback)?;~~
+
+~~// 方式 3：传空配置 → 等价于方式 1~~
+~~webview.create_pdf("/path/to/output.pdf", Some(PdfConfig::default()), callback)?;~~
+~~```~~
+
+~~#### ArkTS 侧默认值合并~~
+
+~~```typescript~~
+~~const DEFAULT_PDF_CONFIG: webview.PdfConfiguration = {~~
+~~  width: 8.27,              // A4 宽度 (210mm ÷ 25.4)~~
+~~  height: 11.69,            // A4 高度 (297mm ÷ 25.4)~~
+~~  marginTop: 0,~~
+~~  marginBottom: 0,~~
+~~  marginRight: 0,~~
+~~  marginLeft: 0,~~
+~~  shouldPrintBackground: true~~
+~~};~~
+
+~~// 合并：用户传入的配置覆盖默认值~~
+~~const merged = { ...DEFAULT_PDF_CONFIG, ...userConfig };~~
+~~controller.createPdf(merged);~~
+~~```~~
+
+~~#### NAPI 传输格式~~
+
+~~Rust `PdfConfig` 序列化为 `HashMap<String, Either<f64, bool>>`，仅包含用户显式设置的字段（`Some` 的值），`None` 的字段不传输，由 ArkTS 侧用默认值补全。~~
+
+~~```~~
+~~Rust:  PdfConfig { width: Some(11.69), height: Some(8.27), margin_top: None, ... }~~
+~~                                    │~~
+~~                                    ▼  NAPI (仅传 Some 字段)~~
+~~ArkTS: { width: 11.69, height: 8.27 }~~
+~~                                    │~~
+~~                                    ▼  合并默认值~~
+~~实际:  { width: 11.69, height: 8.27, marginTop: 0, ..., shouldPrintBackground: true }~~
+~~```~~
+
+**选择：不暴露 PdfConfig，固定使用默认 A4 配置**
+
+tauri 公共 API 不接受 config 参数，`create_pdf(path, callback)` 只传路径和回调。
+PdfConfig 不在任何层级定义或传递。ArkTS 端固定使用内置的 `DEFAULT_PDF_CONFIG`（A4 尺寸，无页边距，打印背景）。
+
+**理由：**
+- 简化全链路：无需在 openharmony-ability → wry → tauri 三层定义和透传 config
+- tauri 公共 API 保持简洁，只接受 `path` + `callback`
+- 默认 A4 配置满足当前需求
 
 #### 调用方式
 
 ```rust
-// 方式 1：不传配置 → 全部使用默认 A4
-webview.create_pdf("/path/to/output.pdf", None, callback)?;
-
-// 方式 2：传部分配置 → 未指定的字段使用默认值
-webview.create_pdf("/path/to/output.pdf", Some(PdfConfig {
-    width: Some(11.69),   // 横向 A4
-    height: Some(8.27),
-    margin_top: Some(0.5),
-    ..Default::default()  // 其余用默认值
-}), callback)?;
-
-// 方式 3：传空配置 → 等价于方式 1
-webview.create_pdf("/path/to/output.pdf", Some(PdfConfig::default()), callback)?;
+// 全链路统一签名：path + callback
+webview.create_pdf("/path/to/output.pdf", move |success| {
+    println!("PDF 生成: {}", if success { "成功" } else { "失败" });
+})?;
 ```
 
-#### ArkTS 侧默认值合并
+#### ArkTS 侧固定默认值
 
 ```typescript
 const DEFAULT_PDF_CONFIG: webview.PdfConfiguration = {
@@ -183,23 +249,8 @@ const DEFAULT_PDF_CONFIG: webview.PdfConfiguration = {
   shouldPrintBackground: true
 };
 
-// 合并：用户传入的配置覆盖默认值
-const merged = { ...DEFAULT_PDF_CONFIG, ...userConfig };
-controller.createPdf(merged);
-```
-
-#### NAPI 传输格式
-
-Rust `PdfConfig` 序列化为 `HashMap<String, Either<f64, bool>>`，仅包含用户显式设置的字段（`Some` 的值），`None` 的字段不传输，由 ArkTS 侧用默认值补全。
-
-```
-Rust:  PdfConfig { width: Some(11.69), height: Some(8.27), margin_top: None, ... }
-                                    │
-                                    ▼  NAPI (仅传 Some 字段)
-ArkTS: { width: 11.69, height: 8.27 }
-                                    │
-                                    ▼  合并默认值
-实际:  { width: 11.69, height: 8.27, marginTop: 0, ..., shouldPrintBackground: true }
+// 直接使用默认配置，不接收外部参数
+controller.createPdf(DEFAULT_PDF_CONFIG);
 ```
 
 ### 4. API 命名
@@ -216,15 +267,22 @@ ArkTS: { width: 11.69, height: 8.27 }
 ### Rust 侧
 
 ```rust
-// wry::InnerWebView
+// ~~wry::InnerWebView~~
+// ~~pub fn create_pdf(~~
+// ~~    &self, ~~
+// ~~    path: &str,~~
+// ~~    config: Option<PdfConfig>,~~
+// ~~    callback: Box<dyn Fn(bool) + Send + 'static>~~
+// ~~) -> Result<()>~~
+
+// wry::InnerWebView (updated: 移除 PdfConfig)
 pub fn create_pdf(
     &self, 
     path: &str,
-    config: Option<PdfConfig>,
     callback: Box<dyn Fn(bool) + Send + 'static>
 ) -> Result<()>
 
-// tauri::Webview
+// tauri::Webview (未变)
 pub fn create_pdf(
     &self,
     path: impl AsRef<std::path::Path>,
@@ -235,10 +293,16 @@ pub fn create_pdf(
 ### ArkTS 侧
 
 ```typescript
-// JsHelper 接口
+// ~~JsHelper 接口~~
+// ~~createPdf: (~~
+// ~~    path: string,~~
+// ~~    config: Record<string, number | boolean>,~~
+// ~~    callback: (success: boolean) => void~~
+// ~~) => void~~
+
+// JsHelper 接口 (updated: 移除 config 参数)
 createPdf: (
     path: string,
-    config: Record<string, number | boolean>,
     callback: (success: boolean) => void
 ) => void
 ```
@@ -269,8 +333,11 @@ ArkTS 侧 (buildJsHelper):
 
 ```
 ArkTS 侧:
-  createPdf: (path, config, cb) => {
-    controller.createPdf(mergedConfig)
+  // ~~createPdf: (path, config, cb) => {~~
+  // ~~  const mergedConfig = { ...DEFAULT_PDF_CONFIG, ...config };~~
+  // ~~  controller.createPdf(mergedConfig)~~
+  createPdf: (path, cb) => {
+    controller.createPdf(DEFAULT_PDF_CONFIG)
       .then(result => {
         写文件...
         cb(true)
@@ -279,10 +346,14 @@ ArkTS 侧:
   }
 
 Rust 侧:
-  Webview::create_pdf(path, config, callback)
+  // ~~Webview::create_pdf(path, config, callback)~~
+  // ~~  → 取 "createPdf" 函数~~
+  // ~~  → 创建 NAPI closure~~
+  // ~~  → 调用 createPdf(path, configMap, cb)~~
+  Webview::create_pdf(path, callback)
     → 取 "createPdf" 函数
     → 创建 NAPI closure
-    → 调用 createPdf(path, configMap, cb)
+    → 调用 createPdf(path, cb)
 ```
 
 ### 文件写入策略
@@ -335,12 +406,19 @@ DefaultWebview.ets:
 
 ```typescript
 ProxyJsHelper {
-  createPdf(path, config, callback) {
+  // ~~createPdf(path, config, callback) {~~
+  // ~~  if (this.realController) {~~
+  // ~~    this.realController.createPdf(path, config, callback);~~
+  // ~~  } else {~~
+  // ~~    // 缓存到 pendingOperations~~
+  // ~~    this.pendingOperations.push(() => this.realController!.createPdf(path, config, callback));~~
+  // ~~  }~~
+  // ~~}~~
+  createPdf(path, callback) {
     if (this.realController) {
-      this.realController.createPdf(path, config, callback);
+      this.realController.createPdf(path, callback);
     } else {
-      // 缓存到 pendingOperations
-      this.pendingOperations.push(() => this.realController!.createPdf(path, config, callback));
+      this.pendingOperations.push(() => this.realController!.createPdf(path, callback));
     }
   }
 }
@@ -361,8 +439,10 @@ ProxyJsHelper {
 
 | 文件 | 改动 |
 |------|------|
-| `crates/ability/src/helper/webview.rs` | `PdfConfig` 结构体 + `to_napi_map()` + `Webview::create_pdf()` |
-| `wry/src/ohos/mod.rs` | `InnerWebView::create_pdf()` + PdfConfig re-export |
+| ~~`crates/ability/src/helper/webview.rs`~~ | ~~`PdfConfig` 结构体 + `to_napi_map()` + `Webview::create_pdf()`~~ |
+| `crates/ability/src/helper/webview.rs` | ~~`PdfConfig` 结构体~~ `Webview::create_pdf()` (不传 config，NAPI 只传 path + callback) |
+| ~~`wry/src/ohos/mod.rs`~~ | ~~`InnerWebView::create_pdf()` + PdfConfig re-export~~ |
+| `wry/src/ohos/mod.rs` | `InnerWebView::create_pdf()` (~~PdfConfig re-export~~ 已移除) |
 | `wry/src/webkitgtk/mod.rs` | `create_pdf` stub (返回 Ok) |
 | `wry/src/webview2/mod.rs` | `create_pdf` stub (返回 Ok) |
 | `wry/src/wkwebview/mod.rs` | `create_pdf` stub (返回 Ok) |
@@ -396,7 +476,8 @@ wry 四个平台 stub（webkitgtk / webview2 / wkwebview / android）的 `create
 
 **修复建议（未来）：**
 ```rust
-pub fn create_pdf(&self, _path: &str, _config: Option<()>, callback: Box<dyn Fn(bool) + Send + 'static>) -> Result<()> {
+// ~~pub fn create_pdf(&self, _path: &str, _config: Option<()>, callback: Box<dyn Fn(bool) + Send + 'static>) -> Result<()> {~~
+pub fn create_pdf(&self, _path: &str, callback: Box<dyn Fn(bool) + Send + 'static>) -> Result<()> {
     callback(false);  // 通知失败
     Ok(())
 }

@@ -4,7 +4,8 @@
 
 - [x] **1.1 更新 JsHelper 接口**
   - 文件: `native_ability/src/main/ets/webview/Utils.ets`
-  - 新增 `createPdf: (path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void) => void`
+  - ~~新增 `createPdf: (path: string, config: Record<string, number | boolean>, callback: (success: boolean) => void) => void`~~
+  - 新增 `createPdf: (path: string, callback: (success: boolean) => void) => void`
 
 - [x] **1.2 实现 ProxyJsHelper.createPdf**
   - 文件: `native_ability/src/main/ets/webview/Utils.ets`
@@ -15,7 +16,7 @@
   - 文件: `native_ability/src/main/ets/webview/DefaultWebview.ets`
   - 导入 fileIo: `import { fileIo } from '@kit.CoreFileKit'`
   - 定义 DEFAULT_PDF_CONFIG 常量
-  - 实现配置合并逻辑
+  - ~~实现配置合并逻辑~~ (已移除：直接使用 DEFAULT_PDF_CONFIG)
   - 调用 controller.createPdf()
   - 处理 PDF 数据写入文件
   - 错误处理和文件句柄释放
@@ -27,32 +28,35 @@
 
 ## Phase 2: Rust openharmony-ability 层实现
 
-- [x] **2.1 定义 PdfConfig 结构体**
-  - 文件: `crates/ability/src/helper/webview.rs`
-  - 7 个 Option 字段: width, height, margin_top/bottom/left/right, should_print_background
-  - 实现 Default trait
-  - 实现 `to_napi_map()` 方法，序列化为 HashMap，仅包含 Some 字段
-  - key 使用 camelCase 匹配 ArkTS 命名
+- ~~[x] **2.1 定义 PdfConfig 结构体**~~ (已移除)
+  - ~~文件: `crates/ability/src/helper/webview.rs`~~
+  - ~~7 个 Option 字段: width, height, margin_top/bottom/left/right, should_print_background~~
+  - ~~实现 Default trait~~
+  - ~~实现 `to_napi_map()` 方法，序列化为 HashMap，仅包含 Some 字段~~
+  - ~~key 使用 camelCase 匹配 ArkTS 命名~~
 
 - [x] **2.2 实现 Webview::create_pdf()**
   - 文件: `crates/ability/src/helper/webview.rs`
-  - 通过 NAPI ObjectRef 获取 "createPdf" 函数
+  - ~~通过 NAPI ObjectRef 获取 "createPdf" 函数~~
+  - 通过 NAPI ObjectRef 获取 "createPdf" 函数 (签名: path + callback，无 config)
   - 创建 NAPI closure 作为回调
   - 调用 ArkTS 侧 createPdf 函数
-  - 传递 path、config_map、callback
+  - ~~传递 path、config_map、callback~~
+  - 传递 path、callback
 
 ## Phase 3: wry 层实现
 
 - [x] **3.1 实现 InnerWebView::create_pdf()**
   - 文件: `wry/src/ohos/mod.rs`
-  - Re-export PdfConfig: `pub use openharmony_ability::PdfConfig`
+  - ~~Re-export PdfConfig: `pub use openharmony_ability::PdfConfig`~~ (已移除)
   - 委托给 openharmony_ability::Webview::create_pdf()
 
 - [x] **3.2 实现 wry::WebView::create_pdf()**
   - 文件: `wry/src/lib.rs`
   - 使用 `#[cfg(target_env = "ohos")]` 区分平台
-  - OHOS 版本接受 `Option<ohos::PdfConfig>`
-  - 其他平台接受 `Option<()>`
+  - ~~OHOS 版本接受 `Option<ohos::PdfConfig>`~~
+  - ~~其他平台接受 `Option<()>`~~
+  - OHOS 版本和其他平台统一签名: path + callback (无 config)
 
 - [x] **3.3 添加平台 stub**
   - 文件: `wry/src/webkitgtk/mod.rs`
@@ -60,6 +64,7 @@
   - 文件: `wry/src/wkwebview/mod.rs`
   - 文件: `wry/src/android/mod.rs`
   - 所有 stub 返回 `Ok(())`，不调用 callback
+  - ~~签名: `_config: Option<()>`~~ → 签名: path + callback (无 config)
   - 注: 已知问题 #1，当前不影响 OHOS 平台
 
 ## Phase 4: Tauri Runtime 层实现
