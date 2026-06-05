@@ -204,7 +204,7 @@ controller.createPdf(DEFAULT_PDF_CONFIG);
 │        .then(result => {                                         │
 │          const buffer = result.pdfArrayBuffer();                   │
 │          const file = fileIo.openSync(path, CREATE|READ_WRITE);  │
-│          fileIo.writeSync(file.fd, buffer);                      │
+│          await fileIo.write(file.fd, buffer);                     │
 │          fileIo.closeSync(file);                                 │
 │          callback(true);                                         │
 │        })                                                        │
@@ -293,7 +293,7 @@ function buildJsHelper(controller: WebviewController): JsHelper {
         try {
           const buffer = result.pdfArrayBuffer();
           const file = fileIo.openSync(path, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
-          fileIo.writeSync(file.fd, buffer);
+          await fileIo.write(file.fd, buffer);
           fileIo.closeSync(file);
           callback(true);
         } catch (err) {

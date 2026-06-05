@@ -365,7 +365,7 @@ controller.createPdf(mergedConfig)
       const buffer = result.pdfArrayBuffer();
       const file = fileIo.openSync(path, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
       try {
-        fileIo.writeSync(file.fd, buffer);
+        await fileIo.write(file.fd, buffer);
         callback(true);
       } catch (writeErr) {
         hilog.error(DOMAIN, 'DefaultWebview', 'createPdf write failed: %{public}s', JSON.stringify(writeErr));
