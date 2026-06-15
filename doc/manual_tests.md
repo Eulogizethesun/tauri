@@ -69,12 +69,28 @@
 
 ---
 
-## 三、用例统计
+## 三、Webview（WebView）手动用例
+
+### 3.1 createPdf（PDF 生成）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | webview | createPdf/默认 | Create PDF A4 — 默认 A4 尺寸生成 PDF | **T0** | 应用已启动；WebView 已加载页面 | 1. 滚动到 "Create PDF Manual Test" 区域 2. 点击 "Create PDF A4 (default)" 按钮 | ① 页面显示 `SUCCESS ✅` ② 设备 `/data/storage/el2/base/cache/test.pdf` 文件生成 ③ `hdc file recv` 拉取后可打开查看，内容为 A4 尺寸 | 默认配置: 8.27×11.69in, 无边距, 含背景 |
+| core | webview | createPdf/自定义 | Create PDF Square — 正方形自定义尺寸 | **T1** | 应用已启动；WebView 已加载页面 | 1. 滚动到 "Create PDF Manual Test" 区域 2. 点击 "Create PDF Square (8.27×8.27)" 按钮 | ① 页面显示 `SUCCESS ✅` ② 设备 `/data/storage/el2/base/cache/test-square.pdf` 文件生成 ③ 拉取后打开，页面为正方形尺寸 | 验证 PdfConfig 透传: width=8.27, height=8.27 |
+
+| 模块 | T0 | T1 | 合计 |
+|------|-----|-----|------|
+| Webview — createPdf | 1 | 1 | **2** |
+
+---
+
+## 四、用例统计
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
 | Tray（系统托盘） | 4 | 5 | **9** |
 | Menu — MenuBar | 9 | 14 | **23** |
 | Menu — PopupMenu | 3 | 3 | **6** |
-| **合计** | **16** | **22** | **38** |
+| Webview — createPdf | 1 | 1 | **2** |
+| **合计** | **17** | **23** | **40** |
 

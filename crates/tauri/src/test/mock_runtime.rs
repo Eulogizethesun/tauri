@@ -693,6 +693,7 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
   fn create_pdf(
     &self,
     _path: String,
+    _config: Option<tauri_runtime::PdfConfig>,
     callback: Box<dyn Fn(bool) + Send + 'static>,
   ) -> Result<()> {
     callback(true);

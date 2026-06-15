@@ -631,18 +631,17 @@ pub fn test_async_spawn<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<(
 /// Test command for webview.create_pdf (OHOS only)
 #[cfg(target_env = "ohos")]
 #[command]
-pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<()> {
-  log::info!("test_create_pdf called");
+pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>, path: Option<String>, config: Option<tauri::PdfConfig>) -> tauri::Result<()> {
+  let path = path.unwrap_or_else(|| "/data/storage/el2/base/cache/test.pdf".to_string());
+  log::info!("test_create_pdf called, path={}", path);
 
   if let Some(window) = app.get_webview_window("main") {
     let app_clone = app.clone();
 
-    // Use app sandbox path: /data/storage/el2/base/cache/test.pdf
-    let path = "/data/storage/el2/base/cache/test.pdf";
-
-    window.create_pdf(path, move |success| {
-      log::info!("create_pdf callback: success={}, path={}", success, path);
-      let _ = app_clone.emit("create-pdf-result", format!("{}:{}", success, path));
+    let path_for_cb = path.clone();
+    window.create_pdf(&path, config, move |success| {
+      log::info!("create_pdf callback: success={}, path={}", success, path_for_cb);
+      let _ = app_clone.emit("create-pdf-result", format!("{}:{}", success, path_for_cb));
     })?;
   } else {
     let _ = app.emit("create-pdf-result", "false:window not found");

@@ -2150,6 +2150,7 @@ tauri::Builder::default()
   pub fn create_pdf(
     &self,
     path: impl AsRef<std::path::Path>,
+    config: Option<tauri_runtime::PdfConfig>,
     callback: impl Fn(bool) + Send + 'static,
   ) -> crate::Result<()> {
     self
@@ -2157,6 +2158,7 @@ tauri::Builder::default()
       .dispatcher
       .create_pdf(
         path.as_ref().to_string_lossy().to_string(),
+        config,
         Box::new(callback),
       )
       .map_err(Into::into)
