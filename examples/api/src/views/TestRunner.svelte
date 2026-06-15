@@ -891,6 +891,73 @@ Expected behavior:
     });
   }
 
+  // ─── Create PDF Manual Test (OHOS only) ───
+  async function manualCreatePdf() {
+    await wrapManual('createPdf', async () => {
+      let resolvePromise;
+      const resultPromise = new Promise((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      const unlisten = await listen('create-pdf-result', (event) => {
+        unlisten();
+        resolvePromise(event.payload);
+      });
+
+      // App sandbox path — only writable location from ArkTS context
+      const desktopPath = '/data/storage/el2/base/cache/test.pdf';
+      await invoke('test_create_pdf', { path: desktopPath });
+      const result = await resultPromise;
+
+      const success = result.startsWith('true:');
+      const path = result.split(':')[1];
+
+      manualResult = `createPdf result: ${success ? 'SUCCESS ✅' : 'FAILED ❌'}\nPath: ${path}\n\n` +
+        `To verify file exists on device:\n` +
+        `hdc shell "ls -la /data/app/el2/100/base/com.tauri.api/cache/test.pdf"\n\n` +
+        `To pull file to local:\n` +
+        `hdc file recv /data/app/el2/100/base/com.tauri.api/cache/test.pdf ./test.pdf`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualCreatePdfSquare() {
+    await wrapManual('createPdfSquare', async () => {
+      let resolvePromise;
+      const resultPromise = new Promise((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      const unlisten = await listen('create-pdf-result', (event) => {
+        unlisten();
+        resolvePromise(event.payload);
+      });
+
+      const path = '/data/storage/el2/base/cache/test-square.pdf';
+      await invoke('test_create_pdf', {
+        path,
+        config: {
+          width: 8.27,
+          height: 8.27,
+          marginTop: 0,
+          marginBottom: 0,
+          marginLeft: 0,
+          marginRight: 0,
+          shouldPrintBackground: true,
+        },
+      });
+      const result = await resultPromise;
+
+      const success = result.startsWith('true:');
+
+      manualResult = `createPdf (Square 8.27×8.27in) result: ${success ? 'SUCCESS ✅' : 'FAILED ❌'}\nPath: ${path}\n\n` +
+        `Config: width=8.27, height=8.27 (square), no margins, with background\n\n` +
+        `To pull file to local:\n` +
+        `hdc file recv /data/app/el2/100/base/com.tauri.api/cache/test-square.pdf ./test-square.pdf`;
+      onMessage(manualResult);
+    });
+  }
+
   // ─── QuickOperation Manual Tests (OHOS only) ───
   async function manualQuickOperationEnable() {
     await wrapManual('quickOperationEnable', async () => {
@@ -1238,6 +1305,8 @@ Expected behavior:
         <button class="btn" onclick={manualClipboardWriteImagePath}>writeImage(filePath)</button>
         <button class="btn" onclick={manualClipboardWriteImageNumberArray}>writeImage(number[])</button>
         <button class="btn" onclick={manualClipboardWriteImageArrayBuffer}>writeImage(ArrayBuffer)</button>
+        <button class="btn" onclick={manualCreatePdf}>Create PDF A4 (default)</button>
+        <button class="btn" onclick={manualCreatePdfSquare}>Create PDF Square (8.27×8.27)</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">

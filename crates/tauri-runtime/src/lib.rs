@@ -522,6 +522,21 @@ pub trait Runtime<T: UserEvent>: Debug + Sized + 'static {
   fn run<F: FnMut(RunEvent<T>) + 'static>(self, callback: F);
 }
 
+/// PDF generation configuration for OpenHarmony.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfConfig {
+  pub width: Option<f64>,
+  pub height: Option<f64>,
+  pub margin_top: Option<f64>,
+  pub margin_bottom: Option<f64>,
+  pub margin_left: Option<f64>,
+  pub margin_right: Option<f64>,
+  pub scale: Option<f64>,
+  pub should_print_background: Option<bool>,
+}
+
 /// Webview dispatcher. A thread-safe handle to the webview APIs.
 pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 'static {
   /// The runtime this [`WebviewDispatch`] runs under.
@@ -650,6 +665,16 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
 
   /// Clear all browsing data for this webview.
   fn clear_all_browsing_data(&self) -> Result<()>;
+
+  /// Create a PDF from the current webview content and save to the given path.
+  /// The callback receives `true` on success, `false` on failure.
+  #[cfg(target_env = "ohos")]
+  fn create_pdf(
+    &self,
+    path: String,
+    config: Option<PdfConfig>,
+    callback: Box<dyn Fn(bool) + Send + 'static>,
+  ) -> Result<()>;
 }
 
 /// Window dispatcher. A thread-safe handle to the window APIs.

@@ -689,6 +689,17 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
     Ok(())
   }
 
+  #[cfg(target_env = "ohos")]
+  fn create_pdf(
+    &self,
+    _path: String,
+    _config: Option<tauri_runtime::PdfConfig>,
+    callback: Box<dyn Fn(bool) + Send + 'static>,
+  ) -> Result<()> {
+    callback(true);
+    Ok(())
+  }
+
   fn hide(&self) -> Result<()> {
     Ok(())
   }

@@ -129,7 +129,22 @@
 
 ---
 
-## 六、WebView User-Agent 自定义 手动用例
+## 七、Webview（WebView）手动用例
+
+### 7.1 createPdf（PDF 生成）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | webview | createPdf/默认 | Create PDF A4 — 默认 A4 尺寸生成 PDF | **T0** | 应用已启动；WebView 已加载页面 | 1. 滚动到 "Create PDF Manual Test" 区域 2. 点击 "Create PDF A4 (default)" 按钮 | ① 页面显示 `SUCCESS ✅` ② 设备 `/data/storage/el2/base/cache/test.pdf` 文件生成 ③ `hdc file recv` 拉取后可打开查看，内容为 A4 尺寸 | 默认配置: 8.27×11.69in, 无边距, 含背景 |
+| core | webview | createPdf/自定义 | Create PDF Square — 正方形自定义尺寸 | **T1** | 应用已启动；WebView 已加载页面 | 1. 滚动到 "Create PDF Manual Test" 区域 2. 点击 "Create PDF Square (8.27×8.27)" 按钮 | ① 页面显示 `SUCCESS ✅` ② 设备 `/data/storage/el2/base/cache/test-square.pdf` 文件生成 ③ 拉取后打开，页面为正方形尺寸 | 验证 PdfConfig 透传: width=8.27, height=8.27 |
+
+| 模块 | T0 | T1 | 合计 |
+|------|-----|-----|------|
+| Webview — createPdf | 1 | 1 | **2** |
+
+---
+
+## 八、WebView User-Agent 自定义 手动用例
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
@@ -143,7 +158,7 @@
 
 ---
 
-## 七、RunEvent（生命周期事件）手动用例
+## 九、RunEvent（生命周期事件）手动用例
 
 > **背景**: Phase 1 修复了 `ExitRequested`/`Exit` 在 `LoopDestroyed` 路径上的触发；Phase 2 修复了子窗口 `Destroyed` 事件缺失和 `WindowsStore` 清理问题。
 >
@@ -162,7 +177,7 @@
 
 ---
 
-## 八、Transparent（透明窗口）手动用例
+## 十、Transparent（透明窗口）手动用例
 
 > **背景**: OHOS 平台 Web 引擎渲染表面不支持透明穿透，主窗口设置 `transparent: true` 后 Web 内容区仍不透明（详见 `doc/ohos-main-window-transparent-analysis.md`）。仅 Float 子窗口（`transparent: true` + `decorations: false`）可实现完整穿透效果。
 >
@@ -179,7 +194,7 @@
 
 ---
 
-## 九、on_new_window（新窗口拦截）手动用例
+## 十一、on_new_window（新窗口拦截）手动用例
 
 > **背景**: OHOS 平台通过 ArkWeb `onWindowNew` 事件拦截 `window.open()` / `target="_blank"` 等新窗口请求，Rust 侧 `on_new_window` handler 可返回 Allow（弹出 dialog）或 Deny（阻止）。
 >
@@ -196,7 +211,7 @@
 
 ---
 
-## 十、Single-Instance（单实例）手动用例
+## 十二、Single-Instance（单实例）手动用例
 
 > **前置条件**: example app 已集成 `tauri-plugin-single-instance`，callback 中通过 `log::info!("[single-instance] callback fired! args={:?}, cwd={:?}", args, cwd)` 输出日志。
 >
@@ -215,7 +230,7 @@
 
 ---
 
-## 十一、用例统计
+## 十三、用例统计
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -226,10 +241,11 @@
 | Dialog | 7 | 0 | **7** |
 | plugin-os（平台检测） | 2 | 4 | **6** |
 | Autostart（开机自启动） | 2 | 2 | **4** |
+| Webview — createPdf | 1 | 1 | **2** |
 | WebView User-Agent | 1 | 2 | **3** |
 | RunEvent（生命周期事件） | 1 | 3 | **4** |
 | Transparent（透明窗口） | 1 | 1 | **2** |
 | on_new_window（新窗口拦截） | 1 | 1 | **2** |
 | Single-Instance（单实例） | 3 | 1 | **4** |
-| **合计** | **39** | **40** | **79** |
+| **合计** | **40** | **41** | **81** |
 
