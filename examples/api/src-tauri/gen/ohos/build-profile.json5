@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "./signingConfigs/default_ohos_tTZYajgwoQAbulCzbegv8vZgKxxULUyq_58XcDLrynI=.cer",
+          "certpath": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B206D270A17985B3241F4F86ADA8CDEA69721D880ADA3617DF2028ADE8A9B6EEA2E5B41388CDFF0",
-          "profile": "./signingConfigs/default_ohos_tTZYajgwoQAbulCzbegv8vZgKxxULUyq_58XcDLrynI=.p7b",
+          "keyPassword": "0000001B4811039690195AA5FBD10217084A915F6F18B12E36453E198056EF395CB58104B475EF6BB9246A",
+          "profile": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "./signingConfigs/default_ohos_tTZYajgwoQAbulCzbegv8vZgKxxULUyq_58XcDLrynI=.p12",
-          "storePassword": "0000001BA7EF4AB1DE9E1A44496534D4134C22268A34A94E153DDAB8F00F83BA31D27462F46F5D36A47E32"
+          "storeFile": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.p12",
+          "storePassword": "0000001BF59DCBE6CB86A3EB49A4E2136B582B0212C1CCAEC9DF9FF4BCE396CCDE434785B5D1B4A80DC0C8"
         }
       }
     ],

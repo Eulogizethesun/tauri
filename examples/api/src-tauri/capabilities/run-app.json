@@ -37,6 +37,7 @@
     "allow-dummy-command", 
     "allow-close-test-window",
     "allow-get-ohos-version-info",
+    "allow-test-create-pdf",
     "allow-set-deny-new-window",
     "allow-get-last-new-window-url",
     "allow-create-counter",

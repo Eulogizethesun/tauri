@@ -523,7 +523,6 @@ pub trait Runtime<T: UserEvent>: Debug + Sized + 'static {
 }
 
 /// PDF generation configuration for OpenHarmony.
-#[cfg(target_env = "ohos")]
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfConfig {

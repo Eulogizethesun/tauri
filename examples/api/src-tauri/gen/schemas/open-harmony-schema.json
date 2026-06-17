@@ -37,7 +37,7 @@
   ],
   "definitions": {
     "Capability": {
-      "description": "A grouping and boundary mechanism developers can use to isolate access to the IPC layer.\n\n It controls application windows' and webviews' fine grained access\n to the Tauri core, application, or plugin commands.\n If a webview or its window is not matching any capability then it has no access to the IPC layer at all.\n\n This can be done to create groups of windows, based on their required system access, which can reduce\n impact of frontend vulnerabilities in less privileged windows.\n Windows can be added to a capability by exact name (e.g. `main-window`) or glob patterns like `*` or `admin-*`.\n A Window can have none, one, or multiple associated capabilities.\n\n ## Example\n\n ```json\n {\n   \"identifier\": \"main-user-files-write\",\n   \"description\": \"This capability allows the `main` window on macOS and Windows access to `filesystem` write related commands and `dialog` commands to enable programmatic access to files selected by the user.\",\n   \"windows\": [\n     \"main\"\n   ],\n   \"permissions\": [\n     \"core:default\",\n     \"dialog:open\",\n     {\n       \"identifier\": \"fs:allow-write-text-file\",\n       \"allow\": [{ \"path\": \"$HOME/test.txt\" }]\n     },\n   ],\n   \"platforms\": [\"macOS\",\"windows\"]\n }\n ```",
+      "description": "A grouping and boundary mechanism developers can use to isolate access to the IPC layer.\n\nIt controls application windows' and webviews' fine grained access to the Tauri core, application, or plugin commands. If a webview or its window is not matching any capability then it has no access to the IPC layer at all.\n\nThis can be done to create groups of windows, based on their required system access, which can reduce impact of frontend vulnerabilities in less privileged windows. Windows can be added to a capability by exact name (e.g. `main-window`) or glob patterns like `*` or `admin-*`. A Window can have none, one, or multiple associated capabilities.\n\n## Example\n\n```json { \"identifier\": \"main-user-files-write\", \"description\": \"This capability allows the `main` window on macOS and Windows access to `filesystem` write related commands and `dialog` commands to enable programmatic access to files selected by the user.\", \"windows\": [ \"main\" ], \"permissions\": [ \"core:default\", \"dialog:open\", { \"identifier\": \"fs:allow-write-text-file\", \"allow\": [{ \"path\": \"$HOME/test.txt\" }] }, ], \"platforms\": [\"macOS\",\"windows\"] } ```",
       "type": "object",
       "required": [
         "identifier",
@@ -45,16 +45,16 @@
       ],
       "properties": {
         "identifier": {
-          "description": "Identifier of the capability.\n\n ## Example\n\n `main-user-files-write`",
+          "description": "Identifier of the capability.\n\n## Example\n\n`main-user-files-write`",
           "type": "string"
         },
         "description": {
-          "description": "Description of what the capability is intended to allow on associated windows.\n\n It should contain a description of what the grouped permissions should allow.\n\n ## Example\n\n This capability allows the `main` window access to `filesystem` write related\n commands and `dialog` commands to enable programmatic access to files selected by the user.",
+          "description": "Description of what the capability is intended to allow on associated windows.\n\nIt should contain a description of what the grouped permissions should allow.\n\n## Example\n\nThis capability allows the `main` window access to `filesystem` write related commands and `dialog` commands to enable programmatic access to files selected by the user.",
           "default": "",
           "type": "string"
         },
         "remote": {
-          "description": "Configure remote URLs that can use the capability permissions.\n\n This setting is optional and defaults to not being set, as our\n default use case is that the content is served from our local application.\n\n :::caution\n Make sure you understand the security implications of providing remote\n sources with local system access.\n :::\n\n ## Example\n\n ```json\n {\n   \"urls\": [\"https://*.mydomain.dev\"]\n }\n ```",
+          "description": "Configure remote URLs that can use the capability permissions.\n\nThis setting is optional and defaults to not being set, as our default use case is that the content is served from our local application.\n\n:::caution Make sure you understand the security implications of providing remote sources with local system access. :::\n\n## Example\n\n```json { \"urls\": [\"https://*.mydomain.dev\"] } ```",
           "anyOf": [
             {
               "$ref": "#/definitions/CapabilityRemote"
@@ -70,21 +70,21 @@
           "type": "boolean"
         },
         "windows": {
-          "description": "List of windows that are affected by this capability. Can be a glob pattern.\n\n If a window label matches any of the patterns in this list,\n the capability will be enabled on all the webviews of that window,\n regardless of the value of [`Self::webviews`].\n\n On multiwebview windows, prefer specifying [`Self::webviews`] and omitting [`Self::windows`]\n for a fine grained access control.\n\n ## Example\n\n `[\"main\"]`",
+          "description": "List of windows that are affected by this capability. Can be a glob pattern.\n\nIf a window label matches any of the patterns in this list, the capability will be enabled on all the webviews of that window, regardless of the value of [`Self::webviews`].\n\nOn multiwebview windows, prefer specifying [`Self::webviews`] and omitting [`Self::windows`] for a fine grained access control.\n\n## Example\n\n`[\"main\"]`",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "webviews": {
-          "description": "List of webviews that are affected by this capability. Can be a glob pattern.\n\n The capability will be enabled on all the webviews\n whose label matches any of the patterns in this list,\n regardless of whether the webview's window label matches a pattern in [`Self::windows`].\n\n ## Example\n\n `[\"sub-webview-one\", \"sub-webview-two\"]`",
+          "description": "List of webviews that are affected by this capability. Can be a glob pattern.\n\nThe capability will be enabled on all the webviews whose label matches any of the patterns in this list, regardless of whether the webview's window label matches a pattern in [`Self::windows`].\n\n## Example\n\n`[\"sub-webview-one\", \"sub-webview-two\"]`",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "permissions": {
-          "description": "List of permissions attached to this capability.\n\n Must include the plugin name as prefix in the form of `${plugin-name}:${permission-name}`.\n For commands directly implemented in the application itself only `${permission-name}`\n is required.\n\n ## Example\n\n ```json\n [\n   \"core:default\",\n   \"shell:allow-open\",\n   \"dialog:open\",\n   {\n     \"identifier\": \"fs:allow-write-text-file\",\n     \"allow\": [{ \"path\": \"$HOME/test.txt\" }]\n   }\n ]\n ```",
+          "description": "List of permissions attached to this capability.\n\nMust include the plugin name as prefix in the form of `${plugin-name}:${permission-name}`. For commands directly implemented in the application itself only `${permission-name}` is required.\n\n## Example\n\n```json [ \"core:default\", \"shell:allow-open\", \"dialog:open\", { \"identifier\": \"fs:allow-write-text-file\", \"allow\": [{ \"path\": \"$HOME/test.txt\" }] } ] ```",
           "type": "array",
           "items": {
             "$ref": "#/definitions/PermissionEntry"
@@ -92,7 +92,7 @@
           "uniqueItems": true
         },
         "platforms": {
-          "description": "Limit which target platforms this capability applies to.\n\n By default all platforms are targeted.\n\n ## Example\n\n `[\"macOS\",\"windows\"]`",
+          "description": "Limit which target platforms this capability applies to.\n\nBy default all platforms are targeted.\n\n## Example\n\n`[\"macOS\",\"windows\"]`",
           "type": [
             "array",
             "null"
@@ -111,7 +111,7 @@
       ],
       "properties": {
         "urls": {
-          "description": "Remote domains this capability refers to using the [URLPattern standard](https://urlpattern.spec.whatwg.org/).\n\n ## Examples\n\n - \"https://*.mydomain.dev\": allows subdomains of mydomain.dev\n - \"https://mydomain.dev/api/*\": allows any subpath of mydomain.dev/api",
+          "description": "Remote domains this capability refers to using the [URLPattern standard](https://urlpattern.spec.whatwg.org/).\n\n## Examples\n\n- \"https://*.mydomain.dev\": allows subdomains of mydomain.dev - \"https://mydomain.dev/api/*\": allows any subpath of mydomain.dev/api",
           "type": "array",
           "items": {
             "type": "string"
@@ -120,7 +120,7 @@
       }
     },
     "PermissionEntry": {
-      "description": "An entry for a permission value in a [`Capability`] can be either a raw permission [`Identifier`]\n or an object that references a permission and extends its scope.",
+      "description": "An entry for a permission value in a [`Capability`] can be either a raw permission [`Identifier`] or an object that references a permission and extends its scope.",
       "anyOf": [
         {
           "description": "Reference a permission or permission set by identifier.",
@@ -1903,7 +1903,7 @@
                       "description": "FS scope entry.",
                       "anyOf": [
                         {
-                          "description": "A path that can be accessed by the webview when using the fs APIs.\n FS scope path pattern.\n\n The pattern can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                          "description": "A path that can be accessed by the webview when using the fs APIs. FS scope path pattern.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                           "type": "string"
                         },
                         {
@@ -1913,7 +1913,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "description": "A path that can be accessed by the webview when using the fs APIs.\n\n The pattern can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "description": "A path that can be accessed by the webview when using the fs APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                               "type": "string"
                             }
                           }
@@ -1927,7 +1927,7 @@
                       "description": "FS scope entry.",
                       "anyOf": [
                         {
-                          "description": "A path that can be accessed by the webview when using the fs APIs.\n FS scope path pattern.\n\n The pattern can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                          "description": "A path that can be accessed by the webview when using the fs APIs. FS scope path pattern.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                           "type": "string"
                         },
                         {
@@ -1937,7 +1937,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "description": "A path that can be accessed by the webview when using the fs APIs.\n\n The pattern can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "description": "A path that can be accessed by the webview when using the fs APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                               "type": "string"
                             }
                           }
@@ -2041,7 +2041,7 @@
                       "description": "HTTP scope entry.",
                       "anyOf": [
                         {
-                          "description": "A URL that can be accessed by the webview when using the HTTP APIs.\n Wildcards can be used following the URL pattern standard.\n\n See [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\n Examples:\n\n - \"https://*\" : allows all HTTPS origin on port 443\n\n - \"https://*:*\" : allows all HTTPS origin on any port\n\n - \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n - \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                          "description": "A URL that can be accessed by the webview when using the HTTP APIs. Wildcards can be used following the URL pattern standard.\n\nSee [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin on port 443\n\n- \"https://*:*\" : allows all HTTPS origin on any port\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
                           "type": "string"
                         },
                         {
@@ -2051,7 +2051,7 @@
                           ],
                           "properties": {
                             "url": {
-                              "description": "A URL that can be accessed by the webview when using the HTTP APIs.\n Wildcards can be used following the URL pattern standard.\n\n See [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\n Examples:\n\n - \"https://*\" : allows all HTTPS origin on port 443\n\n - \"https://*:*\" : allows all HTTPS origin on any port\n\n - \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n - \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "description": "A URL that can be accessed by the webview when using the HTTP APIs. Wildcards can be used following the URL pattern standard.\n\nSee [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin on port 443\n\n- \"https://*:*\" : allows all HTTPS origin on any port\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
                               "type": "string"
                             }
                           }
@@ -2065,7 +2065,7 @@
                       "description": "HTTP scope entry.",
                       "anyOf": [
                         {
-                          "description": "A URL that can be accessed by the webview when using the HTTP APIs.\n Wildcards can be used following the URL pattern standard.\n\n See [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\n Examples:\n\n - \"https://*\" : allows all HTTPS origin on port 443\n\n - \"https://*:*\" : allows all HTTPS origin on any port\n\n - \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n - \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                          "description": "A URL that can be accessed by the webview when using the HTTP APIs. Wildcards can be used following the URL pattern standard.\n\nSee [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin on port 443\n\n- \"https://*:*\" : allows all HTTPS origin on any port\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
                           "type": "string"
                         },
                         {
@@ -2075,7 +2075,7 @@
                           ],
                           "properties": {
                             "url": {
-                              "description": "A URL that can be accessed by the webview when using the HTTP APIs.\n Wildcards can be used following the URL pattern standard.\n\n See [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\n Examples:\n\n - \"https://*\" : allows all HTTPS origin on port 443\n\n - \"https://*:*\" : allows all HTTPS origin on any port\n\n - \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n - \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "description": "A URL that can be accessed by the webview when using the HTTP APIs. Wildcards can be used following the URL pattern standard.\n\nSee [the URL Pattern spec](https://urlpattern.spec.whatwg.org/) for more information.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin on port 443\n\n- \"https://*:*\" : allows all HTTPS origin on any port\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
                               "type": "string"
                             }
                           }
@@ -2194,11 +2194,11 @@
                               ]
                             },
                             "cmd": {
-                              "description": "The command name.\n It can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "description": "The command name. It can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                               "type": "string"
                             },
                             "name": {
-                              "description": "The name for this allowed shell command configuration.\n\n This name will be used inside of the webview API to call this command along with\n any specified arguments.",
+                              "description": "The name for this allowed shell command configuration.\n\nThis name will be used inside of the webview API to call this command along with any specified arguments.",
                               "type": "string"
                             }
                           },
@@ -2220,7 +2220,7 @@
                               ]
                             },
                             "name": {
-                              "description": "The name for this allowed shell command configuration.\n\n This name will be used inside of the webview API to call this command along with\n any specified arguments.",
+                              "description": "The name for this allowed shell command configuration.\n\nThis name will be used inside of the webview API to call this command along with any specified arguments.",
                               "type": "string"
                             },
                             "sidecar": {
@@ -2254,11 +2254,11 @@
                               ]
                             },
                             "cmd": {
-                              "description": "The command name.\n It can start with a variable that resolves to a system base directory.\n The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`,\n `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`,\n `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`,\n `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "description": "The command name. It can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
                               "type": "string"
                             },
                             "name": {
-                              "description": "The name for this allowed shell command configuration.\n\n This name will be used inside of the webview API to call this command along with\n any specified arguments.",
+                              "description": "The name for this allowed shell command configuration.\n\nThis name will be used inside of the webview API to call this command along with any specified arguments.",
                               "type": "string"
                             }
                           },
@@ -2280,7 +2280,7 @@
                               ]
                             },
                             "name": {
-                              "description": "The name for this allowed shell command configuration.\n\n This name will be used inside of the webview API to call this command along with\n any specified arguments.",
+                              "description": "The name for this allowed shell command configuration.\n\nThis name will be used inside of the webview API to call this command along with any specified arguments.",
                               "type": "string"
                             },
                             "sidecar": {
@@ -2349,10 +2349,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Enables the append-test-result command without any pre-configured scope.",
+          "description": "Enables the append_test_result command without any pre-configured scope.",
           "type": "string",
           "const": "allow-append-test-result",
-          "markdownDescription": "Enables the append-test-result command without any pre-configured scope."
+          "markdownDescription": "Enables the append_test_result command without any pre-configured scope."
         },
         {
           "description": "Enables the clear_console_log command without any pre-configured scope.",
@@ -2373,10 +2373,22 @@
           "markdownDescription": "Enables the clear_tracked_events command without any pre-configured scope."
         },
         {
+          "description": "Enables the close_test_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-test-window",
+          "markdownDescription": "Enables the close_test_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the console_log command without any pre-configured scope.",
           "type": "string",
           "const": "allow-console-log",
           "markdownDescription": "Enables the console_log command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_borderless_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-borderless-window",
+          "markdownDescription": "Enables the create_borderless_window command without any pre-configured scope."
         },
         {
           "description": "Enables the create_counter command without any pre-configured scope.",
@@ -2389,6 +2401,12 @@
           "type": "string",
           "const": "allow-create-isolated-window",
           "markdownDescription": "Enables the create_isolated_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_transparent_borderless_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-transparent-borderless-window",
+          "markdownDescription": "Enables the create_transparent_borderless_window command without any pre-configured scope."
         },
         {
           "description": "Enables the create_transparent_window command without any pre-configured scope.",
@@ -2407,6 +2425,12 @@
           "type": "string",
           "const": "allow-create-window-with-custom-ua",
           "markdownDescription": "Enables the create_window_with_custom_ua command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the dummy_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-dummy-command",
+          "markdownDescription": "Enables the dummy_command command without any pre-configured scope."
         },
         {
           "description": "Enables the echo command without any pre-configured scope.",
@@ -2431,6 +2455,18 @@
           "type": "string",
           "const": "allow-get-counter-value",
           "markdownDescription": "Enables the get_counter_value command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_last_new_window_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-last-new-window-url",
+          "markdownDescription": "Enables the get_last_new_window_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ohos_version_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ohos-version-info",
+          "markdownDescription": "Enables the get_ohos_version_info command without any pre-configured scope."
         },
         {
           "description": "Enables the get_tracked_menu_events command without any pre-configured scope.",
@@ -2469,10 +2505,22 @@
           "markdownDescription": "Enables the perform_request command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_deny_new_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-deny-new-window",
+          "markdownDescription": "Enables the set_deny_new_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the setup_app_listener command without any pre-configured scope.",
           "type": "string",
           "const": "allow-setup-app-listener",
           "markdownDescription": "Enables the setup_app_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the simulate_tray_click command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-simulate-tray-click",
+          "markdownDescription": "Enables the simulate_tray_click command without any pre-configured scope."
         },
         {
           "description": "Enables the spam command without any pre-configured scope.",
@@ -2485,6 +2533,12 @@
           "type": "string",
           "const": "allow-test-async-spawn",
           "markdownDescription": "Enables the test_async_spawn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the test_create_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-test-create-pdf",
+          "markdownDescription": "Enables the test_create_pdf command without any pre-configured scope."
         },
         {
           "description": "Enables the test_eval command without any pre-configured scope.",
@@ -2523,10 +2577,10 @@
           "markdownDescription": "Enables the write_test_report command without any pre-configured scope."
         },
         {
-          "description": "Denies the append-test-result command without any pre-configured scope.",
+          "description": "Denies the append_test_result command without any pre-configured scope.",
           "type": "string",
           "const": "deny-append-test-result",
-          "markdownDescription": "Denies the append-test-result command without any pre-configured scope."
+          "markdownDescription": "Denies the append_test_result command without any pre-configured scope."
         },
         {
           "description": "Denies the clear_console_log command without any pre-configured scope.",
@@ -2547,10 +2601,22 @@
           "markdownDescription": "Denies the clear_tracked_events command without any pre-configured scope."
         },
         {
+          "description": "Denies the close_test_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-test-window",
+          "markdownDescription": "Denies the close_test_window command without any pre-configured scope."
+        },
+        {
           "description": "Denies the console_log command without any pre-configured scope.",
           "type": "string",
           "const": "deny-console-log",
           "markdownDescription": "Denies the console_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_borderless_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-borderless-window",
+          "markdownDescription": "Denies the create_borderless_window command without any pre-configured scope."
         },
         {
           "description": "Denies the create_counter command without any pre-configured scope.",
@@ -2563,6 +2629,12 @@
           "type": "string",
           "const": "deny-create-isolated-window",
           "markdownDescription": "Denies the create_isolated_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_transparent_borderless_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-transparent-borderless-window",
+          "markdownDescription": "Denies the create_transparent_borderless_window command without any pre-configured scope."
         },
         {
           "description": "Denies the create_transparent_window command without any pre-configured scope.",
@@ -2581,6 +2653,12 @@
           "type": "string",
           "const": "deny-create-window-with-custom-ua",
           "markdownDescription": "Denies the create_window_with_custom_ua command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the dummy_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-dummy-command",
+          "markdownDescription": "Denies the dummy_command command without any pre-configured scope."
         },
         {
           "description": "Denies the echo command without any pre-configured scope.",
@@ -2605,6 +2683,18 @@
           "type": "string",
           "const": "deny-get-counter-value",
           "markdownDescription": "Denies the get_counter_value command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_last_new_window_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-last-new-window-url",
+          "markdownDescription": "Denies the get_last_new_window_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ohos_version_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ohos-version-info",
+          "markdownDescription": "Denies the get_ohos_version_info command without any pre-configured scope."
         },
         {
           "description": "Denies the get_tracked_menu_events command without any pre-configured scope.",
@@ -2643,10 +2733,22 @@
           "markdownDescription": "Denies the perform_request command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_deny_new_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-deny-new-window",
+          "markdownDescription": "Denies the set_deny_new_window command without any pre-configured scope."
+        },
+        {
           "description": "Denies the setup_app_listener command without any pre-configured scope.",
           "type": "string",
           "const": "deny-setup-app-listener",
           "markdownDescription": "Denies the setup_app_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the simulate_tray_click command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-simulate-tray-click",
+          "markdownDescription": "Denies the simulate_tray_click command without any pre-configured scope."
         },
         {
           "description": "Denies the spam command without any pre-configured scope.",
@@ -2659,6 +2761,12 @@
           "type": "string",
           "const": "deny-test-async-spawn",
           "markdownDescription": "Denies the test_async_spawn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the test_create_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-test-create-pdf",
+          "markdownDescription": "Denies the test_create_pdf command without any pre-configured scope."
         },
         {
           "description": "Denies the test_eval command without any pre-configured scope.",
@@ -2697,10 +2805,10 @@
           "markdownDescription": "Denies the write_test_report command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-toggle`\n- `allow-popup`\n- `allow-hide-menu`\n- `allow-show-menu`\n- `allow-is-menu-visible`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-toggle`\n- `allow-popup`\n- `allow-hide-menu`\n- `allow-show-menu`\n- `allow-is-menu-visible`\n- `allow-simulate-menu-click`",
           "type": "string",
           "const": "app-menu:default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-toggle`\n- `allow-popup`\n- `allow-hide-menu`\n- `allow-show-menu`\n- `allow-is-menu-visible`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-toggle`\n- `allow-popup`\n- `allow-hide-menu`\n- `allow-show-menu`\n- `allow-is-menu-visible`\n- `allow-simulate-menu-click`"
         },
         {
           "description": "Enables the hide_menu command without any pre-configured scope.",
@@ -2725,6 +2833,12 @@
           "type": "string",
           "const": "app-menu:allow-show-menu",
           "markdownDescription": "Enables the show_menu command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the simulate_menu_click command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-menu:allow-simulate-menu-click",
+          "markdownDescription": "Enables the simulate_menu_click command without any pre-configured scope."
         },
         {
           "description": "Enables the toggle command without any pre-configured scope.",
@@ -2755,6 +2869,12 @@
           "type": "string",
           "const": "app-menu:deny-show-menu",
           "markdownDescription": "Denies the show_menu command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the simulate_menu_click command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-menu:deny-simulate-menu-click",
+          "markdownDescription": "Denies the simulate_menu_click command without any pre-configured scope."
         },
         {
           "description": "Denies the toggle command without any pre-configured scope.",
@@ -7128,12 +7248,12 @@
           ],
           "properties": {
             "raw": {
-              "description": "Marks the validator as a raw regex, meaning the plugin should not make any modification at runtime.\n\n This means the regex will not match on the entire string by default, which might\n be exploited if your regex allow unexpected input to be considered valid.\n When using this option, make sure your regex is correct.",
+              "description": "Marks the validator as a raw regex, meaning the plugin should not make any modification at runtime.\n\nThis means the regex will not match on the entire string by default, which might be exploited if your regex allow unexpected input to be considered valid. When using this option, make sure your regex is correct.",
               "default": false,
               "type": "boolean"
             },
             "validator": {
-              "description": "[regex] validator to require passed values to conform to an expected input.\n\n This will require the argument value passed to this variable to match the `validator` regex\n before it will be executed.\n\n The regex string is by default surrounded by `^...$` to match the full string.\n For example the `https?://\\w+` regex would be registered as `^https?://\\w+$`.\n\n [regex]: <https://docs.rs/regex/latest/regex/#syntax>",
+              "description": "[regex] validator to require passed values to conform to an expected input.\n\nThis will require the argument value passed to this variable to match the `validator` regex before it will be executed.\n\nThe regex string is by default surrounded by `^...$` to match the full string. For example the `https?://\\w+` regex would be registered as `^https?://\\w+$`.\n\n[regex]: <https://docs.rs/regex/latest/regex/#syntax>",
               "type": "string"
             }
           },
@@ -7142,7 +7262,7 @@
       ]
     },
     "ShellScopeEntryAllowedArgs": {
-      "description": "A set of command arguments allowed to be executed by the webview API.\n\n A value of `true` will allow any arguments to be passed to the command. `false` will disable all\n arguments. A list of [`ShellScopeEntryAllowedArg`] will set those arguments as the only valid arguments to\n be passed to the attached command configuration.",
+      "description": "A set of command arguments allowed to be executed by the webview API.\n\nA value of `true` will allow any arguments to be passed to the command. `false` will disable all arguments. A list of [`ShellScopeEntryAllowedArg`] will set those arguments as the only valid arguments to be passed to the attached command configuration.",
       "anyOf": [
         {
           "description": "Use a simple boolean to allow all or disable all arguments to this command configuration.",

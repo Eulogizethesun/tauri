@@ -48,18 +48,35 @@ if [ ! -d "$DEVECO_HOME/sdk/default/openharmony" ]; then
     exit 1
 fi
 
+# ─── 短路径转换（处理含空格的路径，如 "C:\Program Files\..."）───
+to_short_path() {
+    local winpath="$1"
+    if [[ "$winpath" == *" "* ]]; then
+        local short=$(powershell -Command "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('$winpath').ShortPath" 2>/dev/null | tr -d '\r')
+        if [ -n "$short" ]; then echo "$short"; return; fi
+    fi
+    echo "$winpath"
+}
+
 # ─── 导出环境变量 ───
 export DEVECO_HOME
 export OHOS_HOME="$DEVECO_HOME/sdk/default/openharmony"
 export JAVA_HOME="$DEVECO_HOME/jbr"
 # Windows 格式路径，供 cargo-mobile2、clang.exe 等使用
 export DEV_ECO_STUDIO_INSTALL_PATH=$(echo "$DEVECO_HOME" | sed 's|^/\(.\)/|\U\1:\\|; s|/|\\|g')
+# 如果路径含空格，转为短路径（Rust/Cargo 不支持空格路径）
+if [[ "$DEV_ECO_STUDIO_INSTALL_PATH" == *" "* ]]; then
+    DEV_ECO_STUDIO_INSTALL_PATH=$(to_short_path "$DEV_ECO_STUDIO_INSTALL_PATH")
+    export DEV_ECO_STUDIO_INSTALL_PATH
+fi
 export PATH="$DEVECO_HOME/jbr/bin:$PATH:$DEVECO_HOME/tools/hvigor/bin:$DEVECO_HOME/tools/ohpm/bin:$OHOS_HOME/toolchains"
 
 # ─── 设置 ohos clang 编译器 (供 ring 等 native crate 使用) ───
-OHOS_CLANG=$(echo "$OHOS_HOME/native/llvm/bin/clang.exe" | sed 's|^/\(.\)/|\U\1:\\|; s|/|\\|g')
-OHOS_SYSROOT=$(echo "$OHOS_HOME/native/sysroot" | sed 's|^/\(.\)/|\U\1:\\|; s|/|\\|g')
-OHOS_AR=$(echo "$OHOS_HOME/native/llvm/bin/llvm-ar.exe" | sed 's|^/\(.\)/|\U\1:\\|; s|/|\\|g')
+# 基于已转换的短路径 DEV_ECO_STUDIO_INSTALL_PATH 构建所有 Windows 路径
+OHOS_WIN_ROOT="${DEV_ECO_STUDIO_INSTALL_PATH}\\sdk\\default\\openharmony"
+OHOS_CLANG="${OHOS_WIN_ROOT}\\native\\llvm\\bin\\clang.exe"
+OHOS_SYSROOT="${OHOS_WIN_ROOT}\\native\\sysroot"
+OHOS_AR="${OHOS_WIN_ROOT}\\native\\llvm\\bin\\llvm-ar.exe"
 export CC_aarch64_unknown_linux_ohos="$OHOS_CLANG"
 export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=$OHOS_SYSROOT -D__MUSL__"
 export AR_aarch64_unknown_linux_ohos="$OHOS_AR"

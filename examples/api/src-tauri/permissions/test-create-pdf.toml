@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-test-create-pdf"
+description = "Enables the test_create_pdf command without any pre-configured scope."
+commands.allow = ["test_create_pdf"]
+
+[[permission]]
+identifier = "deny-test-create-pdf"
+description = "Denies the test_create_pdf command without any pre-configured scope."
+commands.deny = ["test_create_pdf"]
