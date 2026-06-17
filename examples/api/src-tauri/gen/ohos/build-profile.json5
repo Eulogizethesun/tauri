@@ -7,11 +7,11 @@
         "material": {
           "certpath": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B4811039690195AA5FBD10217084A915F6F18B12E36453E198056EF395CB58104B475EF6BB9246A",
+          "keyPassword": "0000001B6A70357B89F4C0F92ED2EED31C2A15C091C89277ECCD7EC550732902869DFAB508A17EBB2E72CE",
           "profile": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\fangyu\\.ohos\\config\\default_ohos_W_xFN8i-euUtetQHVWobaSe0Ti2ALBy6d_Dvhnf5A9Q=.p12",
-          "storePassword": "0000001BF59DCBE6CB86A3EB49A4E2136B582B0212C1CCAEC9DF9FF4BCE396CCDE434785B5D1B4A80DC0C8"
+          "storePassword": "0000001BF24B50F2BF9A0D2EC0BCDDB16E04E9280CF20ED830F3D7A5F8ABA3945D51327E764A22FE1B1340"
         }
       }
     ],
@@ -31,7 +31,7 @@
     ],
     "buildModeSet": [
       {
-        "name": "debug",
+        "name": "debug"
       },
       {
         "name": "release"
@@ -42,6 +42,30 @@
     {
       "name": "entry",
       "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tauri",
+      "srcPath": "./tauri",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "dialog",
+      "srcPath": "./dialog",
       "targets": [
         {
           "name": "default",

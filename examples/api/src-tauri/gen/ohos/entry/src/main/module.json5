@@ -47,23 +47,11 @@
             "resource": "$profile:backup_config"
           }
         ]
-      },
-      {
-        "name": "TestTrayAbility",
-        "srcEntry": "./ets/testtrayability/TestTrayAbility.ets",
-        "type": "statusBarView",
-        "exported": true
       }
     ],
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
-      },
-      {
-        "name": "ohos.permission.SYSTEM_FLOAT_WINDOW"
-      },
-      {
-        "name": "ohos.permission.GET_BUNDLE_INFO"
       }
     ]
   }

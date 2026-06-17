@@ -1,0 +1,17 @@
+schema: change
+name: hmos-webview-create-pdf
+status: archived
+created: 2026-06-01
+archived: 2026-06-01
+description: HarmonyOS 平台 WebView 网页转 PDF 功能实现
+
+artifacts:
+  proposal:
+    status: done
+    file: proposal.md
+  design:
+    status: done
+    file: design.md
+  tasks:
+    status: done
+    file: tasks.md

@@ -15,7 +15,7 @@ function tauriPlugin(): HvigorPlugin {
       const buildRustCode = () => {
         const properties = hvigor.getParameter().getProperties();
         const target = properties.target || "aarch64";
-        execFileSync(`cargo`,
+        execFileSync(`C:/code/tauri-projects-0613/tauri/target/debug/cargo-tauri`,
           ["tauri", "ohos", "dev-eco-studio-script", "--target", target.toString()], {
             cwd: resolve(__dirname, "../../../"),
             stdio: "inherit",

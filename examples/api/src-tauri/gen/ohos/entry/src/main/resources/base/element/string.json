@@ -11,10 +11,6 @@
     {
       "name": "EntryAbility_label",
       "value": "label"
-    },
-    {
-      "name": "read_pasteboard_reason",
-      "value": "Used to read clipboard content for paste operations in menus"
     }
   ]
 }

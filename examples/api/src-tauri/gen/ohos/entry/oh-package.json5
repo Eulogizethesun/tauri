@@ -7,6 +7,8 @@
   "license": "",
   "dependencies": {
     "libentry.so": "file:./src/main/cpp/types/libentry",
-    "@ohos-rs/ability": "file：../../../../../../../../../openharmony-ability/ability.har"
+    "@ohos-rs/ability": "file:../../../../../../../openharmony-ability/ability.har",
+    "@tauri/app": "file:../tauri",
+    "@tauri/plugin-dialog": "file:../dialog"
   }
 }

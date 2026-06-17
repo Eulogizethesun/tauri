@@ -2,20 +2,118 @@ import { NativeAbility } from '@ohos-rs/ability'
 import Want from '@ohos.app.ability.Want'
 import { AbilityConstant } from '@kit.AbilityKit';
 import window from '@ohos.window';
+import { PluginManager, Plugin } from '@tauri/app';
+import api_lib from 'libapi_lib.so';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import DialogPlugin from '@tauri/plugin-dialog';
+
+interface TauriNativeModule {
+  tauri_init_plugins?: (manager: PluginManager) => string;
+  tauriInitPlugins?: (manager: PluginManager) => string;
+  tauri_handle_plugin_response?: (id: number, success: boolean, payload: string) => void;
+  tauriHandlePluginResponse?: (id: number, success: boolean, payload: string) => void;
+}
+
+interface PluginConfig {
+  name: string;
+  identifier: string;
+  className: string;
+  config: string;
+}
+
+const nativeModule: TauriNativeModule = api_lib;
+
+const STATIC_PLUGINS: Map<string, Plugin> = new Map();
+STATIC_PLUGINS.set('dialog', new DialogPlugin());
 
 export default class EntryAbility extends NativeAbility {
-  // change to dynamic library name
   public moduleName: string = "api_lib"
-  public defaultPage: boolean = true;
+  public defaultPage: boolean = true
   public mode: 'xcomponent' | 'webview' = 'webview'
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
-    super.onCreate(want, launchParam);
+    console.info('[Tauri] ===== EntryAbility onCreate =====');
+    await super.onCreate(want, launchParam);
+    console.info('[Tauri] ===== super.onCreate done =====');
+    await this.initTauriPlugins();
+  }
+
+  private async initTauriPlugins(): Promise<void> {
+    console.info('[Tauri] ===== initTauriPlugins =====');
+
+    const pluginManager: PluginManager = new PluginManager();
+    console.info('[Tauri] PluginManager created');
+
+    pluginManager.handlePluginResponse = (id: number, success: number, payload: string): void => {
+      const handler = nativeModule?.tauri_handle_plugin_response ?? nativeModule?.tauriHandlePluginResponse;
+      if (handler != null) {
+        handler(id, success === 1, payload);
+      }
+    };
+
+    pluginManager.setResponseHandler(pluginManager.handlePluginResponse);
+
+    console.info('[Tauri] Native module loaded (static import)');
+    console.info('[Tauri] Module keys: ' + Object.keys(nativeModule).join(', '));
+
+    try {
+      if (nativeModule?.tauri_init_plugins != null || nativeModule?.tauriInitPlugins != null) {
+        const initPlugins = nativeModule.tauri_init_plugins ?? nativeModule.tauriInitPlugins;
+        if (initPlugins != null) {
+          console.info('[Tauri] Calling initPlugins');
+          const pluginsJson = initPlugins(pluginManager);
+          const plugins: PluginConfig[] = JSON.parse(pluginsJson) as PluginConfig[];
+
+          console.info('[Tauri] Loading ' + plugins.length + ' plugins');
+
+          for (const plugin of plugins) {
+            const staticPlugin: Plugin | undefined = STATIC_PLUGINS.get(plugin.name);
+            if (staticPlugin != null) {
+              pluginManager.load(plugin.name, staticPlugin, plugin.config);
+              console.info('[Tauri] Plugin loaded: ' + plugin.name);
+            } else {
+              console.error('[Tauri] Plugin not in static registry: ' + plugin.name);
+            }
+          }
+          console.info('[Tauri] All plugins loaded');
+        }
+      } else {
+        console.warn('[Tauri] initPlugins not found in module');
+      }
+    } catch (e) {
+      const err = e as Error;
+      console.error('[Tauri] Error: ' + err.message);
+      console.error('[Tauri] Stack: ' + err.stack);
+    }
   }
 
   async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
-    const window = windowStage.getMainWindowSync();
-    await window.setWindowLayoutFullScreen(false);
-    super.onWindowStageCreate(windowStage);
+    console.info('[Tauri] ===== onWindowStageCreate =====');
+    const win = windowStage.getMainWindowSync();
+    await win.setWindowLayoutFullScreen(false);
+    await super.onWindowStageCreate(windowStage);
+    console.info('[Tauri] ===== super.onWindowStageCreate done =====');
+
+    // Set window background AFTER super.onWindowStageCreate to avoid being overwritten
+    // by loadContentByName. OHOS default window background is black.
+    // NOTE: OHOS requires #AARRGGBB format (8-digit hex), not #RRGGBB.
+    try {
+      await win.setWindowBackgroundColor('#FFFFFFFF');
+      // On API 20+, also set container color to cover the container layer default black
+      if (deviceInfo.sdkApiVersion >= 20) {
+        try {
+          await win.setWindowContainerColor('#FFFFFFFF', '#FFFFFFFF');
+        } catch (_) {}
+      }
+      await win.setWindowSystemBarProperties({
+        statusBarColor: '#FFFFFFFF',
+        statusBarContentColor: '#FF000000',
+        navigationBarColor: '#FFFFFFFF',
+        navigationBarContentColor: '#FF000000'
+      });
+      console.info('[Tauri] Window background and system bar set to white');
+    } catch (e) {
+      console.error('[Tauri] Failed to set window background: ' + JSON.stringify(e));
+    }
   }
 }
