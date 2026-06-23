@@ -126,8 +126,14 @@ pub fn find_plugin_har(plugin_name: &str, project_dir: &Path) -> Result<PathBuf>
   )
 }
 
-const BUILTIN_PLUGINS: &[(&str, &str, &str)] =
-  &[("dialog", "@tauri/plugin-dialog", "DialogPlugin")];
+const BUILTIN_PLUGINS: &[(&str, &str, &str)] = &[
+  ("dialog", "@tauri/plugin-dialog", "DialogPlugin"),
+  (
+    "notification",
+    "@tauri/plugin-notification",
+    "NotificationPlugin",
+  ),
+];
 
 pub fn detect_all_plugins(project_dir: &Path) -> Result<Vec<DetectedPlugin>> {
   let cargo_manifest = project_dir.join("Cargo.toml");

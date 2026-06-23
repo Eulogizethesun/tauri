@@ -31,11 +31,13 @@ tauri-plugin-process = { path = "../../../../plugins-workspace/plugins/process" 
 tauri-plugin-updater = { path = "../../../../plugins-workspace/plugins/updater" }
 tauri-plugin-autostart = { path = "../../../../plugins-workspace/plugins/autostart" }
 tauri-plugin-log = { path = "../../../../plugins-workspace/plugins/log" }
+tauri-plugin-notification = { path = "../../../../plugins-workspace/plugins/notification" }
+sentry = { version = "0.42", default-features = false, features = ["reqwest", "rustls", "backtrace", "contexts", "panic", "debug-images"] }
+tauri-plugin-sentry = { path = "../../../../sentry-tauri" }
 chrono = "0.4"
 url = "2"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
-tauri-plugin-notification = { path = "../../../../plugins-workspace/plugins/notification" }
 tauri-plugin-dialog = { path = "../../../../plugins-workspace/plugins/dialog" }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
@@ -64,9 +66,9 @@ features = ["test"]
 prod = ["tauri/custom-protocol"]
 
 [profile.release]
-# 开启调试信息（最重要）
+# Enable debug info (most important for OHOS panic/crash debugging)
 debug = true
 
-# 可选：保留行号、变量名等更完整的调试信息（gdb、lldb、日志回溯都能用）
+# Optional: preserve line numbers and variable names for gdb/lldb/backtrace
 strip = false
-opt-level = 0  # 关闭优化，调试最清晰
+opt-level = 0  # Disable optimization for clearest debug experience

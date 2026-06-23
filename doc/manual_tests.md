@@ -105,7 +105,7 @@
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| plugin | os | platform/基础 | platform() — 平台标识返回值 | **T0** | 应用已启动，进入 OS/Platform 页面或控制台 | 1. 观察应用启动时注入的 `window.__TAURI_OS_PLUGIN_INTERNALS__.platform` 值 2. 调用 `platform()` API | ① `platform()` 返回 `"ohos"`（非 `"linux"`） ② 前端 TypeScript 类型包含 `'ohos'` | 编译期通过 `cfg(target_env = "ohos")` 覆盖 `std::env::consts::OS` |
+| plugin | os | platform/基础 | platform() — 平台标识返回值 | **T0** | 应用已启动，进入 OS/Platform 页面或控制台 | 1. 点击`OS info(platform/type/version)`按钮 2. 调用 `platform()` API | ① `platform()` 返回 `"ohos"`（非 `"linux"`） ② 前端 TypeScript 类型包含 `'ohos'` | 编译期通过 `cfg(target_env = "ohos")` 覆盖 `std::env::consts::OS` |
 | plugin | os | type/基础 | type() — OS 类型返回值 | **T0** | 应用已启动 | 1. 调用 `type()` API 2. 观察返回值 | ① `type()` 返回 `"ohos"`（非 `"linux"`） ② 前端 TypeScript `OsType` 类型包含 `'ohos'` | `OsType::Ohos` 在 `cfg(target_env = "ohos")` 下优先于 Linux 分支 |
 | plugin | os | version/基础 | version() — 版本号返回值 | **T1** | 应用已启动 | 1. 调用 `version()` API 2. 观察返回值 | ① `version()` 返回 `"0.0.0"` ② 不崩溃、不报错 | OHOS 上 `os_info` 不支持，使用 `Version::Semantic(0,0,0)` 占位 |
 | plugin | os | family/基础 | family() — 系统家族返回值 | **T1** | 应用已启动 | 1. 调用 `family()` API | `family()` 返回 `"unix"` | OHOS 属于 unix 家族，无需覆盖 |
@@ -166,10 +166,10 @@
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| core | runevent | ExitRequested/LoopDestroyed | 系统关闭应用 — ExitRequested + prevent_exit | **T0** | 应用已启动，日志监控已开启 | 1. 从系统最近任务列表滑动关闭应用 2. 观察日志输出 | ① 日志依次出现 `LoopDestroyed received` → `ExitRequested, code=None` → `prevent_exit() called` → `Exit` ② 应用仍然退出（`LoopDestroyed` 时系统已开始销毁，`prevent_exit()` 无法阻止） | 验证 Phase 1：LoopDestroyed handler 先触发 ExitRequested 再触发 Exit；OHOS 平台限制：prevent_exit 仅通知清理，无法阻止退出 |
-| core | runevent | ExitRequested/防重复 | ExitRequested 防重复触发 | **T1** | 应用已启动，日志监控已开启；已创建多个子窗口 | 1. 逐个关闭子窗口（每个观察日志） 2. 关闭最后一个窗口（主窗口） 3. 统计 `ExitRequested` 出现次数 | ① 每个子窗口关闭时：`CloseRequested` → `Destroyed` ② 最后一个窗口关闭时：`ExitRequested` **仅一次** ③ 随后 LoopDestroyed 时**不再重复** ExitRequested，直接发送 `Exit` | 验证 `ExitState(AtomicBool)` 防重复机制 |
+| core | runevent | ExitRequested/LoopDestroyed | 系统关闭应用 — ExitRequested + prevent_exit | **T0** | 应用已启动，打开 DevEco Studio 观察日志，关键词runevent | 1. 关闭应用 2. 观察日志输出 | ① 日志依次出现 `LoopDestroyed received` → `ExitRequested, code=None` → `prevent_exit() called` → `Exit` ② 应用仍然退出（`LoopDestroyed` 时系统已开始销毁，`prevent_exit()` 无法阻止） | 验证 Phase 1：LoopDestroyed handler 先触发 ExitRequested 再触发 Exit；OHOS 平台限制：prevent_exit 仅通知清理，无法阻止退出 |
+| core | runevent | ExitRequested/防重复 | ExitRequested 防重复触发 | **T1** | 应用已启动，打开 DevEco Studio 观察日志，关键词runevent；已创建多个子窗口 | 1. 逐个关闭子窗口（每个观察日志） 2. 关闭最后一个窗口（主窗口） 3. 统计 `ExitRequested` 出现次数 | ① 每个子窗口关闭时：`CloseRequested` → `Destroyed` ② 最后一个窗口关闭时：`ExitRequested` **仅一次** ③ 随后 LoopDestroyed 时**不再重复** ExitRequested，直接发送 `Exit` | 验证 `ExitState(AtomicBool)` 防重复机制 |
 | core | runevent | Resumed/跨平台遗留 | Resumed 事件 — 不触发（预期行为） | **T1** | 自动测试报告已生成 | 1. 查看 Test #29 `RunEvent::Resumed fires on startup` 结果 | ① 状态为 ❌ ② 预期失败，跨平台遗留问题 | 不在本次修复范围内 |
-| core | runevent | Opened/深度链接 | Opened 事件 — 深度链接触发 | **T1** | 应用已启动，日志监控已开启 | 1. 执行 `hdc shell aa start -a EntryAbility -b com.tauri.api -U myapp://test/path` 2. 观察日志输出和 UI 响应 | ① 日志出现 `[RunEvent] Opened, urls=["myapp://test/path"]` ② UI 显示深度链接信息（如有处理逻辑） | 验证 Phase 2：OHOS 平台 Opened 事件已启用（代码 511-515 行），通过深度链接触发 |
+| core | runevent | Opened/深度链接 | Opened 事件 — 深度链接触发 | **T1** | 应用已启动，打开 DevEco Studio 观察日志 | 1. 执行 `hdc shell aa start -a EntryAbility -b com.tauri.api -U myapp://test/path` 2. 观察日志输出和 UI 响应 | ① 日志出现 `[RunEvent] Opened, urls=["myapp://test/path"]` ② UI 显示深度链接信息（如有处理逻辑） | 验证 Phase 2：OHOS 平台 Opened 事件已启用（代码 511-515 行），通过深度链接触发 |
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -202,7 +202,7 @@
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| core | on_new_window | Allow/弹窗关闭 | Allow dialog 关闭按钮验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Allow dialog has close button (manual)" 2. 观察弹窗外观 3. 点击标题栏 ✕ 按钮 4. 重新触发测试，点击弹窗外部区域 | ① 弹出非模态对话框，标题栏显示 URL ② 标题栏右上角有 ✕ 关闭按钮 ③ 点击 ✕ 对话框关闭 ④ 点击对话框外部区域（autoCancel）对话框也关闭 ⑤ 对话框内嵌 Web 组件加载对应 URL | `promptAction.openCustomDialog` + `setTimeout` 延迟打开避免阻塞事件循环 |
+| core | on_new_window | Allow/弹窗关闭 | Allow dialog 关闭按钮验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Allow dialog has close button (manual)" 2. 观察弹窗外观 3. 点击标题栏 ✕ 按钮 | ① 弹出非模态对话框，标题栏显示 URL ② 标题栏右上角有 ✕ 关闭按钮 ③ 点击 ✕ 对话框关闭 ④ 点击对话框内嵌 Web 组件加载对应 URL | `promptAction.openCustomDialog` + `setTimeout` 延迟打开避免阻塞事件循环 |
 | core | on_new_window | Deny/无弹窗 | Deny 模式阻止弹窗验证 | **T1** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Deny prevents dialog (manual)" 2. 观察屏幕 | ① 不弹出任何对话框 ② 页面保持不变，无导航跳转 ③ hilog 可见 `DENY` 日志 | `setWebController(null)` 阻止新窗口 |
 
 | 模块 | T0 | T1 | 合计 |
@@ -211,7 +211,27 @@
 
 ---
 
-## 十二、Single-Instance（单实例）手动用例
+## 十二、Notification（通知）手动用例
+
+> **测试入口**: `examples/api` 应用 → Tests 页面 → **Notification Manual Tests** 区域
+>
+> **自动测试已覆盖**: `isPermissionGranted`、`createChannel+channels`、`removeChannel`、`cancel+cancelAll`、`pending+active`、`sendNotification`、`sendWithChannel` 共 7 个自动测试已在 `plugins.ts` 中，每次构建自动运行。
+>
+> **以下 3 个用例需要人眼确认通知中心的视觉显示**，已集成为 Tests 页面的按钮：
+
+| 一级场景 | 二级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|------|
+| plugin | notification | Send Notification — 通知中心视觉确认 | **T0** | 应用已启动，通知权限已授予 | 1. 进入 Tests 页面，滚动到 "Notification Manual Tests" 区域 2. 点击 **"Send Notification"** 按钮 3. 点击屏幕右上角系统通知图标，打开通知中心 | ① 结果区域显示 `sendNotification() 调用成功` ② 系统通知中心（屏幕右下角系统托盘🔔图标）出现通知，标题 "Tauri 手动测试"，内容 "如果你在通知中心看到这条消息，测试通过！" ③ 点击通知后通知消失 | 自动测试只验证 API 不报错，通知是否真正显示必须人眼确认 |
+| plugin | notification | Send With Channel — 渠道通知视觉确认 | **T1** | 应用已启动，通知权限已授予 | 1. 点击 **"Send With Channel"** 按钮 2. 打开系统通知中心 | ① 结果区域显示 `createChannel() + sendNotification(channelId) 调用成功` ② 屏幕右下角出现通知，标题 "渠道通知测试"| 按钮自动创建渠道 `manual-test-ch` 并通过该渠道发送 |
+| plugin | notification | Request Permission — 系统弹窗确认 | **T1** | **需卸载重装应用**（权限弹窗仅首次弹出） | 1. 卸载应用：`hdc shell bm uninstall -n com.tauri.api`（首次执行不用） 2. 重新构建安装 3. 点击 **"Request Permission"** 按钮 | ① 系统弹出通知权限授权对话框 ② 点击"允许"后结果区域显示 `requestPermission() → "granted"` ③ 再次点击不再弹窗 | 此测试需要干净环境，日常回归可跳过 |
+
+| 模块 | T0 | T1 | 合计 |
+|------|-----|-----|------|
+| Notification manual（手动测试） | 1 | 2 | **3** |
+
+---
+
+## 十三、Single-Instance（单实例）手动用例
 
 > **前置条件**: example app 已集成 `tauri-plugin-single-instance`，callback 中通过 `log::info!("[single-instance] callback fired! args={:?}, cwd={:?}", args, cwd)` 输出日志。
 >
@@ -230,7 +250,7 @@
 
 ---
 
-## 十一、Predefined Multi-Window（预定义操作多窗口支持）手动用例
+## 十四、Predefined Multi-Window（预定义操作多窗口支持）手动用例
 
 > **背景**: 修复 predefined menu 操作在多窗口场景下的目标窗口解析：hide/close/minimize 语义修正、showAll/bringAllToFront 恢复应用、剪贴板/编辑操作使用目标窗口 webview controller、onTouch 迁移到页面根容器。
 >
@@ -252,15 +272,35 @@
 | core | predefined-multi-window | restore | BringAllToFront 子窗口恢复 | **T1** | 应用已启动；已创建子窗口；子窗口处于最小化状态 | 1. 确保主窗口可见 2. 右键点击托盘图标打开菜单 3. 点击 BringAllToFront | ① 主窗口保持可见 ② 被最小化的子窗口恢复显示 | 验证：遍历 WindowManager 所有窗口调用 showWindow() 可恢复最小化子窗口 |
 | core | predefined-multi-window | restore | 前台点击 ShowAll — 无副作用 | **T1** | 应用已启动且在前台；已创建 Full Test Tray（含 ShowAll 菜单项） | 1. 确保应用在前台，所有窗口可见 2. 右键点击托盘图标打开菜单 3. 点击 ShowAll | ① 应用保持在前台，无闪烁或异常 ② 所有窗口保持可见 ③ hilog 无错误 | 验证：showAbility() 幂等安全，showWindow() 对已可见窗口不产生副作用 |
 | core | predefined-multi-window | clipboard/copy | MenuBar Copy 主窗口 — 通过 MenuBar 触发 Copy | **T0** | 应用已启动；主窗口有可选择的文本 | 1. 点击主窗口 MenuBar 打开菜单 2. 点击 Edit → Copy 3. 在其他位置粘贴验证 | ① 粘贴得到的文本为主窗口中选中的文本 ② 操作目标为主窗口 webview | 验证：Window Menu Bar 路径 targetWindowId 有值，直接操作菜单所属窗口 |
-| core | predefined-multi-window | clipboard/copy | MenuBar Copy 子窗口 — 通过子窗口 MenuBar 触发 Copy | **T0** | 应用已启动；已创建子窗口；子窗口有可选择的文本 | 1. 点击子窗口 MenuBar 打开菜单 2. 点击 Edit → Copy 3. 在其他位置粘贴验证 | ① 粘贴得到的文本为子窗口中选中的文本 ② 不是主窗口的文本 | 验证：Window Menu Bar 路径 targetWindowId 为子窗口 ID，操作目标正确 |
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
-| Predefined Multi-Window（预定义操作多窗口支持） | 7 | 8 | **15** |
+| Predefined Multi-Window（预定义操作多窗口支持） | 6 | 8 | **15** |
 
 ---
 
-## 十二、用例统计
+## 十五、Sentry（错误追踪）手动用例
+
+> **测试应用**: `examples/api`（主测试应用）
+>
+> **前提**: sentry 插件已注册（`tauri_plugin_sentry::init`），DSN 已配置；设备已联网
+>
+> **测试入口**: TestRunner.svelte → "Sentry (错误追踪) Manual Tests" 区域
+>
+> **验证方式**: 优先通过自动测试报告 + 设备日志判断，Sentry 仪表盘为可选增强验证
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | sentry | JS Error 捕获 | JS Error Capture — WebView JS 异常捕获 | **T0** | 应用已启动；点击 "JS Error Capture" 按钮 | 1. 打开 DevEco Studio 检查日志 2. 点击 "JS Error Capture" 按钮 | ① 日志 输出 `[Sentry Test] Caught error: Error: OHOS test error from examples/api` ② `[ManualTest] Completed: sentryJsError` 确认测试完成 | 若 js_init_script 未注入，JS error 仍会被 WebView console.error 记录；注入验证：在 WebView 中执行 `typeof Sentry !== 'undefined'` |
+| core | sentry | Rust Panic 捕获 | Rust Panic Capture — Rust panic 导致 app 崩溃 | **T1** | 应用已启动；点击 "Rust Panic (may crash)" 按钮 | 1.1. 打开 DevEco Studio 检查日志 2. 点击 "Rust Panic (may crash)" 按钮 3. 等待 2 秒，app 崩溃退出 4. 查看crash日志 | ① app 崩溃退出（预期行为，SIGABRT） ② cppcrash 日志 `Reason` 行包含 `Signal:SIGABRT(SI_TKILL)` ③ 栈回溯中 `libapi_lib.so` 出现在顶层帧（Rust panic → abort） ④ 崩溃时间与按钮点击时间吻合 | 仅在DEBUG模式下支持，sentry-panic crate 在 panic 时捕获事件并尝试上报；panic 导致进程退出需重启应用；breadcrumb/envelope/rust_breadcrumb 的 IPC 通路由自动测试 #74-#76 覆盖 |
+
+| 模块 | T0 | T1 | 合计 |
+|------|-----|-----|------|
+| Sentry（错误追踪） | 1 | 1 | **2** |
+
+---
+
+## 十六、用例统计
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -278,6 +318,8 @@
 | on_new_window（新窗口拦截） | 1 | 1 | **2** |
 | Single-Instance（单实例） | 3 | 1 | **4** |
 | WebView webPageSnapshot（网页截图） | 1 | 0 | **1** |
-| Predefined Multi-Window（预定义操作多窗口支持） | 7 | 8 | **15** |
-| **合计** | **48** | **49** | **97** |
+| Predefined Multi-Window（预定义操作多窗口支持） | 6 | 8 | **14** |
+| Notification（通知） | 1 | 2 | **3** |
+| Sentry（错误追踪） | 1 | 1 | **2** |
+| **合计** | **49** | **52** | **101** |
 

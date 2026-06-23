@@ -927,3 +927,22 @@ pub fn test_create_pdf<R: Runtime>(app: tauri::AppHandle<R>, path: Option<String
 
   Ok(())
 }
+
+/// Sentry: trigger a Rust panic to test sentry panic capture
+#[cfg(debug_assertions)]
+#[command]
+pub fn sentry_test_panic() {
+  panic!("sentry test panic from examples/api");
+}
+
+/// Sentry: add a breadcrumb from Rust to test breadcrumb sync
+#[command]
+pub fn sentry_test_breadcrumb() {
+  sentry::add_breadcrumb(sentry::Breadcrumb {
+    message: Some("test breadcrumb from examples/api".to_owned()),
+    category: Some("test".to_owned()),
+    level: sentry::Level::Info,
+    ..Default::default()
+  });
+  log::info!("[sentry] breadcrumb added from Rust");
+}

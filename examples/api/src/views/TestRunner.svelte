@@ -1270,6 +1270,104 @@ Expected behavior:
       onMessage('on_new_window Deny: no dialog should appear');
     });
   }
+  // ─── Notification Manual Tests ───
+  async function manualNotificationSend() {
+    await wrapManual('notificationSend', async () => {
+      const { sendNotification, isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) {
+        manualResult = '⚠️ 通知权限未授予。请先点击 "Request Permission" 按钮请求权限。';
+        onMessage(manualResult);
+        return;
+      }
+      sendNotification({ title: 'Tauri 手动测试', body: '如果你在通知中心看到这条消息，测试通过！' });
+      manualResult = '✅ sendNotification() 调用成功。\n' +
+        '验证步骤：\n' +
+        '  1. 点击屏幕右上角系统通知图标\n' +
+        '  2. 确认出现标题为 "Tauri 手动测试" 的通知\n' +
+        '  3. 点击通知，确认通知消失（tapDismissed=true）';
+      onMessage('Notification sent: check notification center');
+    });
+  }
+
+  async function manualNotificationChannel() {
+    await wrapManual('notificationChannel', async () => {
+      const { createChannel, sendNotification, isPermissionGranted, Importance } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) {
+        manualResult = '⚠️ 通知权限未授予。请先点击 "Request Permission" 按钮。';
+        onMessage(manualResult);
+        return;
+      }
+      await createChannel({ id: 'manual-test-ch', name: '手动测试渠道', importance: Importance.Default });
+      sendNotification({ title: '渠道通知测试', body: '通过 manual-test-ch 渠道发送', channelId: 'manual-test-ch' });
+      manualResult = '✅ createChannel() + sendNotification(channelId) 调用成功。\n' +
+        '验证步骤：\n' +
+        '  1. 打开系统通知中心\n' +
+        '  2. 确认出现标题为 "渠道通知测试" 的通知\n' +
+        '  3. 通知应归属于 SERVICE_INFORMATION 渠道类型（importance=Default）';
+      onMessage('Channel notification sent: check notification center');
+    });
+  }
+
+  async function manualNotificationPermission() {
+    await wrapManual('notificationPermission', async () => {
+      const { requestPermission } = await import('@tauri-apps/plugin-notification');
+      const result = await requestPermission();
+      manualResult = `requestPermission() → "${result}"\n` +
+        '验证步骤：\n' +
+        `  1. ${result === 'granted' ? '✅ 权限已授予，后续调用不再弹窗' : result === 'denied' ? '⚠️ 权限被拒绝，需卸载重装应用才能重新弹窗' : 'ℹ️ 首次请求，系统应弹出权限对话框'}\n` +
+        '  2. 如需重新测试弹窗，执行: hdc shell bm uninstall -n com.tauri.api 后重装';
+      onMessage(`requestPermission → ${result}`);
+    });
+  }
+
+  // ─── Sentry Manual Tests ───
+  async function manualSentryJsError() {
+    await wrapManual('sentryJsError', async () => {
+      try {
+        throw new Error('OHOS test error from examples/api');
+      } catch (e) {
+        console.error('[Sentry Test] Caught error:', e);
+      }
+      manualResult = '✅ JS Error thrown and caught.\n' +
+        'If @sentry/browser is injected, the error should appear in Sentry dashboard.\n' +
+        'Verify:\n' +
+        '  1. Sentry dashboard shows new event with platform=javascript\n' +
+        '  2. Event message contains "OHOS test error from examples/api"\n' +
+        '  3. User-Agent does NOT contain OHOS WebView info\n\n' +
+        'Note: If no event appears, check hilog for sentry debug logs.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSentryRustPanic() {
+    await wrapManual('sentryRustPanic', async () => {
+      manualResult = '⚠️  About to trigger Rust panic!\n' +
+        'The panic handler will catch it and sentry should report it.\n' +
+        'The app may crash after this.\n' +
+        'Verify Sentry dashboard shows a panic event with:\n' +
+        '  message: "sentry test panic from examples/api"\n' +
+        '  Rust backtrace included';
+      onMessage(manualResult);
+      // Small delay so user can read the message
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        await invoke('sentry_test_panic');
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('not found') || msg.includes('command')) {
+          // Release build: sentry_test_panic is gated with #[cfg(debug_assertions)]
+          manualResult += '\n\n⚠️ sentry_test_panic not available — only compiled in debug builds.';
+        } else {
+          // Expected: IPC will fail because the thread panicked
+          manualResult += `\n\nPanic triggered. IPC error (expected): ${e}`;
+        }
+        onMessage(manualResult);
+      }
+    });
+  }
+
 </script>
 
 <div class="flex flex-col gap-2">
@@ -1467,6 +1565,21 @@ Expected behavior:
           <canvas bind:this={canvasEl} width={snapshotWidth} height={snapshotHeight}></canvas>
         </div>
       {/if}
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Notification Manual Tests (视觉确认)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualNotificationSend}>Send Notification</button>
+        <button class="btn" onclick={manualNotificationChannel}>Send With Channel</button>
+        <button class="btn" onclick={manualNotificationPermission}>Request Permission</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Sentry (错误追踪) Manual Tests</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualSentryJsError}>JS Error Capture</button>
+        <button class="btn" onclick={manualSentryRustPanic}>Rust Panic (may crash)</button>
+      </div>
     </div>
     {#if manualResult}
       <div class="mt-2 p-2 rd-1 bg-black/10 dark:bg-white/10 text-xs font-mono break-all">

@@ -141,6 +141,10 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "notification:default",
+    "sentry:default",
+    "allow-sentry-test-panic",
+    "allow-sentry-test-breadcrumb"
   ]
 }

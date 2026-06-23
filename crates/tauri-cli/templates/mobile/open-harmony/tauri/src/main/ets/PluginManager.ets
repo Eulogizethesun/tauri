@@ -1,4 +1,5 @@
 import { Plugin, Invoke, CommandHandler } from './Plugin';
+import { common } from '@kit.AbilityKit';
 
 interface PluginInstance {
   name: string;
@@ -17,6 +18,7 @@ type ResponseHandler = (id: number, success: number, payload: string) => void;
 
 let globalPlugins: Map<string, PluginInstance> = new Map();
 let globalHandlePluginResponse: ResponseHandler | null = null;
+let globalContext: common.UIAbilityContext | null = null;
 
 class InvokeImpl implements Invoke {
   private args: string;
@@ -55,7 +57,12 @@ export class PluginManager {
   private plugins: Map<string, PluginInstance> = globalPlugins;
   public handlePluginResponse: ResponseHandler | null = null;
 
+  setContext(context: common.UIAbilityContext): void {
+    globalContext = context;
+  }
+
   load(pluginName: string, plugin: Plugin, config: string): void {
+    plugin.context = globalContext;
     globalPlugins.set(pluginName, {
       name: pluginName,
       instance: plugin,

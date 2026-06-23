@@ -1,0 +1,12 @@
+{
+  "name": "@tauri/plugin-notification",
+  "version": "2.0.0",
+  "description": "Notification plugin for Tauri on OpenHarmony",
+  "main": "src/main/ets/index.ets",
+  "author": "Tauri Programme within The Commons Conservancy",
+  "license": "Apache-2.0 OR MIT",
+  "dependencies": {
+    "@tauri/app": "file:../tauri"
+  },
+  "type": "module"
+}

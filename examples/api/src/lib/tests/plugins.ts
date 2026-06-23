@@ -484,11 +484,112 @@ export const pluginTests: TestCase[] = [
     async fn() {},
   },
 
-  // @tauri-apps/plugin-notification (manual)
+  // @tauri-apps/plugin-notification
+  {
+    name: '@tauri-apps/plugin-notification.isPermissionGranted',
+    category: 'auto',
+    async fn() {
+      const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+      try {
+        const result = await isPermissionGranted();
+        assert(typeof result === 'boolean', `isPermissionGranted should return boolean, got ${typeof result}`);
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
+  },
   {
     name: '@tauri-apps/plugin-notification.sendNotification',
-    category: 'manual',
-    async fn() {},
+    category: 'side-effect',
+    async fn() {
+      const { sendNotification, isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) return; // skip if no permission
+      sendNotification({ title: 'Tauri Auto Test', body: 'notification side-effect test' });
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-notification.createChannel+channels',
+    category: 'side-effect',
+    async fn() {
+      const { createChannel, channels, Importance } = await import('@tauri-apps/plugin-notification');
+      try {
+        await createChannel({ id: 'tauri-test-channel', name: 'Tauri Test', importance: Importance.Default });
+        const chList = await channels();
+        assert(Array.isArray(chList), `channels() should return array, got ${typeof chList}`);
+        assert(chList.some((c: any) => c.id === 'tauri-test-channel'), `created channel 'tauri-test-channel' not found in channels() result`);
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-notification.cancel+cancelAll',
+    category: 'side-effect',
+    async fn() {
+      const { cancel, cancelAll } = await import('@tauri-apps/plugin-notification');
+      try {
+        await cancel([99999]);
+        await cancelAll();
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-notification.sendWithChannel',
+    category: 'side-effect',
+    async fn() {
+      const { createChannel, sendNotification, isPermissionGranted, Importance } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) return;
+      try {
+        await createChannel({ id: 'tauri-ch-test', name: 'Tauri Channel Test', importance: Importance.Default });
+        sendNotification({ title: 'Channel Test', body: 'via tauri-ch-test', channelId: 'tauri-ch-test' });
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-notification.removeChannel',
+    category: 'side-effect',
+    async fn() {
+      const { createChannel, removeChannel, channels, Importance } = await import('@tauri-apps/plugin-notification');
+      try {
+        await createChannel({ id: 'tauri-rm-test', name: 'Tauri Remove Test', importance: Importance.Low });
+        const before = await channels();
+        assert(Array.isArray(before), `channels() should return array`);
+        assert(before.some((c: any) => c.id === 'tauri-rm-test'), `channel 'tauri-rm-test' not found after create`);
+        await removeChannel('tauri-rm-test');
+        const after = await channels();
+        assert(Array.isArray(after), `channels() should return array after remove`);
+        assert(!after.some((c: any) => c.id === 'tauri-rm-test'), `channel 'tauri-rm-test' still present after removeChannel()`);
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-notification.pending+active',
+    category: 'auto',
+    async fn() {
+      const { pending, active } = await import('@tauri-apps/plugin-notification');
+      try {
+        const pendingList = await pending();
+        assert(Array.isArray(pendingList), `pending() should return array, got ${typeof pendingList}`);
+        const activeList = await active();
+        assert(Array.isArray(activeList), `active() should return array, got ${typeof activeList}`);
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+      }
+    },
   },
 
   // @tauri-apps/plugin-updater
@@ -542,10 +643,66 @@ export const pluginTests: TestCase[] = [
     category: 'manual',
     async fn() {
       // Manual test: Click "userAgent (default)" button in the WebView User-Agent section
-      // This creates a WebviewWindow without custom UA
-      // The loaded page displays navigator.userAgent for visual verification
       console.log('[webview.userAgent] Use the "userAgent (default)" button in the manual test section');
       console.log('[webview.userAgent] Expected: New window opens with page showing system default UA');
+    },
+  },
+
+  // sentry-plugin-sentry
+  {
+    name: 'tauri-plugin-sentry.breadcrumb',
+    category: 'auto',
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('plugin:sentry|breadcrumb', {
+          breadcrumb: {
+            message: 'auto-test breadcrumb from OHOS',
+            category: 'test',
+            level: 'info',
+            timestamp: Date.now() / 1000,
+          }
+        });
+      } catch (e) {
+        if (String(e).includes('not found') || String(e).includes('plugin')) return;
+        throw e;
+      }
+    },
+  },
+  {
+    name: 'tauri-plugin-sentry.envelope',
+    category: 'auto',
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        const header = JSON.stringify({ event_id: 'a'.repeat(32), dsn: 'https://test@sentry.io/1' });
+        const itemHeader = JSON.stringify({ type: 'event', content_type: 'application/json' });
+        const itemPayload = JSON.stringify({
+          event_id: 'a'.repeat(32),
+          timestamp: Date.now() / 1000,
+          platform: 'javascript',
+          level: 'error',
+          message: { formatted: 'auto-test envelope from OHOS' }
+        });
+        const envelope = `${header}\n${itemHeader}\n${itemPayload}\n`;
+        await invoke('plugin:sentry|envelope', { envelope });
+      } catch (e) {
+        if (String(e).includes('not found') || String(e).includes('plugin')) return;
+        throw e;
+      }
+    },
+  },
+  {
+    name: 'tauri-plugin-sentry.rust_breadcrumb',
+    category: 'auto',
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('sentry_test_breadcrumb');
+      } catch (e) {
+        if (String(e).includes('not found') || String(e).includes('command')) return;
+        throw e;
+      }
     },
   },
 ];

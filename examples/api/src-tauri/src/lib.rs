@@ -13,7 +13,7 @@ use cmd::EventTracker;
 #[cfg(target_env = "ohos")]
 mod ohos_log {
   pub fn init() {
-    // 直接使用 hilog crate 初始化
+    // Initialize hilog crate for OHOS logging
     hilog::Builder::new()
       .set_tag("tauritest")
       .filter_level(log::LevelFilter::Trace)
@@ -46,43 +46,78 @@ pub struct PopupMenu<R: Runtime>(tauri::menu::Menu<R>);
 
 #[cfg_attr(any(mobile, target_env = "ohos"), tauri::mobile_entry_point)]
 pub fn run() {
-  #[cfg(target_env = "ohos")]
-  std::panic::set_hook(Box::new(|info| {
-    let msg = format!("PANIC: {info}\n");
-    let _ = std::fs::write("/data/storage/el2/base/cache/panic.log", &msg);
-    eprintln!("{msg}");
-  }));
-
   run_app(tauri::Builder::default(), |_app| {})
+}
+
+fn init_sentry() -> sentry::ClientInitGuard {
+  sentry::init((
+    option_env!("SENTRY_DSN").unwrap_or(""),
+    sentry::ClientOptions {
+      release: sentry::release_name!(),
+      debug: true, // Intentional for example app — enables verbose sentry logs for debugging
+      ..Default::default()
+    },
+  ))
 }
 
 pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   builder: tauri::Builder<R>,
   setup: F,
 ) {
+  let _sentry_guard = init_sentry();
+
+  // Chain OHOS panic hook with sentry's: write panic.log then call sentry's hook
+  #[cfg(target_env = "ohos")]
+  {
+    let sentry_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+      let msg = format!("PANIC: {info}\n");
+      let _ = std::fs::write("/data/storage/el2/base/cache/panic.log", &msg);
+      eprintln!("{msg}");
+      sentry_hook(info);
+    }));
+  }
+
+  // sentry is auxiliary — init may return None with empty DSN, that's OK
+  let sentry_client = sentry::Hub::current().client();
+
+  // Minidump guard must live for the full app lifetime (captures native crashes)
+  #[cfg(all(not(target_os = "ios"), not(target_env = "ohos")))]
+  let _minidump_guard = sentry_client.as_ref().map(|c| tauri_plugin_sentry::minidump::init(c));
+
+  let mut builder = builder;
+
   #[cfg(not(target_env = "ohos"))]
-  let builder = builder
-    .plugin(tauri_plugin_sample::init())
-    .plugin(tauri_plugin_notification::init())
-    .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_http::init())
-    .plugin(tauri_plugin_clipboard_manager::init())
-    .plugin(tauri_plugin_autostart::init(
-      tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-      None,
-    ));
+  {
+    builder = builder
+      .plugin(tauri_plugin_sample::init())
+      .plugin(tauri_plugin_notification::init())
+      .plugin(tauri_plugin_dialog::init())
+      .plugin(tauri_plugin_http::init())
+      .plugin(tauri_plugin_clipboard_manager::init())
+      .plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+      ));
+    if let Some(ref client) = sentry_client {
+      builder = builder.plugin(tauri_plugin_sentry::init(client));
+    }
+  }
 
   // Register single-instance FIRST for early callback availability
   #[cfg(target_env = "ohos")]
-  let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-    log::info!("[single-instance] callback fired! args={:?}, cwd={:?}", args, cwd);
-    if let Some(window) = app.get_webview_window("main") {
-      let _ = window.set_focus();
-    }
-  }));
+  {
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+      log::info!("[single-instance] callback fired! args={:?}, cwd={:?}", args, cwd);
+      if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_focus();
+      }
+    }));
+  }
 
   #[cfg(target_env = "ohos")]
-  let builder = builder
+  {
+    builder = builder
     .plugin(
       tauri_plugin_log::Builder::default()
         .level(log::LevelFilter::Trace)
@@ -101,11 +136,18 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_clipboard_manager::init())
+    .plugin(tauri_plugin_notification::init())
     // MacosLauncher::LaunchAgent is ignored on OHOS (macOS-specific parameter)
     .plugin(tauri_plugin_autostart::init(
       tauri_plugin_autostart::MacosLauncher::LaunchAgent,
       None,
     ));
+  }
+
+  #[cfg(target_env = "ohos")]
+  if let Some(ref client) = sentry_client {
+    builder = builder.plugin(tauri_plugin_sentry::init(client));
+  }
 
   #[cfg(target_env = "ohos")]
   {
@@ -113,8 +155,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
     log::info!("OHOS log initialized via hilog + tauri_plugin_log(skip_logger)");
   };
 
-  #[allow(unused_mut)]
-  let mut builder = builder
+  builder = builder
     // Test append_invoke_initialization_script
     .append_invoke_initialization_script(r#"
       window.__TAURI_TEST_INIT_SCRIPT_RAN = true;
@@ -431,9 +472,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             data: "something else".to_string(),
           };
 
-          webview_
-            .emit("rust-event", Some(reply))
-            .expect("failed to emit");
+          let _ = webview_
+            .emit("rust-event", Some(reply));
         });
       }
     });
@@ -486,6 +526,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_create_pdf,
       #[cfg(desktop)]
       tray::simulate_tray_click,
+      #[cfg(debug_assertions)]
+      cmd::sentry_test_panic,
+      cmd::sentry_test_breadcrumb,
     ])
     .build(tauri::tauri_build_context!())
     .expect("error while building tauri application");
@@ -517,7 +560,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
         RunEvent::ExitRequested { code, api: _api, .. } => {
           log::info!("[RunEvent] ExitRequested, code={:?}", code);
-          // 测试 prevent_exit 是否生效
+          // Test whether prevent_exit works
           // NOTE: This is test-only code. On OHOS LoopDestroyed path, prevent_exit()
           // cannot actually prevent exit (system is already tearing down), but it gives
           // user code a chance to run cleanup logic before RunEvent::Exit fires.
@@ -578,13 +621,13 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         log::info!("CloseRequested for window: {}", label);
         #[cfg(target_env = "ohos")]
         {
-          // OHOS: 只对特定测试窗口调用 prevent_close() 并保持窗口打开
+          // OHOS: only call prevent_close() for specific test windows and keep them open
           if label.starts_with("test-prevent-close") {
             log::info!("[OHOS] calling prevent_close() for test window: {}", label);
             api.prevent_close();
-            // 不调用 destroy() - 这是测试窗口，应该保持打开
+            // Do not call destroy() - this is a test window, keep it open
           } else {
-            // 其他窗口：阻止默认关闭行为，然后显式销毁窗口
+            // Other windows: prevent default close behavior, then explicitly destroy
             log::info!("[OHOS] closing window: {}", label);
             api.prevent_close();
             _app_handle

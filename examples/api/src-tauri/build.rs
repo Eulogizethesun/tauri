@@ -52,7 +52,10 @@ fn main() {
         "set_deny_new_window",
         "get_last_new_window_url",
         "test_web_page_snapshot",
-        "test_create_pdf"
+        "test_create_pdf",
+        #[cfg(debug_assertions)]
+        "sentry_test_panic",
+        "sentry_test_breadcrumb"
       ])),
   )
   .expect("failed to run tauri-build");
