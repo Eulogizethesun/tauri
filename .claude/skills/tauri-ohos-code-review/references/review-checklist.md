@@ -56,6 +56,7 @@
 - [ ] G2: 错误处理完整（非测试代码中避免 unwrap/expect，**但 `Mutex::lock().unwrap()` 除外** — 仅当持锁线程 panic 时才会 poison，实际极少发生，属标准用法）
 - [ ] G3: 异步回调路径完整（无 callback 丢失/drop）
 - [ ] G4: API 签名跨仓一致（如 wry 与 tauri 之间的参数传递）
+- [ ] G5: `#[serde(default)]` 不应用于语义上必填的字段（如 `id: String`, `name: String`）— 否则反序列化会静默接受空字符串，导致无效数据被存储而无法查找 → 🟡
 
 ## H — 仓库级规范
 
