@@ -4,7 +4,7 @@ import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
 import { appCacheDir } from '@tauri-apps/api/path';
 
 // Helper to test custom protocol using iframe
@@ -490,7 +490,7 @@ export const coreTests: TestCase[] = [
   // Test on_page_load (on_page_begin / on_page_end)
   {
     name: 'on_page_load events',
-    category: 'manual',
+    category: 'auto',
     async fn() {
       let startedUrl: string | null = null;
       let finishedUrl: string | null = null;
@@ -540,7 +540,7 @@ export const coreTests: TestCase[] = [
   // Test on_navigation interceptor
   {
     name: 'on_navigation interceptor',
-    category: 'manual',
+    category: 'auto',
     async fn() {
       let interceptedUrl: string | null = null;
       const unlisten = await listen('navigation-intercepted', (event) => {
@@ -579,7 +579,7 @@ export const coreTests: TestCase[] = [
   // Test on_document_title_changed
   {
     name: 'on_document_title_changed',
-    category: 'manual',
+    category: 'auto',
     async fn() {
       let changedTitle: string | null = null;
       const unlisten = await listen('document-title-changed', (event) => {
@@ -1016,6 +1016,93 @@ export const coreTests: TestCase[] = [
       assert(typeof finishedPayload.url === 'string', 'Expected url in finished event');
       assert(typeof finishedPayload.success === 'boolean', 'Expected success boolean in finished event');
       await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
+
+  // ── Phase 2: reparent safety (manual, expects error) ──
+
+  {
+    name: 'webview.reparent returns error on OHOS (no deadlock)',
+    category: 'manual',
+    async fn() {
+      const webview = getCurrentWebview();
+      const window = getCurrentWindow();
+      try {
+        await webview.reparent(window);
+        assert(false, 'reparent should have thrown an error on OHOS');
+      } catch (e) {
+        const errMsg = String(e);
+        assert(
+          errMsg.includes('not supported') || errMsg.includes('FailedToSendMessage') || errMsg.includes('CannotReparent'),
+          `Expected reparent error (not supported / FailedToSendMessage / CannotReparent), got: ${errMsg}`
+        );
+      }
+    },
+  },
+  {
+    name: 'webview operations work after failed reparent (no cascade deadlock)',
+    category: 'manual',
+    async fn() {
+      const webview = getCurrentWebview();
+      const window = getCurrentWindow();
+      try {
+        await webview.reparent(window);
+      } catch {
+        // expected
+      }
+      const size = await webview.size();
+      assert(size.width > 0 && size.height > 0, `webview.size() should work after failed reparent, got (${size.width},${size.height})`);
+    },
+  },
+
+  // ── Phase 3: multi-webview (manual, creates child webview) ──
+
+  {
+    name: 'webview.create_webview (multi-webview via add_child)',
+    category: 'manual',
+    async fn() {
+      const window = getCurrentWindow();
+      const label = `test-child-${Date.now()}`;
+
+      const child = new Webview(window, label, {
+        url: 'data:text/html,<html><body style="margin:0;padding:50px;font-family:sans-serif;background:lightgray"><h1>Child Webview</h1></body></html>',
+        x: 50,
+        y: 50,
+        width: 300,
+        height: 200,
+      });
+
+      const createdPromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Timeout waiting for webview creation'));
+        }, 5000);
+
+        child.once('tauri://created', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        child.once('tauri://error', (e: unknown) => {
+          clearTimeout(timeout);
+          reject(new Error(`Webview creation failed: ${String(e)}`));
+        });
+      });
+
+      try {
+        await createdPromise;
+      } catch (e) {
+        try { await child.close(); } catch { /* cleanup on creation failure */ }
+        throw e;
+      }
+
+      // Verify child webview bounds were applied
+      const pos = await child.position();
+      const size = await child.size();
+      assert(pos.x > 0 || pos.y > 0, `Expected non-zero position, got (${pos.x},${pos.y})`);
+      assert(size.width > 0 && size.height > 0, `Expected non-zero size, got (${size.width},${size.height})`);
+
+      await new Promise((r) => setTimeout(r, 1000));
+
+      await child.close();
     },
   },
 ];

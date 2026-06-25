@@ -1577,7 +1577,11 @@ pub enum WebviewMessage {
   SetBackgroundColor(Option<Color>),
   ClearAllBrowsingData,
   #[cfg(target_env = "ohos")]
-  CreatePdf(String, Option<tauri_runtime::PdfConfig>, Box<dyn Fn(bool) + Send + 'static>),
+  CreatePdf(
+    String,
+    Option<tauri_runtime::PdfConfig>,
+    Box<dyn Fn(bool) + Send + 'static>,
+  ),
   // Getters
   Url(Sender<Result<String>>),
   Bounds(Sender<Result<tauri_runtime::dpi::Rect>>),
@@ -3875,6 +3879,13 @@ fn handle_user_message<T: UserEvent>(
         return;
       }
 
+      #[cfg(target_env = "ohos")]
+      if let WebviewMessage::Reparent(_new_parent_window_id, tx) = webview_message {
+        log::warn!("Webview reparent is not supported on OHOS (BuilderNode is bound to UIContext)");
+        tx.send(Err(Error::FailedToSendMessage)).unwrap();
+        return;
+      }
+
       let webview_handle = windows.0.borrow().get(&window_id).map(|w| {
         (
           w.inner.clone(),
@@ -3949,7 +3960,11 @@ fn handle_user_message<T: UserEvent>(
             #[allow(unknown_lints, clippy::manual_inspect)]
             windows.0.borrow_mut().get_mut(&window_id).map(|window| {
               if let Some(i) = window.webviews.iter().position(|w| w.id == webview.id) {
-                window.webviews.remove(i);
+                let wrapper = window.webviews.remove(i);
+                #[cfg(target_env = "ohos")]
+                {
+                  wrapper.inner.dispose_child();
+                }
               }
               window
             });
@@ -4021,7 +4036,10 @@ fn handle_user_message<T: UserEvent>(
             }
           }
           WebviewMessage::SetBackgroundColor(color) => {
-            log::debug!("[tauri-runtime-wry] SetBackgroundColor message received: {:?}", color);
+            log::debug!(
+              "[tauri-runtime-wry] SetBackgroundColor message received: {:?}",
+              color
+            );
             if let Err(e) =
               webview.set_background_color(color.map(Into::into).unwrap_or((255, 255, 255, 255)))
             {
@@ -4353,21 +4371,26 @@ fn handle_event_loop<T: UserEvent>(
       // destroyed by ArkTS destroyWindow(). In that case, window_id() is unavailable,
       // so we skip this entry — the TaoWindowEvent::Destroyed handler (if fired)
       // will process the lifecycle via on_window_close (idempotent).
-      let matching_id = windows
-        .0
-        .borrow()
-        .iter()
-        .find_map(|(id, wrapper)| {
-          wrapper
-            .inner
-            .as_ref()
-            .and_then(|w| w.window_id())
-            .and_then(|wid| if wid == ohos_win_id as i64 { Some(*id) } else { None })
-        });
+      let matching_id = windows.0.borrow().iter().find_map(|(id, wrapper)| {
+        wrapper
+          .inner
+          .as_ref()
+          .and_then(|w| w.window_id())
+          .and_then(|wid| {
+            if wid == ohos_win_id as i64 {
+              Some(*id)
+            } else {
+              None
+            }
+          })
+      });
       if let Some(window_id) = matching_id {
         on_close_requested(callback, window_id, windows.clone(), exit_state.clone());
       } else {
-        log::debug!("[wry] OHOS pending close: no matching Tauri window for OHOS window ID {}", ohos_win_id);
+        log::debug!(
+          "[wry] OHOS pending close: no matching Tauri window for OHOS window ID {}",
+          ohos_win_id
+        );
       }
     }
   }
@@ -4525,13 +4548,17 @@ fn handle_event_loop<T: UserEvent>(
           TaoWindowEvent::CloseRequested => {
             if on_close_requested(callback, window_id, windows, exit_state) {
               #[cfg(not(target_env = "ohos"))]
-              { *control_flow = ControlFlow::Exit; }
+              {
+                *control_flow = ControlFlow::Exit;
+              }
             }
           }
           TaoWindowEvent::Destroyed => {
             if on_window_close(callback, window_id, windows, exit_state) {
               #[cfg(not(target_env = "ohos"))]
-              { *control_flow = ControlFlow::Exit; }
+              {
+                *control_flow = ControlFlow::Exit;
+              }
             }
           }
           TaoWindowEvent::Resized(size) => {
@@ -4576,20 +4603,26 @@ fn handle_event_loop<T: UserEvent>(
 
         if !should_prevent {
           #[cfg(not(target_env = "ohos"))]
-          { *control_flow = ControlFlow::Exit; }
+          {
+            *control_flow = ControlFlow::Exit;
+          }
         }
       }
       Message::Window(id, WindowMessage::Close) => {
         if on_close_requested(callback, id, windows, exit_state) {
           #[cfg(not(target_env = "ohos"))]
-          { *control_flow = ControlFlow::Exit; }
+          {
+            *control_flow = ControlFlow::Exit;
+          }
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
         // Call on_window_close directly, skip CloseRequested to avoid recursion
         if on_window_close(callback, id, windows, exit_state) {
           #[cfg(not(target_env = "ohos"))]
-          { *control_flow = ControlFlow::Exit; }
+          {
+            *control_flow = ControlFlow::Exit;
+          }
         }
       }
       Message::UserEvent(t) => callback(RunEvent::UserEvent(t)),
@@ -4604,7 +4637,12 @@ fn handle_event_loop<T: UserEvent>(
         );
       }
     },
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+    #[cfg(any(
+      target_os = "macos",
+      target_os = "ios",
+      target_os = "android",
+      target_env = "ohos"
+    ))]
     Event::Opened { urls } => {
       callback(RunEvent::Opened { urls });
     }
@@ -4693,7 +4731,10 @@ fn on_window_close<'a, T: UserEvent>(
 
         let recv = rx.try_recv();
         let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
-        log::info!("[wry] ExitRequested (all windows closed) should_prevent: {}", should_prevent);
+        log::info!(
+          "[wry] ExitRequested (all windows closed) should_prevent: {}",
+          should_prevent
+        );
 
         // Mark ExitRequested as sent
         exit_state.0.store(true, Ordering::SeqCst);
@@ -4914,10 +4955,15 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   let focused_webview = Arc::new(Mutex::new(None));
 
   if let Some(webview) = webview {
+    // On OHOS, the initial webview always uses WindowContent (not WindowChild)
+    // because ArkUI Web components fill their parent container by default ("100%").
+    // Using WindowChild would set explicit pixel dimensions via WebViewStyle,
+    // causing layout differences on high-DPI devices. Child webviews created via
+    // add_child still use WindowChild with explicit bounds.
     webviews.push(create_webview(
-      #[cfg(feature = "unstable")]
+      #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
       WebviewKind::WindowChild,
-      #[cfg(not(feature = "unstable"))]
+      #[cfg(any(not(feature = "unstable"), target_env = "ohos"))]
       WebviewKind::WindowContent,
       &window,
       Arc::new(Mutex::new(window_id)),

@@ -6,3 +6,7 @@
 
 # Windows batch files must use CRLF
 *.bat text eol=crlf
+
+# Files with CRLF in upstream — keep as-is to avoid large diffs
+crates/tauri-runtime-wry/src/lib.rs -text
+crates/tauri/src/app.rs -text

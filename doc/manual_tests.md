@@ -300,7 +300,25 @@
 
 ---
 
-## 十六、用例统计
+## 十六、Unstable Feature（窗口与 Webview 解耦）手动用例
+
+> **背景**: Phase 1 补齐 wry OHOS `set_bounds`/`set_visible`/`bounds` 实现 + ProxyJsHelper pending path 修复；Phase 2 添加 Reparent OHOS 安全返回防死锁；Phase 3 移除 `add_child` 的 OHOS 排除。
+>
+> **测试入口**: TestRunner.svelte → "Unstable Feature (窗口与 Webview 解耦) Manual Tests" 区域
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | unstable | phase2/reparent | webview.reparent returns error — 防死锁验证 | **T0** | 应用已启动，进入 TestRunner 页面 | 1. 找到 `reparent returns error (no deadlock)` 2. 点击运行 3. 观察测试是否在 5 秒内完成 | ① 测试状态 PASS ② 查看日志 `webview.reparent(window)` 返回 Error ③ 不卡住（无 timeout） | 验证 Phase 2：`#[cfg(target_env = "ohos")]` Reparent handler 调用 `tx.send(Err(...))` 解除 `rx.recv()` 阻塞 |
+| core | unstable | phase2/reparent | webview operations after failed reparent — 无级联死锁 | **T1** | 应用已启动 | 1. 找到 `reparent cascade check` 2. 点击运行 | ① 测试状态 PASS ② 查看日志 `webview.size()` 正常返回非零值 | 验证 reparent 失败后 `current_window_id` Mutex 锁被释放 |
+| core | unstable | phase3/multi-webview | webview.create_webview — multi-webview 创建验证 | **T0** | 应用已启动；**Cargo.toml 需启用 `unstable` feature** | 1. 找到 `create_webview (multi-webview)` 2. 点击运行 3. 观察是否出现 300x200 子 webview 4. 等待 1 秒后子 webview 自动关闭 | ① 测试状态 PASS ② 子 webview 在 (50,50) 位置出现，显示 "Child Webview" ③ 1 秒后子 webview 关闭 | **需要 `unstable` feature**；验证 `add_child` + `dispose_child` 完整链路 |
+
+| 模块 | T0 | T1 | 合计 |
+|------|-----|-----|------|
+| **合计** | **2** | **1** | **3** |
+
+---
+
+## 十七、用例统计
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -321,5 +339,6 @@
 | Predefined Multi-Window（预定义操作多窗口支持） | 6 | 8 | **14** |
 | Notification（通知） | 1 | 2 | **3** |
 | Sentry（错误追踪） | 1 | 1 | **2** |
-| **合计** | **49** | **52** | **101** |
+| Unstable Feature（窗口与 Webview 解耦） | 2 | 1 | **3** |
+| **合计** | **51** | **53** | **104** |
 

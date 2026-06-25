@@ -11,7 +11,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window';
-  import { getCurrentWebview } from '@tauri-apps/api/webview';
+  import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
   import { appCacheDir, join } from '@tauri-apps/api/path';
   import { flushConsoleLog, clearConsoleLog } from '../lib/console-capture';
 
@@ -1368,6 +1368,69 @@ Expected behavior:
     });
   }
 
+  // ─── Unstable Feature Manual Tests ───
+  async function manualReparentError() {
+    await wrapManual('webview.reparent', async () => {
+      const webview = getCurrentWebview();
+      const window = getCurrentWindow();
+      try {
+        await webview.reparent(window);
+        manualResult = 'reparent() returned success — UNEXPECTED ❌ (should error on OHOS)';
+      } catch (e) {
+        manualResult = `reparent() returned error (expected): ${e}\nNo deadlock: PASS ✅`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualReparentCascade() {
+    await wrapManual('reparent cascade check', async () => {
+      const webview = getCurrentWebview();
+      const window = getCurrentWindow();
+      try { await webview.reparent(window); } catch { /* expected */ }
+      const size = await webview.size();
+      const ok = size.width > 0 && size.height > 0;
+      manualResult = `After failed reparent, webview.size() = (${size.width},${size.height})
+Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualCreateChildWebview() {
+    await wrapManual('create_webview (multi-webview)', async () => {
+      const window = getCurrentWindow();
+      const label = `test-child-${Date.now()}`;
+      manualResult = 'Creating child webview (300×200 at 50,50)...';
+      onMessage(manualResult);
+
+      const child = new Webview(window, label, {
+        url: 'data:text/html,<html><body style="margin:0;padding:50px;font-family:sans-serif;background:lightgray"><h1>Child Webview</h1></body></html>',
+        x: 50,
+        y: 50,
+        width: 300,
+        height: 200,
+      });
+
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+        child.once('tauri://created', () => { clearTimeout(timeout); resolve(); });
+        child.once('tauri://error', (e) => { clearTimeout(timeout); reject(new Error(String(e))); });
+      });
+
+      manualResult = 'Child webview created ✅. Waiting 1s before close...';
+      onMessage(manualResult);
+      await new Promise((r) => setTimeout(r, 1000));
+
+      try {
+        await child.close();
+        manualResult = 'Child webview closed. Check screen: child should be removed.';
+      } catch (e) {
+        manualResult = `Child webview close FAILED: ${e}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
 </script>
 
 <div class="flex flex-col gap-2">
@@ -1579,6 +1642,14 @@ Expected behavior:
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualSentryJsError}>JS Error Capture</button>
         <button class="btn" onclick={manualSentryRustPanic}>Rust Panic (may crash)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Unstable Feature (窗口与 Webview 解耦) Manual Tests</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualReparentError}>reparent returns error (no deadlock)</button>
+        <button class="btn" onclick={manualReparentCascade}>reparent cascade check</button>
+        <button class="btn" onclick={manualCreateChildWebview}>create_webview (multi-webview)</button>
       </div>
     </div>
     {#if manualResult}
