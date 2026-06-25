@@ -946,3 +946,48 @@ pub fn sentry_test_breadcrumb() {
   });
   log::info!("[sentry] breadcrumb added from Rust");
 }
+
+// ─── Download Test Mode ───
+// Controls the behavior of the on_download handler for manual testing scenarios.
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub enum DownloadTestMode {
+  Default,
+  CustomDir,
+  ConfirmAllow,
+  BlockFileType,
+  ProgressTracking,
+  AuditLog,
+  AutoRename,
+  CancelAll,
+}
+
+impl Default for DownloadTestMode {
+  fn default() -> Self {
+    DownloadTestMode::Default
+  }
+}
+
+pub struct DownloadTestState {
+  pub mode: Mutex<DownloadTestMode>,
+}
+
+impl DownloadTestState {
+  pub fn new() -> Self {
+    Self {
+      mode: Mutex::new(DownloadTestMode::Default),
+    }
+  }
+}
+
+#[command]
+pub fn set_download_test_mode<R: Runtime>(
+  app: tauri::AppHandle<R>,
+  mode: DownloadTestMode,
+) -> tauri::Result<()> {
+  let state = app.state::<DownloadTestState>();
+  let mut current = state.mode.lock().unwrap();
+  log::info!("[DownloadTest] Mode set to: {:?}", mode);
+  *current = mode;
+  Ok(())
+}

@@ -53,6 +53,7 @@ fn main() {
         "get_last_new_window_url",
         "test_web_page_snapshot",
         "test_create_pdf",
+        "set_download_test_mode",
         #[cfg(debug_assertions)]
         "sentry_test_panic",
         "sentry_test_breadcrumb"

@@ -9,6 +9,7 @@ mod menu_plugin;
 mod tray;
 
 use cmd::EventTracker;
+use cmd::{DownloadTestMode, DownloadTestState};
 
 #[cfg(target_env = "ohos")]
 mod ohos_log {
@@ -238,6 +239,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       // Manage event tracker for testing
       app.manage(EventTracker::default());
       app.manage(cmd::NewWindowDenyState::default());
+      app.manage(DownloadTestState::new());
 
       #[cfg(all(desktop, not(test)))]
       {
@@ -285,24 +287,126 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
           // Add a custom header to test
           response.headers_mut().insert("X-Tauri-Test", tauri::http::HeaderValue::from_static("intercepted"));
         })
-        // 4. Test download intercept
+        // 4. Test download intercept (mode-aware for manual test scenarios)
         .on_download(move |_webview, event| {
-          log::info!("on_download event received");
+          log::info!("[DownloadTest] on_download event received");
+          let state = app_handle_download.state::<DownloadTestState>();
+          let mode = state.mode.lock().unwrap().clone();
+          log::info!("[DownloadTest] Current mode: {:?}", mode);
+
           match event {
             tauri::webview::DownloadEvent::Requested { url, destination } => {
-              log::info!("Download requested: {}", url);
-              log::info!("Default destination: {:?}", destination);
-              let _ = app_handle_download.emit("download-requested", url.to_string());
+              log::info!("[DownloadTest] Requested: url={}, dest={:?}", url, destination);
+
+              match mode {
+                DownloadTestMode::Default => {
+                  let _ = app_handle_download.emit("download-requested", url.to_string());
+                }
+                DownloadTestMode::CustomDir => {
+                  let custom_dir = std::path::PathBuf::from("/data/storage/el2/base/cache/downloads");
+                  let url_str = url.to_string();
+                  let filename = url_str.rsplit('/').next().unwrap_or("download.bin");
+                  *destination = custom_dir.join(filename);
+                  log::info!("[DownloadTest] CustomDir: redirected to {:?}", destination);
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "destination": destination.to_string_lossy(),
+                    "mode": "CustomDir"
+                  }));
+                }
+                DownloadTestMode::ConfirmAllow => {
+                  log::info!("[DownloadTest] ConfirmAllow: simulating user confirmed download");
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "destination": destination.to_string_lossy(),
+                    "mode": "ConfirmAllow",
+                    "confirmed": true
+                  }));
+                }
+                DownloadTestMode::BlockFileType => {
+                  let dangerous_exts = ["exe", "bat", "cmd", "sh", "apk"];
+                  let url_str = url.to_string();
+                  let ext = url_str.rsplit('.').next().unwrap_or("").to_lowercase();
+                  let blocked = dangerous_exts.contains(&ext.as_str());
+                  log::info!("[DownloadTest] BlockFileType: ext={}, blocked={}", ext, blocked);
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "ext": ext,
+                    "blocked": blocked,
+                    "mode": "BlockFileType"
+                  }));
+                  if blocked {
+                    return false;
+                  }
+                }
+                DownloadTestMode::ProgressTracking => {
+                  log::info!("[DownloadTest] ProgressTracking: download started");
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "destination": destination.to_string_lossy(),
+                    "mode": "ProgressTracking",
+                    "startedAt": chrono::Utc::now().to_rfc3339()
+                  }));
+                }
+                DownloadTestMode::AuditLog => {
+                  let audit_entry = serde_json::json!({
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "url": url.to_string(),
+                    "destination": destination.to_string_lossy(),
+                    "mode": "AuditLog",
+                    "action": "download_requested"
+                  });
+                  log::info!("[DownloadTest] AUDIT LOG: {}", audit_entry);
+                  let _ = app_handle_download.emit("download-requested", audit_entry);
+                }
+                DownloadTestMode::AutoRename => {
+                  if destination.exists() {
+                    let stem = destination.file_stem().unwrap_or_default().to_string_lossy();
+                    let ext = destination.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                    let parent = destination.parent().unwrap_or(std::path::Path::new("."));
+                    let mut counter = 1;
+                    loop {
+                      let new_name = format!("{} ({}){}", stem, counter, ext);
+                      let new_path = parent.join(&new_name);
+                      if !new_path.exists() {
+                        log::info!("[DownloadTest] AutoRename: {:?} → {:?}", destination, new_path);
+                        *destination = new_path;
+                        break;
+                      }
+                      counter += 1;
+                    }
+                  }
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "destination": destination.to_string_lossy(),
+                    "mode": "AutoRename"
+                  }));
+                }
+                DownloadTestMode::CancelAll => {
+                  log::info!("[DownloadTest] CancelAll: cancelling download for {}", url);
+                  let _ = app_handle_download.emit("download-requested", serde_json::json!({
+                    "url": url.to_string(),
+                    "mode": "CancelAll",
+                    "cancelled": true
+                  }));
+                  return false;
+                }
+              }
             }
             tauri::webview::DownloadEvent::Finished { url, path, success } => {
-              log::info!("Download finished: {}, success: {}, path: {:?}", url, success, path);
-              let _ = app_handle_download.emit("download-finished", (url.to_string(), success));
+              log::info!("[DownloadTest] Finished: url={}, success={}, path={:?}", url, success, path);
+              let _ = app_handle_download.emit("download-finished", serde_json::json!({
+                "url": url.to_string(),
+                "path": path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "success": success,
+                "mode": format!("{:?}", mode)
+              }));
             }
             _ => {
-              log::info!("Other download event");
+              log::info!("[DownloadTest] Other download event");
             }
           }
-          true // allow download
+          true
         });
 
       #[cfg(all(desktop, not(test)))]
@@ -524,6 +628,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_ohos_version_info,
       cmd::test_web_page_snapshot,
       cmd::test_create_pdf,
+      cmd::set_download_test_mode,
       #[cfg(desktop)]
       tray::simulate_tray_click,
       #[cfg(debug_assertions)]

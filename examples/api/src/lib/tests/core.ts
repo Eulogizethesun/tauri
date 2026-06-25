@@ -897,4 +897,125 @@ export const coreTests: TestCase[] = [
       assert(result.includes('.pdf'), `Expected path in result, got: ${result}`);
     },
   },
+
+  // ─── Download Intercept Tests (OHOS) ───
+  {
+    name: 'on_download: Requested event fires',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      await invoke('set_download_test_mode', { mode: 'Default' });
+      let payload: any = null;
+      const unlisten = await listen<any>('download-requested', (event) => { payload = event.payload; });
+      const blob = new Blob(['test-data'], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'test.bin';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const start = Date.now();
+      while (!payload && Date.now() - start < 10000) { await new Promise((r) => setTimeout(r, 50)); }
+      unlisten();
+      assert(payload !== null, 'Expected download-requested event');
+      await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
+  {
+    name: 'on_download: custom directory redirects path',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      await invoke('set_download_test_mode', { mode: 'CustomDir' });
+      let payload: any = null;
+      const unlisten = await listen<any>('download-requested', (event) => { payload = event.payload; });
+      const blob = new Blob(['custom-dir-test'], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'custom-dir-test.bin';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const start = Date.now();
+      while (!payload && Date.now() - start < 10000) { await new Promise((r) => setTimeout(r, 50)); }
+      unlisten();
+      assert(payload !== null, 'Expected download-requested event');
+      assert(payload.mode === 'CustomDir', `Expected mode CustomDir, got ${payload.mode}`);
+      assert(payload.destination.includes('/downloads/'), `Expected destination in /downloads/, got ${payload.destination}`);
+      await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
+  {
+    name: 'on_download: block dangerous file types',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      await invoke('set_download_test_mode', { mode: 'BlockFileType' });
+      let payload: any = null;
+      const unlisten = await listen<any>('download-requested', (event) => { payload = event.payload; });
+      const blob = new Blob(['MZ'], { type: 'application/x-msdownload' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'malware.exe';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const start = Date.now();
+      while (!payload && Date.now() - start < 10000) { await new Promise((r) => setTimeout(r, 50)); }
+      unlisten();
+      assert(payload !== null, 'Expected download-requested event');
+      assert(payload.mode === 'BlockFileType', `Expected mode BlockFileType, got ${payload.mode}`);
+      await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
+  {
+    name: 'on_download: audit log contains metadata',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      await invoke('set_download_test_mode', { mode: 'AuditLog' });
+      let payload: any = null;
+      const unlisten = await listen<any>('download-requested', (event) => { payload = event.payload; });
+      const blob = new Blob(['audit-test'], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'audit-test.bin';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const start = Date.now();
+      while (!payload && Date.now() - start < 10000) { await new Promise((r) => setTimeout(r, 50)); }
+      unlisten();
+      assert(payload !== null, 'Expected download-requested event');
+      assert(payload.mode === 'AuditLog', `Expected mode AuditLog, got ${payload.mode}`);
+      assert(typeof payload.timestamp === 'string', 'Expected timestamp in audit log');
+      assert(payload.action === 'download_requested', `Expected action=download_requested, got ${payload.action}`);
+      await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
+  {
+    name: 'on_download: Finished event fires on successful download',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      await invoke('set_download_test_mode', { mode: 'Default' });
+      let requestedPayload: any = null;
+      let finishedPayload: any = null;
+      const unlistenRequested = await listen<any>('download-requested', (event) => { requestedPayload = event.payload; });
+      const unlistenFinished = await listen<any>('download-finished', (event) => { finishedPayload = event.payload; });
+      const blob = new Blob(['finish-test-data'], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'finish-test.bin';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const start = Date.now();
+      while ((!requestedPayload || !finishedPayload) && Date.now() - start < 15000) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      unlistenRequested();
+      unlistenFinished();
+      assert(requestedPayload !== null, 'Expected download-requested event');
+      assert(finishedPayload !== null, 'Expected download-finished event');
+      assert(typeof finishedPayload.url === 'string', 'Expected url in finished event');
+      assert(typeof finishedPayload.success === 'boolean', 'Expected success boolean in finished event');
+      await invoke('set_download_test_mode', { mode: 'Default' });
+    },
+  },
 ];

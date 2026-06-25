@@ -41,6 +41,7 @@
     "allow-get-last-new-window-url",
     "allow-test-web-page-snapshot",
     "allow-test-create-pdf",
+    "allow-set-download-test-mode",
     "allow-create-counter",
     "allow-increment-counter",
     "allow-get-counter-value",

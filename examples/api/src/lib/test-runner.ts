@@ -7,6 +7,7 @@ export interface TestCase {
   name: string;
   category: TestCategory;
   fn: () => Promise<void>;
+  timeout?: number;
 }
 
 export interface TestResult {
@@ -87,7 +88,7 @@ export async function runTests(
     let result: TestResult;
 
     try {
-      await withTimeout(test.fn(), TEST_TIMEOUT_MS);
+      await withTimeout(test.fn(), test.timeout || TEST_TIMEOUT_MS);
       result = {
         name: test.name,
         category: test.category,
