@@ -71,6 +71,22 @@ gh pr list --repo Eulogizethesun/<repo> --state open --json number,title,author,
 
 将所有结果汇总为扁平列表，每条记录包含 `repo` 字段标记来源仓库。
 
+#### ⚠️ Guard: 禁止使用记忆/快照中的 PR 编号列表
+
+**每次 Step 1 必须重新调用 `gh pr list` 获取全量 open PR，不得用上一轮的记忆或硬编码编号列表代替。** 这是不可绕过的强约束。
+
+历史教训：曾因贪图省 API 调用，把 Step 1 的动态扫描替换成硬编码的 PR 编号快照（如 `for entry in "tauri 56" "tauri 55" "tauri 54" ...; do`）。该快照是某轮的静态副本，之后从不更新 → **新开的 PR（实际发生过 #58/#13/#16/#37/#59 等）永远不会进入扫描，长期无人 review**，直到用户手动指出才发现。
+
+正确做法（每轮 Step 1 必须执行，不可用记忆代替）：
+
+```bash
+for repo in tauri tao wry muda tray-icon openharmony-ability plugins-workspace sentry-tauri window-vibrancy; do
+  gh pr list --repo "Eulogizethesun/$repo" --state open --json number --jq '.[].number'
+done
+```
+
+API 成本可接受且**不是优化目标**：9 次 `gh pr list` + 每个开放 PR 2 次查询（commits + reviews）。漏检新 PR 的代价（用户发现、信任损失）远高于多调几次 API。若为减少轮次而想"复用上轮列表"——禁止，必须重新扫描。详见 `references/pr-discovery.md`「反模式」一节。
+
 #### 输出
 
 ```

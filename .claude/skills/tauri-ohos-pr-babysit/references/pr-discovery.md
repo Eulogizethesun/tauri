@@ -1,5 +1,18 @@
 # PR 发现与分组参考
 
+## ⚠️ 反模式：硬编码 PR 编号列表
+
+**Step 1 每轮必须重新执行 `gh pr list` 全量扫描，禁止用记忆/快照/上轮列表代替。** 对应 SKILL.md Step 1 的 Guard。
+
+```bash
+for repo in tauri tao wry muda tray-icon openharmony-ability plugins-workspace sentry-tauri window-vibrancy; do
+  prs=$(gh pr list --repo "Eulogizethesun/$repo" --state open --json number --jq '.[].number')
+  for pr in $prs; do
+    # 对每个 PR 查 commits + reviews 做过滤（Step 2）
+  done
+done
+```
+
 ## gh pr list 查询
 
 ### 基本查询
