@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "ohos_permissions_camera_reason",
+      "value": "This app needs camera access to take photos and record videos."
+    },
+    {
+      "name": "ohos_permissions_microphone_reason",
+      "value": "This app needs microphone access to record audio."
+    }
+  ]
+}

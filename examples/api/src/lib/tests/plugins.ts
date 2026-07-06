@@ -924,4 +924,163 @@ export const pluginTests: TestCase[] = [
       }
     },
   },
+
+  // @tauri-apps/plugin-ohos-permissions (auto)
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkCamera',
+    category: 'auto',
+    async fn() {
+      const { checkCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkCameraPermission();
+      assert(typeof result === 'boolean', `expected boolean, got ${typeof result}: ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkMicrophone',
+    category: 'auto',
+    async fn() {
+      const { checkMicrophonePermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkMicrophonePermission();
+      assert(typeof result === 'boolean', `expected boolean, got ${typeof result}: ${result}`);
+    },
+  },
+
+  // @tauri-apps/plugin-ohos-permissions (stub permissions — predictable return values)
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkAccessibility (stub→false)',
+    category: 'auto',
+    async fn() {
+      const { checkAccessibilityPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkAccessibilityPermission();
+      assert(result === false, `expected false (OHOS stub), got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestAccessibility (stub→noop)',
+    category: 'auto',
+    async fn() {
+      const { requestAccessibilityPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestAccessibilityPermission(); // should not throw
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkFullDiskAccess (stub→true)',
+    category: 'auto',
+    async fn() {
+      const { checkFullDiskAccessPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkFullDiskAccessPermission();
+      assert(result === true, `expected true (OHOS stub), got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestFullDiskAccess (stub→noop)',
+    category: 'auto',
+    async fn() {
+      const { requestFullDiskAccessPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestFullDiskAccessPermission(); // should not throw
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkScreenRecording (stub→false)',
+    category: 'auto',
+    async fn() {
+      const { checkScreenRecordingPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkScreenRecordingPermission();
+      assert(result === false, `expected false (system_basic stub), got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestScreenRecording (stub→noop)',
+    category: 'auto',
+    async fn() {
+      const { requestScreenRecordingPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestScreenRecordingPermission(); // should not throw
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.checkInputMonitoring (stub→false)',
+    category: 'auto',
+    async fn() {
+      const { checkInputMonitoringPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const result = await checkInputMonitoringPermission();
+      assert(result === false, `expected false (system_basic stub), got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestInputMonitoring (stub→noop)',
+    category: 'auto',
+    async fn() {
+      const { requestInputMonitoringPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestInputMonitoringPermission(); // should not throw
+    },
+  },
+
+  // @tauri-apps/plugin-ohos-permissions (manual: triggers system dialog requiring user interaction)
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestCamera',
+    category: 'manual',
+    async fn() {
+      const { requestCameraPermission, checkCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestCameraPermission();
+      const result = await checkCameraPermission();
+      assert(typeof result === 'boolean', `expected boolean after request, got ${typeof result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.requestMicrophone',
+    category: 'manual',
+    async fn() {
+      const { requestMicrophonePermission, checkMicrophonePermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      await requestMicrophonePermission();
+      const result = await checkMicrophonePermission();
+      assert(typeof result === 'boolean', `expected boolean after request, got ${typeof result}`);
+    },
+  },
+
+  // @tauri-apps/plugin-ohos-permissions (manual: verify full check→request→check flow)
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.camera full flow',
+    category: 'manual',
+    async fn() {
+      const { checkCameraPermission, requestCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      // Step 1: Check current state
+      const before = await checkCameraPermission();
+      console.log(`[camera full flow] before request: ${before}`);
+      // Step 2: Request — system dialog appears, user should grant
+      await requestCameraPermission();
+      // Step 3: Verify — should be true after user grants
+      const after = await checkCameraPermission();
+      console.log(`[camera full flow] after request: ${after}`);
+      assert(after === true, `expected true after granting, got ${after}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.microphone full flow',
+    category: 'manual',
+    async fn() {
+      const { checkMicrophonePermission, requestMicrophonePermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      // Step 1: Check current state
+      const before = await checkMicrophonePermission();
+      console.log(`[microphone full flow] before request: ${before}`);
+      // Step 2: Request — system dialog appears, user should grant
+      await requestMicrophonePermission();
+      // Step 3: Verify — should be true after user grants
+      const after = await checkMicrophonePermission();
+      console.log(`[microphone full flow] after request: ${after}`);
+      assert(after === true, `expected true after granting, got ${after}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-ohos-permissions.deny then re-request',
+    category: 'manual',
+    async fn() {
+      const { checkCameraPermission, requestCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      // Request — user should DENY the system dialog
+      await requestCameraPermission();
+      const afterDeny = await checkCameraPermission();
+      assert(afterDeny === false, `expected false after denying, got ${afterDeny}`);
+      // Note: On OHOS, requestPermissionsFromUser won't show dialog again after denial.
+      // User must go to Settings manually. This matches macOS behavior conceptually.
+    },
+  },
 ];
