@@ -65,6 +65,7 @@ pub fn known_plugins() -> HashMap<&'static str, PluginMetadata> {
     "fs",
     "http",
     "notification",
+    "ohos-permissions",
     "os",
     "process",
     "shell",

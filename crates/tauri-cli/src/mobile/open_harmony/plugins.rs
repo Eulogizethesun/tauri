@@ -138,6 +138,11 @@ const BUILTIN_PLUGINS: &[(&str, &str, &str)] = &[
     "@tauri/plugin-global-shortcut",
     "GlobalShortcutPlugin",
   ),
+  (
+    "ohos-permissions",
+    "@tauri/plugin-ohos-permissions",
+    "OhosPermissionsPlugin",
+  ),
 ];
 
 pub fn detect_all_plugins(project_dir: &Path) -> Result<Vec<DetectedPlugin>> {

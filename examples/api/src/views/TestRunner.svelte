@@ -897,6 +897,57 @@ Expected behavior:
     });
   }
 
+  // ─── OHOS Permissions Manual Tests ───
+  let ohosPermResult = $state('');
+
+  async function manualPermRequestCamera() {
+    await wrapManual('perm.requestCamera', async () => {
+      const { checkCameraPermission, requestCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const before = await checkCameraPermission();
+      ohosPermResult = `Camera before: ${before}. Requesting...`;
+      onMessage(ohosPermResult);
+      await requestCameraPermission();
+      const after = await checkCameraPermission();
+      ohosPermResult = `Camera: ${before} → ${after}\n${after === true ? '✅ Granted' : '❌ Denied'}`;
+      onMessage(ohosPermResult);
+    });
+  }
+
+  async function manualPermRequestMicrophone() {
+    await wrapManual('perm.requestMicrophone', async () => {
+      const { checkMicrophonePermission, requestMicrophonePermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const before = await checkMicrophonePermission();
+      ohosPermResult = `Microphone before: ${before}. Requesting...`;
+      onMessage(ohosPermResult);
+      await requestMicrophonePermission();
+      const after = await checkMicrophonePermission();
+      ohosPermResult = `Microphone: ${before} → ${after}\n${after === true ? '✅ Granted' : '❌ Denied'}`;
+      onMessage(ohosPermResult);
+    });
+  }
+
+  async function manualPermCheckAll() {
+    await wrapManual('perm.checkAll', async () => {
+      const { checkCameraPermission, checkMicrophonePermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      const cam = await checkCameraPermission();
+      const mic = await checkMicrophonePermission();
+      ohosPermResult = `Camera: ${cam}\nMicrophone: ${mic}`;
+      onMessage(ohosPermResult);
+    });
+  }
+
+  async function manualPermDenyThenRerequest() {
+    await wrapManual('perm.denyThenRerequest', async () => {
+      const { checkCameraPermission, requestCameraPermission } = await import('@tauri-apps/plugin-ohos-permissions');
+      ohosPermResult = 'Step 1: Requesting camera permission → DENY the system dialog';
+      onMessage(ohosPermResult);
+      await requestCameraPermission();
+      const afterDeny = await checkCameraPermission();
+      ohosPermResult = `After deny: ${afterDeny}\n${afterDeny === false ? '✅ Correctly denied' : '⚠️ Unexpected: ' + afterDeny}\n\nNote: On OHOS, after denial the system dialog won't reappear.\nUser must go to Settings → App permissions manually.`;
+      onMessage(ohosPermResult);
+    });
+  }
+
   // ─── Create PDF Manual Test (OHOS only) ───
   async function manualCreatePdf() {
     await wrapManual('createPdf', async () => {
@@ -1845,6 +1896,18 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <div class="mt-2 max-h-60 overflow-auto border-1 border-solid border-code rd-1">
           <canvas bind:this={canvasEl} width={snapshotWidth} height={snapshotHeight}></canvas>
         </div>
+      {/if}
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">OHOS Permissions Manual Tests</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualPermCheckAll}>Check All Permissions</button>
+        <button class="btn" onclick={manualPermRequestCamera}>Request Camera (system dialog)</button>
+        <button class="btn" onclick={manualPermRequestMicrophone}>Request Microphone (system dialog)</button>
+        <button class="btn" onclick={manualPermDenyThenRerequest}>Deny → Re-request (settings redirect)</button>
+      </div>
+      {#if ohosPermResult}
+        <div class="mt-1 text-xs font-mono text-blue-600 whitespace-pre-line">{ohosPermResult}</div>
       {/if}
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">

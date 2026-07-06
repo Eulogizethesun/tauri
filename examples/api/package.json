@@ -22,7 +22,8 @@
     "@tauri-apps/plugin-os": "file:../../../plugins-workspace/plugins/os",
     "@tauri-apps/plugin-process": "file:../../../plugins-workspace/plugins/process",
     "@tauri-apps/plugin-shell": "file:../../../plugins-workspace/plugins/shell",
-    "@tauri-apps/plugin-updater": "file:../../../plugins-workspace/plugins/updater"
+    "@tauri-apps/plugin-updater": "file:../../../plugins-workspace/plugins/updater",
+    "@tauri-apps/plugin-ohos-permissions": "file:../../../plugins-workspace/plugins/ohos-permissions"
   },
   "devDependencies": {
     "@iconify-json/codicon": "^1.2.49",
