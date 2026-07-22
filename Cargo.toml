@@ -80,4 +80,4 @@ muda = { path = "../muda" }
 tray-icon = { path = "../tray-icon" }
 openharmony-ability = { path = "../openharmony-ability/crates/ability" }
 openharmony-ability-derive = { path = "../openharmony-ability/crates/derive" }
-window-vibrancy = { path = "../window-vibrancy" }
+#window-vibrancy = { path = "../window-vibrancy" }

@@ -29,12 +29,18 @@ importers:
       '@tauri-apps/plugin-clipboard-manager':
         specifier: file:../../../plugins-workspace/plugins/clipboard-manager
         version: file:../plugins-workspace/plugins/clipboard-manager
+      '@tauri-apps/plugin-deep-link':
+        specifier: file:../../../plugins-workspace/plugins/deep-link
+        version: file:../plugins-workspace/plugins/deep-link
       '@tauri-apps/plugin-dialog':
         specifier: file:../../../plugins-workspace/plugins/dialog
         version: file:../plugins-workspace/plugins/dialog
       '@tauri-apps/plugin-fs':
         specifier: file:../../../plugins-workspace/plugins/fs
         version: file:../plugins-workspace/plugins/fs
+      '@tauri-apps/plugin-global-shortcut':
+        specifier: file:../../../plugins-workspace/plugins/global-shortcut
+        version: file:../plugins-workspace/plugins/global-shortcut
       '@tauri-apps/plugin-http':
         specifier: file:../../../plugins-workspace/plugins/http
         version: file:../plugins-workspace/plugins/http
@@ -1602,11 +1608,17 @@ packages:
   '@tauri-apps/plugin-clipboard-manager@file:../plugins-workspace/plugins/clipboard-manager':
     resolution: {directory: ../plugins-workspace/plugins/clipboard-manager, type: directory}
 
+  '@tauri-apps/plugin-deep-link@file:../plugins-workspace/plugins/deep-link':
+    resolution: {directory: ../plugins-workspace/plugins/deep-link, type: directory}
+
   '@tauri-apps/plugin-dialog@file:../plugins-workspace/plugins/dialog':
     resolution: {directory: ../plugins-workspace/plugins/dialog, type: directory}
 
   '@tauri-apps/plugin-fs@file:../plugins-workspace/plugins/fs':
     resolution: {directory: ../plugins-workspace/plugins/fs, type: directory}
+
+  '@tauri-apps/plugin-global-shortcut@file:../plugins-workspace/plugins/global-shortcut':
+    resolution: {directory: ../plugins-workspace/plugins/global-shortcut, type: directory}
 
   '@tauri-apps/plugin-http@file:../plugins-workspace/plugins/http':
     resolution: {directory: ../plugins-workspace/plugins/http, type: directory}
@@ -3855,11 +3867,19 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.0
 
+  '@tauri-apps/plugin-deep-link@file:../plugins-workspace/plugins/deep-link':
+    dependencies:
+      '@tauri-apps/api': 2.11.0
+
   '@tauri-apps/plugin-dialog@file:../plugins-workspace/plugins/dialog':
     dependencies:
       '@tauri-apps/api': 2.11.0
 
   '@tauri-apps/plugin-fs@file:../plugins-workspace/plugins/fs':
+    dependencies:
+      '@tauri-apps/api': 2.11.0
+
+  '@tauri-apps/plugin-global-shortcut@file:../plugins-workspace/plugins/global-shortcut':
     dependencies:
       '@tauri-apps/api': 2.11.0
 

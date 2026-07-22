@@ -43,6 +43,7 @@
     "allow-dummy-command", 
     "allow-close-test-window",
     "allow-get-ohos-version-info",
+    "allow-was-started-received",
     "allow-set-deny-new-window",
     "allow-set-create-new-window",
     "allow-desktop-features-test",

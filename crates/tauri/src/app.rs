@@ -211,6 +211,42 @@ impl From<RuntimeWebviewEvent> for WebviewEvent {
   }
 }
 
+/// Reason for a content rect change on OHOS.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RectChangeReason {
+  /// Unknown reason.
+  Undefined,
+  /// Window was maximized.
+  Maximize,
+  /// Window was restored from maximized/minimized.
+  Recover,
+  /// Window was moved.
+  Move,
+  /// Window is being dragged.
+  Drag,
+  /// Drag started.
+  DragStart,
+  /// Drag ended.
+  DragEnd,
+}
+
+#[cfg(target_env = "ohos")]
+impl From<u32> for RectChangeReason {
+  fn from(value: u32) -> Self {
+    match value {
+      1 => RectChangeReason::Maximize,
+      2 => RectChangeReason::Recover,
+      3 => RectChangeReason::Move,
+      4 => RectChangeReason::Drag,
+      5 => RectChangeReason::DragStart,
+      6 => RectChangeReason::DragEnd,
+      _ => RectChangeReason::Undefined,
+    }
+  }
+}
+
 /// An application event, triggered from the event loop.
 ///
 /// See [`App::run`](crate::App#method.run) for usage examples.
@@ -303,6 +339,22 @@ pub enum RunEvent {
     /// This lets you determine why the scene was requested.
     options: objc2::rc::Retained<objc2_ui_kit::UISceneConnectionOptions>,
   },
+  /// Emitted when the application has been started (OHOS only).
+  #[cfg(target_env = "ohos")]
+  Started,
+  /// Emitted when the system requests the application to save its state (OHOS only).
+  #[cfg(target_env = "ohos")]
+  SaveStateRequested,
+  /// Emitted when the application's content rect has changed, e.g. keyboard shown/hidden (OHOS only).
+  #[cfg(target_env = "ohos")]
+  ContentRectChanged {
+    /// The new content rectangle (left, top, width, height).
+    rect: (i32, i32, i32, i32),
+    /// Reason for the change.
+    reason: RectChangeReason,
+  },
+  /// Sent if the event loop is being suspended (app going to background).
+  Suspended,
 }
 
 impl From<EventLoopMessage> for RunEvent {
@@ -2622,6 +2674,7 @@ fn on_event_loop_event<R: Runtime>(
       RunEvent::Ready
     }
     RuntimeRunEvent::Resumed => RunEvent::Resumed,
+    RuntimeRunEvent::Suspended => RunEvent::Suspended,
     RuntimeRunEvent::MainEventsCleared => RunEvent::MainEventsCleared,
     RuntimeRunEvent::UserEvent(t) => {
       match t {
@@ -2683,6 +2736,14 @@ fn on_event_loop_event<R: Runtime>(
     #[cfg(target_os = "ios")]
     RuntimeRunEvent::SceneRequested { scene, options } => {
       RunEvent::SceneRequested { scene, options }
+    }
+    #[cfg(target_env = "ohos")]
+    RuntimeRunEvent::Started => RunEvent::Started,
+    #[cfg(target_env = "ohos")]
+    RuntimeRunEvent::SaveStateRequested => RunEvent::SaveStateRequested,
+    #[cfg(target_env = "ohos")]
+    RuntimeRunEvent::ContentRectChanged { rect, reason } => {
+      RunEvent::ContentRectChanged { rect, reason: RectChangeReason::from(reason) }
     }
     _ => unimplemented!(),
   };
