@@ -61,6 +61,10 @@ fn init_sentry() -> sentry::ClientInitGuard {
   ))
 }
 
+/// Tracks whether RunEvent::Started was received (fires before EventTracker is ready).
+#[cfg(target_env = "ohos")]
+static STARTED_RECEIVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   builder: tauri::Builder<R>,
   setup: F,
@@ -668,6 +672,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_tracked_run_events,
       cmd::clear_tracked_events,
       #[cfg(target_env = "ohos")]
+      cmd::was_started_received,
+      #[cfg(target_env = "ohos")]
       cmd::set_deny_new_window,
       #[cfg(target_env = "ohos")]
       cmd::set_create_new_window,
@@ -752,6 +758,26 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => "Reopen",
+        #[cfg(target_env = "ohos")]
+        RunEvent::Started => {
+          log::info!("[RunEvent] Started");
+          STARTED_RECEIVED.store(true, std::sync::atomic::Ordering::Relaxed);
+          "Started"
+        }
+        #[cfg(target_env = "ohos")]
+        RunEvent::SaveStateRequested => {
+          log::info!("[RunEvent] SaveStateRequested");
+          "SaveStateRequested"
+        }
+        #[cfg(target_env = "ohos")]
+        RunEvent::ContentRectChanged { rect, reason } => {
+          log::info!("[RunEvent] ContentRectChanged, rect={:?}, reason={:?}", rect, reason);
+          "ContentRectChanged"
+        }
+        RunEvent::Suspended => {
+          log::info!("[RunEvent] Suspended");
+          "Suspended"
+        }
         _ => "",
       };
       if !event_name.is_empty() {

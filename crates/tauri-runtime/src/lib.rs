@@ -250,6 +250,22 @@ pub enum RunEvent<T: UserEvent> {
     /// This lets you determine why the scene was requested.
     options: objc2::rc::Retained<objc2_ui_kit::UISceneConnectionOptions>,
   },
+  /// Emitted when the application has been started (OHOS only).
+  #[cfg(target_env = "ohos")]
+  Started,
+  /// Emitted when the system requests the application to save its state (OHOS only).
+  #[cfg(target_env = "ohos")]
+  SaveStateRequested,
+  /// Emitted when the application's content rect has changed (OHOS only).
+  #[cfg(target_env = "ohos")]
+  ContentRectChanged {
+    /// The new content rectangle (left, top, width, height).
+    rect: (i32, i32, i32, i32),
+    /// Reason for the change.
+    reason: u32,
+  },
+  /// Sent if the event loop is being suspended (app going to background).
+  Suspended,
 }
 
 /// Action to take when the event loop is about to exit

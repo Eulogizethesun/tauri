@@ -1525,4 +1525,39 @@ export const coreTests: TestCase[] = [
       assert(true, 'build-time effects window created + closed without throw');
     },
   },
+  // ─── RunEvent Lifecycle Tests (OHOS) ───
+  {
+    name: 'RunEvent::Ready fires on startup',
+    category: 'auto',
+    async fn() {
+      const events = await invoke<string[]>('get_tracked_run_events');
+      assert(events.includes('Ready'), `Ready not in tracked events: ${JSON.stringify(events.slice(0, 5))}`);
+    },
+  },
+  {
+    name: 'RunEvent::Started fires on OHOS',
+    category: 'auto',
+    async fn() {
+      const isOhos = navigator.userAgent.includes('OpenHarmony') || navigator.userAgent.includes('HarmonyOS');
+      if (isOhos) {
+        // Started fires before app.run(), so EventTracker isn't ready yet.
+        // Use a static AtomicBool tracked via was_started_received command.
+        const startedReceived = await invoke<boolean>('was_started_received');
+        assert(startedReceived, 'RunEvent::Started was not received (static tracker is false)');
+      }
+    },
+  },
+  {
+    name: 'RunEvent lifecycle order (Ready → Resumed)',
+    category: 'auto',
+    async fn() {
+      const events = await invoke<string[]>('get_tracked_run_events');
+      const readyIdx = events.indexOf('Ready');
+      assert(readyIdx >= 0, `Ready not found in events: ${JSON.stringify(events.slice(0, 5))}`);
+      const resumedIdx = events.indexOf('Resumed');
+      if (resumedIdx >= 0) {
+        assert(resumedIdx > readyIdx, `Resumed(${resumedIdx}) should come after Ready(${readyIdx})`);
+      }
+    },
+  },
 ];

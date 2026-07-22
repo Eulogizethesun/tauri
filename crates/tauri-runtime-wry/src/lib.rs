@@ -4517,6 +4517,15 @@ fn handle_event_loop<T: UserEvent>(
       callback(RunEvent::MainEventsCleared);
     }
 
+    Event::Suspended => {
+      callback(RunEvent::Suspended);
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", target_env = "ohos"))]
+    Event::Resumed => {
+      callback(RunEvent::Resumed);
+    }
+
     Event::LoopDestroyed => {
       log::info!("[wry] Event::LoopDestroyed received");
       #[cfg(target_env = "ohos")]
@@ -4765,6 +4774,18 @@ fn handle_event_loop<T: UserEvent>(
     #[cfg(target_os = "ios")]
     Event::SceneRequested { scene, options } => {
       callback(RunEvent::SceneRequested { scene, options });
+    }
+    #[cfg(target_env = "ohos")]
+    Event::Started => {
+      callback(RunEvent::Started);
+    }
+    #[cfg(target_env = "ohos")]
+    Event::SaveStateRequested => {
+      callback(RunEvent::SaveStateRequested);
+    }
+    #[cfg(target_env = "ohos")]
+    Event::ContentRectChanged { rect, reason } => {
+      callback(RunEvent::ContentRectChanged { rect, reason });
     }
     _ => (),
   }

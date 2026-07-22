@@ -81,6 +81,13 @@ pub fn get_tracked_run_events<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Re
   Ok(events)
 }
 
+/// Check if RunEvent::Started was received (fires before EventTracker is ready, tracked via static).
+#[command]
+#[cfg(target_env = "ohos")]
+pub fn was_started_received() -> bool {
+  crate::STARTED_RECEIVED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[command]
 pub fn clear_tracked_events<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Result<()> {
   let tracker = app.state::<EventTracker>();
