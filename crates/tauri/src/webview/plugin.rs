@@ -223,8 +223,10 @@ mod desktop_commands {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
   #[allow(unused_mut)]
   let mut init_script = String::new();
-  // window.print works on Linux/Windows; need to use the API on macOS
-  #[cfg(any(target_os = "macos", target_os = "ios"))]
+  // window.print works on Linux/Windows; need to use the API on macOS/iOS/OHOS.
+  // OHOS ArkWeb has no native window.print, so the print.js shim (which invokes
+  // plugin:webview|print → wry OHOS print → createPdf → @ohos.print) is required.
+  #[cfg(any(target_os = "macos", target_os = "ios", target_env = "ohos"))]
   {
     init_script.push_str(include_str!("./scripts/print.js"));
   }

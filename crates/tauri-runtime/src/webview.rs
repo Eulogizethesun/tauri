@@ -350,6 +350,11 @@ pub struct WebviewAttributes {
   pub initialization_scripts: Vec<InitializationScript>,
   pub data_directory: Option<PathBuf>,
   pub drag_drop_handler_enabled: bool,
+  /// Whether to render a transparent overlay Stack that receives ArkUI drag events
+  /// and forwards them to drag_drop_handler. OHOS-only (ArkWeb may not bubble OS file
+  /// drags to Web-level handlers; the overlay is the fallback). See ohos-webview-drag-drop-overlay.
+  #[cfg(target_env = "ohos")]
+  pub drag_drop_overlay: bool,
   pub clipboard: bool,
   pub accept_first_mouse: bool,
   pub additional_browser_args: Option<String>,
@@ -519,6 +524,8 @@ impl WebviewAttributes {
       initialization_scripts: Vec::new(),
       data_directory: None,
       drag_drop_handler_enabled: true,
+      #[cfg(target_env = "ohos")]
+      drag_drop_overlay: false,
       clipboard: false,
       accept_first_mouse: false,
       additional_browser_args: None,
@@ -741,6 +748,18 @@ impl WebviewAttributes {
   #[must_use]
   pub fn use_https_scheme(mut self, enabled: bool) -> Self {
     self.use_https_scheme = enabled;
+    self
+  }
+
+  /// Sets whether to render a transparent drag-drop overlay (OHOS-only).
+  ///
+  /// When enabled, a transparent Stack with `HitTestMode.Transparent` is rendered
+  /// above the Web component to receive ArkUI drag events (ArkWeb may not bubble
+  /// OS file drags to Web-level handlers). Pointer events pass through to the Web.
+  #[cfg(target_env = "ohos")]
+  #[must_use]
+  pub fn drag_drop_overlay(mut self, enabled: bool) -> Self {
+    self.drag_drop_overlay = enabled;
     self
   }
 

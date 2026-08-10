@@ -695,6 +695,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_persisted_scope,
       cmd::clear_persisted_scope,
       cmd::clear_window_state,
+      cmd::create_ohos_test_webview,
       cmd::create_isolated_window,
       cmd::dummy_command,
       cmd::create_window_with_custom_ua,

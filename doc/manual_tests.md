@@ -397,7 +397,7 @@
 
 ---
 
-## 十九、Deep-Link 手动用例
+## 二十、Deep-Link 手动用例
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
@@ -405,7 +405,7 @@
 | core | deep-link | getCurrent | getCurrent 冷启动 — 首启动链接拉起 | **T0** | app 未运行 | 1. `hdc shell "aa force-stop com.tauri.api"` 2. `hdc shell "aa start -U taurideeplink://coldstart"` 3. 等 app 冷启动后在 TestRunner UI manual 区点击 "getCurrent" 按钮 | UI 消息区显示 `[deep-link] getCurrent → ["taurideeplink://coldstart"]` | 冷启动 onCreate want.uri 经 lazy take 注入 |
 | core | deep-link | 外部唤起 | 外部链接唤起 app — 跨 app 跳转 | **T0** | app 已安装 | 1. `hdc shell "aa force-stop com.tauri.api"` 2. `hdc shell "aa start -U taurideeplink://foreground-test"` | app 唤起到前台（onCreate 冷启动或 onNewWant 运行中） | aa start -U 与浏览器点击 `<a href>` 走相同系统 Want 路由（module.json5 skills 匹配）；浏览器地址栏直接输入 scheme 会被当搜索词 |
 
-## 二十、Window Operations（窗口操作）手动用例
+## 二十一、Window Operations（窗口操作）手动用例
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
@@ -415,7 +415,7 @@
 | core | persisted-scope | save | fs scope 保存到文件 | **T0** | app 已运行（建议先点 "Persisted-Scope Clear" 清掉旧 `.persisted-scope` 避免残留干扰） | 1. 在 TestRunner UI 底部 "Window Operations & Persisted-Scope Manual Tests" 区点击 "Persisted-Scope Test" 按钮 2. 查看按钮下方显示的结果 3.（可选）`hdc shell ls -l <结果中的 state_file 路径>` 核对文件落盘 | ① `allow_directory: ✅ 成功` ② `.persisted-scope 文件: ✅ 已生成 (N bytes)` ③ `路径:` 显示 state_file 完整路径 | 因 OHOS 不支持 DragDrop（tao OHOS 未实现 DragDrop 事件），通过自定义 `test_persisted_scope` command 直接调 `scope.allow_directory(test_path, true)` 触发 PathAllowed 事件 → persisted-scope 插件监听该事件并把 `allowed_patterns()` 写入 `.persisted-scope`（bincode 二进制）。注意：该 command 返回 `allow_ok / test_path / state_file / state_file_exists / state_file_size`，**不返回 allowed_patterns 数量**，故本步只验证文件生成。 |
 | core | persisted-scope | restore | 重启后 fs scope 自动恢复 | **T0** | 已执行 save 用例（`.persisted-scope` 文件已生成） | 1. 重启 app：`hdc shell aa force-stop com.tauri.api` 后重新启动 2. 重启后**先不要点 Test**（点 Test 会再次 `allow_directory` 同一路径，使 count 恒为 2，掩盖 restore 是否生效，见备注） 3. 直接点击 "Persisted-Scope Clear" 按钮 4. 查看按钮下方**结果框**（mono 字体 div）的 `remaining_patterns_count`（注意：消息区会被随后的 "Console log saved" 覆盖，看结果框或 hilog） | ① `文件删除: ✅ 已删除`（证明 `.persisted-scope` 跨重启留存）+ `remaining_patterns_count > 0`（典型 = 2：`test_path` + `test_path/**`，因 `allow_directory(recursive=true)` 一次加 2 个 pattern，`crates/tauri/src/scope/fs.rs:284-287`）→ ✅ restore 生效 ② `remaining_patterns_count = 0` → ❌ restore 失败（文件未读 / app_data_dir 在 setup 时不可用 / 反序列化失败） | persisted-scope 插件 setup 时读取 `.persisted-scope`（bincode 反序列化）并对每个 allowed_paths 调 `allow_path`→`scope.allow_directory` 恢复 fs scope。`allow_directory(path, true)` 一次加 2 个 pattern（`path` + `path/**`），fs scope allowed_patterns 是 **HashSet**（`crates/tauri/src/scope/fs.rs`）对同路径幂等去重——故重启后点 Test 仍是 2（不新增），这正是"必须不点 Test 直接 Clear"的原因：不点 Test 时 count>0 证明 restore、count=0 证明失败；点了 Test 则 count 恒=2 无法区分。`clear_persisted_scope` 是唯一返回 count 的入口（读 `scope.allowed_patterns().len()`），但会删 `.persisted-scope`，重复验证需先点 Test 重新保存。 |
 
-## 二十一、Opener（打开文件/URL）手动用例
+## 二十二、Opener（打开文件/URL）手动用例
 
 > autotest 已移除（原 `category:'manual'` 被运行器一律 skip，零覆盖）。opener 的 OHOS 实现走 `openharmony_ability::open_with_system` / `reveal_in_dir`（系统意图），行为依赖系统，必须人眼验证。测试入口：TestRunner 底部 "Plugins Manual Tests" 区按钮。
 
@@ -427,7 +427,7 @@
 
 ---
 
-## 二十二、Store（持久化存储）手动用例
+## 二十三、Store（持久化存储）手动用例
 
 > autotest 仅覆盖内存 CRUD（set/get/has/keys/entries/delete/close），**刻意不碰 Exit/Drop 路径**。store timeout 修复（OHOS Drop-skip `store.rs:644`、Exit `save_or_skip` `store.rs:555`/`lib.rs:454`）是 defense-in-depth，autotest 不覆盖；磁盘持久化（set→退出→重开→数据在）也需手动验证。测试入口：TestRunner "Plugins Manual Tests" 区。
 
@@ -439,7 +439,7 @@
 
 ---
 
-## 二十三、Upload（文件上传）手动用例
+## 二十四、Upload（文件上传）手动用例
 
 > autotest 调 upload 并注册 progress 回调，但**只断言响应体非空，未断言 progress 回调触发**。本用例验证 progress 事件确实触发。测试入口：TestRunner "Plugins Manual Tests" 区。依赖 app 内 3003 端口 echo server（autotest upload 已验证可用）。
 
@@ -449,7 +449,7 @@
 
 ---
 
-## 二十四、Localhost（本地资源服务）手动用例
+## 二十五、Localhost（本地资源服务）手动用例
 
 > autotest fetch `127.0.0.1:3005/index.html` 断言 200 + body，但**未直接断言 CORS 头**。本用例显式检查 `Access-Control-Allow-Origin`。测试入口：TestRunner "Plugins Manual Tests" 区。
 
@@ -459,7 +459,51 @@
 
 ---
 
-## 二十五、用例统计
+## 二十六、OHOS 适配真 gap 功能 手动用例
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | drag-overlay | drag-in | Overlay 拖拽接收 — 文件拖入 webview | **T0** | 修改 app 配置添加 `.with_drag_drop_overlay(true)` + `drag_drop_handler`，重新构建部署；desktop 形态 | 1. 从文件管理器拖拽文件到 webview 区域 2. 释放 3. 观察 hilog 搜 `onDragAndDrop` | ① `Enter` → `Over` → `Drop(paths)` → `Leave` 事件序列 ② paths 含拖入文件的 URI ③ Web 级 handler 被抑制（不双发） | 若 overlay 也不触发 → ArkUI 不下发拖拽事件（平台限制）；需改 app 配置重建 |
+| ohos | drag-overlay | pointer-passthrough | Overlay 透传 — 鼠标/触摸不受影响 | **T0** | 同上（overlay 已渲染） | 1. 在 webview 区域点击、滚动、选中文本 2. 页内 HTML5 拖拽（DOM 元素间拖动） | ① 鼠标点击/滚动/触摸正常响应 ② 文本选择正常 ③ HTML5 DnD 不被 overlay 干扰 | `HitTestMode.Transparent` 透传指针事件 |
+| ohos | https-scheme | page-load | HTTPS Scheme — 页面加载 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "HTTPS Scheme" 按钮 2. 观察弹出的测试窗口页面是否渲染 3. hilog 搜 `onInterceptRequest` | ① `onInterceptRequest` 触发 ② custom_protocol 闭包被调用 ③ 页面 HTML 正常渲染 | 若不触发 → onInterceptRequest 不对主框架导航生效（降级） |
+| ohos | https-scheme | secure-context | HTTPS Scheme — Secure Context 验证 | **T0** | 同上；页面加载成功 | 1. 在测试窗口的 DevTools 控制台执行 `window.isSecureContext` 2. 执行 `crypto.subtle.digest('SHA-256', new TextEncoder().encode('hello'))` 3. hilog 搜 `isSecureContext` | ① `isSecureContext === true` ② `crypto.subtle.digest(...)` 返回 ArrayBuffer（32 bytes） ③ 不抛异常 | **最终验收门槛**：若 `false` → ArkWeb 不识别自定义 https origin（降级 A/B/C） |
+| ohos | https-scheme | external-https | HTTPS Scheme — 外部 HTTPS 不被误拦截 | **T1** | 同上 | 1. 在测试窗口的 DevTools 控制台执行 `fetch('https://example.com')` 2. 观察请求是否正常完成 3. hilog 确认 `onInterceptRequest` 返回 null | ① 外部 https 请求正常完成 ② `onInterceptRequest` 返回 null（不匹配 custom protocol） | 非匹配 URL 返回 null，ArkWeb 走默认网络栈 |
+| ohos | https-scheme | subresource | HTTPS Scheme — 子资源 fetch/XHR 拦截 | **T1** | 同上 | 1. 在测试窗口的 DevTools 控制台执行 `fetch('tauri://localhost/api')`（改写为 `https://tauri.localhost/api`） 2. hilog 搜 `onInterceptRequest` | ① `onInterceptRequest` 对 fetch/XHR 子资源触发 ② custom_protocol 闭包被调用 ③ fetch 返回闭包响应 | 验证子资源请求也被拦截 |
+
+## 二十七、OHOS 适配 8 项功能 手动用例
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | monitor | refresh-rate | 刷新率真实值 — DisplayManager | **T0** | 应用已启动，进入 Tests 页面 | 1. 等待 auto 测试自动运行 2. 查看 `monitor.real-size` 结果 3. hilog 搜 `monitor` 看输出的 size/scaleFactor | ① auto 测试 PASS ② `size.width > 0 && size.height > 0` ③ 值不随窗口最小化/恢复变化（DisplayManager 物理像素） | `app.refresh_rate()` 取真实刷新率（非硬编码 60） |
+| ohos | monitor | from-point | monitor_from_point — 边界判定 | **T1** | 应用已启动，进入 Tests 页面 | 1. 点击 "Monitor Info" 按钮 2. 查看输出的 monitor size + 测试点说明 3. hilog 确认 `monitor_from_point` 无 warn 日志 | ① 显示 monitor size（DisplayManager 物理像素） ② 屏幕内坐标返回 `Some(primary)` ③ 屏幕外坐标返回 `None` ④ 无 warn | OHOS 单显示器，边界判定 `0<=x<w && 0<=y<h`；JS API 不暴露 from_point，通过 hilog/Rust 验证 |
+| ohos | webview | print | WebView 打印 — 系统打印对话框 | **T0** | 应用已启动；页面已加载（onPageEnd）；进入 Tests 页面 | 1. 点击 "WebView Print" 按钮 2. 观察系统打印对话框 3. 检查临时 PDF 清理（hilog 搜 `print`） | ① 弹出系统打印对话框 ② 打印任务提交后 `log.info('print: job submitted')` ③ 临时 PDF 文件清理（`fileIo.unlinkSync`） ④ 页面未加载时返回 Err | `@ohos.print` + `createPdf` 降级 |
+| ohos | event | start-resumed | MainEvent::Start → Event::Resumed 转发 | **T0** | 应用已启动 | 1. 点 `RunEvent::Resumed` 按钮（监听 tauri://resumed）2. 按 Home 键将应用切到后台 3. 从最近任务列表切回应用 4. 看按钮结果（30s 内 PASS/FAIL） | ① 切回时 `Resumed` 事件触发，按钮显示 PASS ② hilog 无 `warn: TODO: forward onStart` ③ 与 SurfaceCreate/Resume 的重复 Resumed 可接受（幂等） | tao `MainEvent::Start`（SHOWN）转发为 `Event::Resumed`；按钮自动监听 30s |
+| ohos | event | save-state | MainEvent::SaveState 降级 | **T1** | 应用已启动 | 1. 触发系统内存回收（打开多个应用占用内存后切回） 2. hilog 搜 `SaveState` | ① `debug: SaveState has no tao Event equivalent; dropped` ② 无 `warn` 噪音 ③ 不转发任何 Event | tao 无 SaveState 变体，降级为 debug log |
+| ohos | clipboard | flag-off | with_clipboard(false) — 拦截 Ctrl+C | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Clipboard OFF" 按钮 2. 在弹出的测试窗口选中文本 3. 按 Ctrl+C 4. 在输入框 Ctrl+V 粘贴 | ① 剪贴板内容**不变**（未复制） ② hilog 无错误 | ArkUI `onKeyPreIme` 拦截 CLIPBOARD_ACCELERATORS |
+| ohos | clipboard | flag-on | with_clipboard(true) — 正常复制 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Clipboard ON" 按钮 2. 在弹出的测试窗口选中文本 3. 按 Ctrl+C 4. 在输入框 Ctrl+V 粘贴 | ① 剪贴板内容**已更新**（复制成功） | ArkWeb 原生处理（flag=true 不拦截） |
+| ohos | zoom | flag-off | with_zoom_hotkeys(false) — 拦截 Ctrl+= | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Zoom OFF" 按钮 2. 在弹出的测试窗口按 Ctrl+= 3. 按 Ctrl+- 4. 按 Ctrl+0 | ① 页面缩放**不变** ② hilog 无错误 | `onKeyPreIme` 拦截 ZOOM_HOTKEY_ACCELERATORS |
+| ohos | zoom | flag-on | with_zoom_hotkeys(true) — 正常缩放 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Zoom ON" 按钮 2. 在弹出的测试窗口按 Ctrl+= 3. 按 Ctrl+- 4. 按 Ctrl+0 | ① Ctrl+= 放大 ② Ctrl+- 缩小 ③ Ctrl+0 重置 | ArkWeb 原生缩放（flag=true 不拦截） |
+| ohos | dialog | error-degrade | dialog::error() 降级 — 不 panic | **T1** | 应用已启动；进入 Tests 页面 | 1. 点击 "Dialog Error (degrade)" 按钮 2. 查看 hilog 搜 `dialog::error` | ① 按钮显示说明信息（该函数仅 Windows 运行时调用） ② OHOS 分支为 `log::error!` 不 panic ③ 应用不崩溃 | `log::error!` 替代 `unimplemented!()`；实际运行时不触发（仅 Windows 调用） |
+
+---
+
+## 二十八、Window Ignore Cursor Events（窗口事件穿透）手动用例
+
+> **背景**: Tauri `Window::set_ignore_cursor_events(ignore)` 在 OHOS 映射到 `ohos.window.setWindowTouchable(!ignore)`（`ignore=true` 穿透 ↔ `touchable=false` 不消费事件，取反在 tao 层）。桥接走 TSFN fire-and-forget（对称 `set_window_blur`）：Rust 始终返回 Ok，ArkTS Promise reject（1300002/1300003）由 `.catch` 捕获不闪退、不反向通知 Rust。
+>
+> **API 版本矛盾（待真机定论）**: 本地缓存文档标注 setWindowTouchable API 9+/12+，但华为官方智能问答确认为 **API 15+（HarmonyOS 5.0.0+）**。tauri api demo 默认 `compatibleSdkVersion = API 12`。若设备 API < 15，`win.setWindowTouchable` 为 undefined → ArkTS 同步抛 TypeError → 被 ArkHelper `safeLogError` 捕获，**不闪退**，仅穿透不生效。真机验证设备实际 API level 为定论步骤（design R5）。
+>
+> **测试入口**: `examples/api` 应用 → Tests 页面 → Manual Tests 区域 → `setIgnoreCursorEvents (3s toggle)` 按钮（smoke：toggle true→false 验证 TSFN 桥接 + 3s 穿透观察）。完整穿透验证需手动创建 Float overlay 子窗口（见 T0 用例）。
+>
+> **日志监控**: `hdc shell hilog | grep -iE "setWindowTouchable|WindowManager"`
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | ignore-cursor-events | touch-passthrough | setIgnoreCursorEvents(true) 触摸穿透 | **T0** | 应用已启动；已创建一个 Float 子窗口叠在主窗口上方（如透明 overlay）；设备 API ≥ 15 | 1. 在 overlay 子窗口上调用 `setIgnoreCursorEvents(true)` 2. 用手指/鼠标点击 overlay 覆盖区域 3. 观察主窗口是否收到点击 4. hilog 搜 `setWindowTouchable` 5. 调 `setIgnoreCursorEvents(false)` 恢复 | ① 点击穿透到下层主窗口（overlay 不消费触摸/鼠标事件）② hilog 输出 `setWindowTouchable: window N touchable=false`（debug）③ `setIgnoreCursorEvents(false)` 恢复后 overlay 重新消费事件 | `ignore=true` ↔ `touchable=false`（tao 层取反）；fire-and-forget，Rust 返回 Ok 不代表 ArkTS 成功，以 hilog + 视觉为准 |
+| ohos | ignore-cursor-events | hover-passthrough | setIgnoreCursorEvents hover 穿透 + API 版本 | **T1** | 同上 | 1. overlay 调 `setIgnoreCursorEvents(true)` 2. 鼠标悬停 overlay 覆盖区域 3. 观察下层主窗口的 hover/光标交互是否生效 4. 若 hover 不穿透，确认触摸仍穿透 5. 确认设备 API level（`hdc shell param get const.ohos.apicomversion` 或 deviceInfo.sdkApiVersion） | ① **API ≥ 15 且 hover 穿透**：单 setWindowTouchable 足够 ② **hover 不穿透但触摸穿透**：需追加组件级 `hitTestBehavior(HitTestMode.Transparent)`（参考 R72 drag-drop-overlay，task 4.3）③ **API < 15**：hilog 输出 `setWindowTouchable failed: ...`（TypeError），穿透完全不生效，需在 WindowManager 加 `deviceInfo.sdkApiVersion >= 15` 版本守卫静默跳过 | 真机为定论（design R1/R5）；hover fallback 走 task 4.3；版本守卫属底层仓（openharmony-ability）职责，不加在 tao 层 |
+
+
+## 二十九、手动用例统计汇总
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -494,5 +538,14 @@
 | Store（持久化存储） | 2 | 1 | **3** |
 | Upload（文件上传） | 1 | 0 | **1** |
 | Localhost（本地资源服务） | 1 | 0 | **1** |
-| **合计** | **75** | **58** | **133** |
+| OHOS — Drag Overlay（拖拽降级） | 2 | 0 | **2** |
+| OHOS — HTTPS Scheme（安全上下文） | 2 | 2 | **4** |
+| OHOS — Monitor（真实值 + from-point） | 1 | 1 | **2** |
+| OHOS — WebView Print（打印） | 1 | 0 | **1** |
+| OHOS — Event Lifecycle（Start→Resumed + SaveState） | 1 | 1 | **2** |
+| OHOS — Clipboard Flag（with_clipboard 开/关） | 2 | 0 | **2** |
+| OHOS — Zoom Flag（with_zoom_hotkeys 开/关） | 2 | 0 | **2** |
+| OHOS — Dialog Error（降级不 panic） | 0 | 1 | **1** |
+| OHOS — Window Ignore Cursor Events（事件穿透） | 1 | 1 | **2** |
+| **合计** | **87** | **64** | **151** |
 

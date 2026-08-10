@@ -1658,3 +1658,73 @@ pub fn clear_window_state<R: tauri::Runtime>(
     "note": "文件已删除。重启 app 后窗口不会恢复到保存的位置（无文件可读），将出现在默认位置（居中）。"
   }))
 }
+
+/// Create a test webview window with specific OHOS adapter flags.
+/// Used by manual test buttons in TestRunner to verify clipboard/zoom/https flags
+/// without needing to modify app config and rebuild.
+#[command]
+pub fn create_ohos_test_webview<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  window_id: String,
+  label: String,
+  clipboard: Option<bool>,
+  zoom_hotkeys: Option<bool>,
+  https_scheme: Option<bool>,
+  drag_drop_overlay: Option<bool>,
+) -> tauri::Result<()> {
+  log::info!(
+    "[OHOS-TEST] Creating test webview '{}' (clipboard={:?}, zoom_hotkeys={:?}, https_scheme={:?}, drag_drop_overlay={:?})",
+    window_id, clipboard, zoom_hotkeys, https_scheme, drag_drop_overlay
+  );
+
+  let mut builder = tauri::WebviewWindowBuilder::new(
+    &app,
+    &window_id,
+    WebviewUrl::App("index.html".into()),
+  )
+  .title(&label)
+  .inner_size(800.0, 600.0);
+
+  if clipboard == Some(true) {
+    builder = builder.enable_clipboard_access();
+  }
+  if let Some(z) = zoom_hotkeys {
+    builder = builder.zoom_hotkeys_enabled(z);
+  }
+  if let Some(h) = https_scheme {
+    builder = builder.use_https_scheme(h);
+    // Inject a script that logs isSecureContext + crypto.subtle availability
+    // to the webview console (visible in hilog as ARKWEB-CONSOLE). This lets
+    // us verify the https-scheme rewrite produced a secure context without
+    // needing DevTools (release build has no devtools feature).
+    builder = builder.initialization_script(
+      r#"window.addEventListener('DOMContentLoaded', () => {
+        console.log('[https-scheme] isSecureContext=' + window.isSecureContext);
+        console.log('[https-scheme] location.href=' + window.location.href);
+        try {
+          crypto.subtle.digest('SHA-256', new TextEncoder().encode('hello')).then(buf => {
+            console.log('[https-scheme] crypto.subtle OK, bytes=' + buf.byteLength);
+          }).catch(e => {
+            console.log('[https-scheme] crypto.subtle FAIL: ' + e);
+          });
+        } catch(e) {
+          console.log('[https-scheme] crypto.subtle unavailable: ' + e);
+        }
+      });"#,
+    );
+  }
+
+  #[cfg(target_env = "ohos")]
+  {
+    if let Some(d) = drag_drop_overlay {
+      builder = builder.drag_drop_overlay(d);
+    }
+  }
+  #[cfg(not(target_env = "ohos"))]
+  {
+    let _ = drag_drop_overlay;
+  }
+
+  builder.build()?;
+  Ok(())
+}

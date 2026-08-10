@@ -5260,6 +5260,14 @@ You may have it installed on another user account, but it is not available for t
     if let Some(window_id) = window.window_id() {
       webview_builder = webview_builder.with_window_id(window_id);
     }
+    // Forward use_https_scheme to wry (OHOS branch was missing this — Windows/Android
+    // branch above sets it, but OHOS didn't, so pl_attrs.use_https was always false
+    // and rewrite_https_url_if_matching never triggered). See ohos-webview-https-scheme.
+    webview_builder = webview_builder.with_https_scheme(webview_attributes.use_https_scheme);
+    // Forward drag_drop_overlay to wry (OHOS-only: transparent Stack that receives
+    // ArkUI drag events when ArkWeb doesn't bubble OS file drags to Web handlers).
+    // See ohos-webview-drag-drop-overlay.
+    webview_builder = webview_builder.with_drag_drop_overlay(webview_attributes.drag_drop_overlay);
   }
 
   if let Some(background_throttling) = webview_attributes.background_throttling {

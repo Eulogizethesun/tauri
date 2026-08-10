@@ -39,13 +39,14 @@ sentry = { version = "0.42", default-features = false, features = ["reqwest", "r
 tauri-plugin-sentry = { path = "../../../../sentry-tauri" }
 chrono = "0.4"
 url = "2"
+# tungstenite is only used by the desktop-only ws echo server (lib.rs, #[cfg(desktop)])
+# NOTE: must be in [dependencies] not [target.'cfg(desktop)'.dependencies]
+# because cfg(desktop) is a custom cfg set by tauri-build's build.rs at compile time,
+# and Cargo cannot evaluate custom cfgs during dependency resolution.
+tungstenite = "0.24"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 tauri-plugin-dialog = { path = "../../../../plugins-workspace/plugins/dialog" }
-
-[target.'cfg(desktop)'.dependencies]
-# tungstenite is only used by the desktop-only ws echo server (lib.rs, cfg(desktop))
-tungstenite = "0.24"
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 napi-ohos = { version = "1.1" }

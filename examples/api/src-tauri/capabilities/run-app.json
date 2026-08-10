@@ -40,6 +40,7 @@
     "allow-create-transparent-window",
     "allow-create-borderless-window",
     "allow-create-transparent-borderless-window",
+    "allow-create-ohos-test-webview",
     "allow-create-ui-ability-window",
     "allow-create-ui-ability-windows-x3",
     "allow-create-transparent-ui-ability-window",

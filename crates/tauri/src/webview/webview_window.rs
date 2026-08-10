@@ -1156,6 +1156,18 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
     self
   }
 
+  /// Sets whether to render a transparent drag-drop overlay (OHOS-only).
+  ///
+  /// When enabled, a transparent Stack with `HitTestMode.Transparent` is rendered
+  /// above the Web component to receive ArkUI drag events. Pointer events pass
+  /// through to the Web. See `WebviewBuilder::drag_drop_overlay`.
+  #[cfg(target_env = "ohos")]
+  #[must_use]
+  pub fn drag_drop_overlay(mut self, enabled: bool) -> Self {
+    self.webview_builder = self.webview_builder.drag_drop_overlay(enabled);
+    self
+  }
+
   /// Whether web inspector, which is usually called browser devtools, is enabled or not. Enabled by default.
   ///
   /// This API works in **debug** builds, but requires `devtools` feature flag to enable it in **release** builds.

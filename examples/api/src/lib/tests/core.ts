@@ -396,10 +396,14 @@ export const coreTests: TestCase[] = [
     },
   },
 
-  // Test web_page_snapshot on OHOS: captures WebView content as RGBA bitmap
+  // Test web_page_snapshot on OHOS: captures WebView content as RGBA bitmap.
+  // Timeout 20s: the ArkTS webPageSnapshot() path has a 500ms initial delay +
+  // up to 3 retries (500ms apart) + the OHOS WebviewController snapshot call itself,
+  // routinely landing near 4.8–5s — too close to the 5s global default (flaky fail).
   {
     name: 'webview.webPageSnapshot',
     category: 'auto',
+    timeout: 20000,
     async fn() {
       const resultPromise = new Promise<any>((resolve) => {
         const unlisten = listen('web-page-snapshot-result', (event) => {

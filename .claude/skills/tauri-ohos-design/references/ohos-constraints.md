@@ -42,6 +42,17 @@
 | Tray `rect()` 始终返回 None | StatusBar API 不提供图标位置/尺寸。`AvoidArea.topRect` 返回整个状态栏区域, 不是单个图标 |
 | Tray 事件数据有限 | 只有 `iconClickType` ("leftClick"/"rightClick") 和 `menuCode`。无坐标、无双击、无 hover、无中键 |
 
+### 1.5 tao OHOS 层 ExternalError 错误转换限制
+
+| 规则 | 说明 |
+|------|------|
+| `ExternalError` 无 `From<String>` | tao 的 `ExternalError` 仅 `NotSupported(NotSupportedError)` / `Os(OsError)` 两变体，OHOS `OsError` 是 unit struct（`pub struct OsError;`）不携带消息字符串。**不能** `ExternalError::from(e.to_string())` 编译 |
+| ability 函数失败只能 `warn! + NotSupported` | tao OHOS 层调 `openharmony_ability::xxx()` 失败时，用 `warn!` 记录错误详情（`{:?}`），返回 `ExternalError::NotSupported(NotSupportedError::new())`（唯一可用变体） |
+| 匹配文件 idiom | 对齐 `set_focus`/`set_focusable`/`set_decorations` 等：`warn!` 记录 + 静默/返回默认值，不携带具体错误消息到上层 |
+| Err 仅表示桥接未就绪 | TSFN fire-and-forget 函数（`set_window_blur`/`set_window_touchable` 等）返回 Err 仅当 TSFN 未初始化或 call status 非 Ok（init/编程错误），**不是** 1300002/1300003 运行时失败 — 那些 Promise reject 在 ArkTS `.catch` 捕获、不反向通知 Rust |
+
+> 来源：ohos-window-ignore-cursor-events Phase 2 实现期审计（design D4 原写的 `ExternalError::from(e.to_string())` 无法编译）。
+
 ---
 
 ## 2. NAPI / TSFN 规则
