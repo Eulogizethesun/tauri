@@ -47,6 +47,11 @@ detect_workdir() {
 
         # 检查是否是 workspace
         if grep -q '^\[workspace\]' "$cargo_toml" 2>/dev/null; then
+            # workspace 根包本身（[package] 与 [workspace] 同文件，根包不在 members 列表里）
+            if grep -q '^\[package\]' "$cargo_toml" 2>/dev/null && grep -q "^name = \"$pkg\"" "$cargo_toml" 2>/dev/null; then
+                echo "$candidate"
+                return 0
+            fi
             # 提取 members 数组内容（支持单行和多行格式）
             local members_str
             members_str=$(sed -n '/^\[workspace\]/,/^\[/p' "$cargo_toml" | tr '\n' ' ' | sed 's/.*members\s*=\s*\[\s*\(.*\)\].*/\1/' | tr ',' '\n' | sed 's/["'\'' ]//g')
@@ -171,20 +176,27 @@ echo ">>> Step 2: Pushing to device..."
 BINARY_NAME=$(basename "$BINARY")
 DEVICE_BINARY="$DEVICE_DIR/$BINARY_NAME"
 
-# Windows 路径格式供 cmd.exe hdc 使用
-BINARY_WIN=$(echo "$BINARY" | sed 's|^/\(.\)/|\U\1:\\|; s|/|\\|g')
+# Windows 路径格式供 hdc 使用（hdc 是 Windows 二进制，需要 D:\... 反斜杠格式）
+# 注意：不能用 cmd.exe /c hdc 转发——在 Git Bash 下参数转义链会被吃掉，推送从未真正发生。
+# 直接调用 hdc，并用 MSYS_NO_PATHCONV=1 防止设备端 /data/... 路径被 MSYS 转成 Windows 路径。
+drive="${BINARY:1:1}"
+drive_up=$(echo "$drive" | tr '[:lower:]' '[:upper:]')
+rest="${BINARY:3}"
+rest_win="${rest//\//\\}"
+BINARY_WIN="${drive_up}:\\${rest_win}"
 
-cmd.exe /c "hdc $HDC_ARGS file send $BINARY_WIN $DEVICE_BINARY" 2>&1 | tr -d '\r' | grep -v "^$"
+MSYS_NO_PATHCONV=1 hdc $HDC_ARGS file send "$BINARY_WIN" "$DEVICE_BINARY" 2>&1 | tr -d '\r' | grep -v "^$"
 echo ""
 
 # ─── Step 3: 在设备上执行 ───
 echo ">>> Step 3: Running on device..."
 echo ""
 
-cmd.exe /c "hdc $HDC_ARGS shell chmod +x $DEVICE_BINARY" 2>&1 | tr -d '\r'
+MSYS_NO_PATHCONV=1 hdc $HDC_ARGS shell "chmod +x $DEVICE_BINARY" 2>&1 | tr -d '\r'
 
 # 捕获输出和退出码
-TEST_OUTPUT=$(cmd.exe /c "hdc $HDC_ARGS shell $DEVICE_BINARY ${TEST_FILTER} --test-threads=1 2>&1; echo __EXIT_CODE__=\$?" 2>&1 | tr -d '\r')
+# \$? 在双引号内保持字面量，由设备端 sh 求值（echo __EXIT_CODE__=<退出码>）
+TEST_OUTPUT=$(MSYS_NO_PATHCONV=1 hdc $HDC_ARGS shell "$DEVICE_BINARY ${TEST_FILTER} --test-threads=1 2>&1; echo __EXIT_CODE__=\$?" 2>&1 | tr -d '\r')
 
 # 提取退出码
 EXIT_CODE=$(echo "$TEST_OUTPUT" | grep -oE "__EXIT_CODE__=[0-9]+" | tail -1 | cut -d= -f2)

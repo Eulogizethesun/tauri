@@ -16,21 +16,27 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
   } = effects;
 
   let window_id = match window.window.dispatcher.ohos_window_id() {
-    Ok(Some(id)) => id,
+    Ok(Some(id)) => {
+      eprintln!("[vibrancy::tauri] ohos_window_id OK id={}", id);
+      id
+    }
     Ok(None) => {
+      eprintln!("[vibrancy::tauri] ohos_window_id returned None — tao window_id not set (registration race?); skipping effects");
       log::warn!("[vibrancy] ohos_window_id returned None — tao window_id not set; skipping effects");
       return;
     }
     Err(e) => {
+      eprintln!("[vibrancy::tauri] ohos_window_id failed: {:?}", e);
       log::error!("[vibrancy] ohos_window_id failed: {:?}", e);
       return;
     }
   };
 
   let blur_radius = radius.unwrap_or(20.0);
+  eprintln!("[vibrancy::tauri] apply_effects: window_id={} blur_radius={}", window_id, blur_radius);
 
-  // Pick the first effect; OHOS approximates every vibrancy effect via blur + tint,
-  // so there is no need to filter by supported variant.
+  // Pick the first effect; OHOS approximates Blur/Acrylic via blur + tint.
+  // Mica/Tabbed series is unsupported (skipped); macOS-specific effects fall back to blur.
   let Some(effect) = effects.into_iter().next() else {
     return;
   };
@@ -41,12 +47,16 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
       let c = color.map(|Color(r, g, b, a)| (r, g, b, a));
       window_vibrancy::apply_ohos_acrylic(window_id, blur_radius, c)
     }
-    Effect::Mica => window_vibrancy::apply_ohos_mica(window_id, blur_radius, None),
-    Effect::MicaDark => window_vibrancy::apply_ohos_mica(window_id, blur_radius, Some(true)),
-    Effect::MicaLight => window_vibrancy::apply_ohos_mica(window_id, blur_radius, Some(false)),
-    Effect::Tabbed => window_vibrancy::apply_ohos_mica(window_id, blur_radius, None),
-    Effect::TabbedDark => window_vibrancy::apply_ohos_mica(window_id, blur_radius, Some(true)),
-    Effect::TabbedLight => window_vibrancy::apply_ohos_mica(window_id, blur_radius, Some(false)),
+    // Mica/Tabbed series intentionally unsupported on OHOS — no blur/tint applied.
+    Effect::Mica
+    | Effect::MicaDark
+    | Effect::MicaLight
+    | Effect::Tabbed
+    | Effect::TabbedDark
+    | Effect::TabbedLight => {
+      log::info!("[vibrancy] Mica/Tabbed effects are not supported on OHOS; skipping");
+      Ok(())
+    }
     // macOS-specific effects: best-effort approximation with basic blur
     _ => window_vibrancy::apply_ohos_blur(window_id, blur_radius),
   };

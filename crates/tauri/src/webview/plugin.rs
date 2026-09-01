@@ -47,6 +47,7 @@ mod commands {
   use super::*;
   use crate::{command, utils::config::Color, Webview};
 
+  #[cfg(any(desktop, target_env = "ohos"))]
   fn get_webview<R: Runtime>(
     webview: Webview<R>,
     label: Option<String>,
@@ -60,6 +61,7 @@ mod commands {
     }
   }
 
+  #[cfg(any(desktop, target_env = "ohos"))]
   #[command(root = "crate")]
   pub async fn set_webview_background_color<R: Runtime>(
     webview: Webview<R>,
@@ -223,8 +225,10 @@ mod desktop_commands {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
   #[allow(unused_mut)]
   let mut init_script = String::new();
-  // window.print works on Linux/Windows; need to use the API on macOS
-  #[cfg(any(target_os = "macos", target_os = "ios"))]
+  // window.print works on Linux/Windows; need to use the API on macOS/iOS/OHOS.
+  // OHOS ArkWeb has no native window.print, so the print.js shim (which invokes
+  // plugin:webview|print → wry OHOS print → createPdf → @ohos.print) is required.
+  #[cfg(any(target_os = "macos", target_os = "ios", target_env = "ohos"))]
   {
     init_script.push_str(include_str!("./scripts/print.js"));
   }
@@ -269,6 +273,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       #[cfg(desktop)] desktop_commands::set_webview_position,
       #[cfg(desktop)] desktop_commands::set_webview_focus,
       #[cfg(desktop)] desktop_commands::set_webview_auto_resize,
+      #[cfg(any(desktop, target_env = "ohos"))]
       commands::set_webview_background_color,
       #[cfg(desktop)] desktop_commands::set_webview_zoom,
       #[cfg(desktop)] desktop_commands::webview_hide,

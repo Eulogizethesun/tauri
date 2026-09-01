@@ -163,6 +163,37 @@ impl TryFrom<Image<'_>> for tray_icon::Icon {
 ///
 /// The stability of the variants are not guaranteed, and matching against them is not recommended.
 /// Use [`JsImage::into_img`] instead.
+/// Upstream `JsImage` verbatim on non-OHOS (untagged deserialization).
+#[cfg(not(target_env = "ohos"))]
+#[derive(Clone, serde::Deserialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum JsImage {
+  /// A reference to a image in the filesystem.
+  #[non_exhaustive]
+  Path(std::path::PathBuf),
+  /// Image from raw bytes.
+  #[non_exhaustive]
+  Bytes(Vec<u8>),
+  /// An image that was previously loaded with the API and is stored in the resource table.
+  #[non_exhaustive]
+  Resource(ResourceId),
+  /// Raw RGBA definition of an image.
+  #[non_exhaustive]
+  Rgba {
+    /// Image bytes.
+    rgba: Vec<u8>,
+    /// Image width.
+    width: u32,
+    /// Image height.
+    height: u32,
+  },
+}
+
+/// OHOS: adds a `DataUri` variant — the ArkTS icon flows deliver icons as
+/// base64 data URIs — plus a hand-written `Deserialize` that recovers
+/// `Resource` references from serialized Image maps (duck-typing fallback).
+#[cfg(target_env = "ohos")]
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum JsImage {
@@ -190,6 +221,7 @@ pub enum JsImage {
   },
 }
 
+#[cfg(target_env = "ohos")]
 impl<'de> serde::Deserialize<'de> for JsImage {
   fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
   where
@@ -326,6 +358,7 @@ impl<'de> serde::Deserialize<'de> for JsImage {
 }
 
 /// Decodes a base64 string into bytes.
+#[cfg(target_env = "ohos")]
 fn decode_base64(input: &str) -> Option<Vec<u8>> {
   let mut output = Vec::new();
   let mut buf: u32 = 0;
@@ -363,6 +396,7 @@ impl JsImage {
   /// the webview [resources table](crate::webview::Webview::resources_table).
   pub fn into_img(self, resources_table: &ResourceTable) -> crate::Result<Arc<Image<'_>>> {
     match self {
+      #[cfg(target_env = "ohos")]
       Self::DataUri(uri) => {
         #[cfg(any(feature = "image-ico", feature = "image-png"))]
         {
@@ -420,5 +454,52 @@ impl JsImage {
         .into(),
       ),
     }
+  }
+}
+
+/// S7 pure-transform batch: all character-class paths of the hand-written
+/// base64 decoder (upper/lowercase letters, digits, +, /, =, whitespace,
+/// invalid characters).
+#[cfg(all(test, target_env = "ohos"))]
+mod decode_base64_tests {
+  use super::decode_base64;
+
+  #[test]
+  fn decodes_standard_base64() {
+    // "Man" / "022" cover the uppercase, lowercase, and digit character classes
+    assert_eq!(decode_base64("TWFu").unwrap(), b"Man".to_vec());
+    assert_eq!(decode_base64("MDIy").unwrap(), b"022".to_vec());
+  }
+
+  #[test]
+  fn decodes_plus_and_slash_alphabet() {
+    // '+' = 62 and '/' = 63, the two symbol character classes
+    assert_eq!(decode_base64("++++").unwrap(), vec![0xFB, 0xEF, 0xBE]);
+    assert_eq!(decode_base64("////").unwrap(), vec![0xFF, 0xFF, 0xFF]);
+  }
+
+  #[test]
+  fn skips_padding_and_whitespace() {
+    // '=' and ASCII whitespace are both skipped, not decoded
+    assert_eq!(decode_base64("TWE=").unwrap(), b"Ma".to_vec());
+    assert_eq!(decode_base64("TW E= ").unwrap(), b"Ma".to_vec());
+  }
+
+  #[test]
+  fn empty_input_yields_empty_output() {
+    assert_eq!(decode_base64("").unwrap(), Vec::<u8>::new());
+  }
+
+  #[test]
+  fn invalid_character_returns_none() {
+    assert!(decode_base64("TW!u").is_none());
+    assert!(decode_base64("TW-u").is_none());
+  }
+
+  #[test]
+  fn trailing_partial_group_is_dropped() {
+    // Remainder bits below 8 are dropped: the single character "+" contributes only 6 bits
+    assert_eq!(decode_base64("+").unwrap(), Vec::<u8>::new());
+    assert_eq!(decode_base64("TW").unwrap(), b"M".to_vec());
   }
 }

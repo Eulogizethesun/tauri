@@ -1,9 +1,32 @@
-import { NativeAbility } from '@ohos-rs/ability'
+import {
+  NativeAbility,
+  LazyPlugin,
+  AccessibilityPlugin,
+  AccountPlugin,
+  AppControlPlugin,
+  AutostartPlugin,
+  ClipboardPlugin,
+  DeepLinkPlugin,
+  FilesPlugin,
+  // Alias to avoid name collision with the JS-layer GlobalShortcutPlugin from
+  // '@tauri/plugin-global-shortcut' (a Tauri Plugin), which is imported below by the
+  // plugins loop and used in STATIC_PLUGINS. The bridge plugin id is declared in
+  // Rust (ApplicationLifecycle.bridgePlugins), so renaming the ArkTS import is safe.
+  GlobalShortcutPlugin as GlobalShortcutBridgePlugin,
+  MenuPlugin,
+  PermissionPlugin,
+  ResourcePlugin,
+  StatusbarPlugin,
+  UpdaterPlugin,
+  UrlPlugin,
+  WebviewPlugin,
+  WindowPlugin,
+} from '@ylong-rs/ohrs-ability'
 import Want from '@ohos.app.ability.Want'
 import { AbilityConstant } from '@kit.AbilityKit';
 import window from '@ohos.window';
 import { PluginManager, Plugin } from '@tauri/app';
-import api_lib from 'lib{{app.lib-name}}.so';
+import {{app.lib-name}} from 'lib{{app.lib-name}}.so';
 import { deviceInfo } from '@kit.BasicServicesKit';
 {{#each plugins}}
 import {{className}} from '{{identifier}}';
@@ -14,6 +37,8 @@ interface TauriNativeModule {
   tauriInitPlugins?: (manager: PluginManager) => string;
   tauri_handle_plugin_response?: (id: number, success: boolean, payload: string) => void;
   tauriHandlePluginResponse?: (id: number, success: boolean, payload: string) => void;
+  tauri_send_channel_data?: (channelId: number, data: string) => void;
+  tauriSendChannelData?: (channelId: number, data: string) => void;
 }
 
 interface PluginConfig {
@@ -23,7 +48,7 @@ interface PluginConfig {
   config: string;
 }
 
-const nativeModule: TauriNativeModule = api_lib;
+const nativeModule: TauriNativeModule = {{app.lib-name}};
 
 const STATIC_PLUGINS: Map<string, Plugin> = new Map();
 {{#each plugins}}
@@ -34,12 +59,79 @@ export default class EntryAbility extends NativeAbility {
   public moduleName: string = "{{app.lib-name}}"
   public defaultPage: boolean = true
   public mode: 'xcomponent' | 'webview' = 'webview'
+  // Stored for handleNotificationAction to dispatch action-click events.
+  private pluginManager: PluginManager | null = null;
+  // ArkTS-side BridgePlugin factories. These match the Rust-declared plugin ids in the
+  // native module's ApplicationLifecycle.bridgePlugins; BridgeHostRegistry.prepare installs
+  // them into every module host for this Ability session. Separate from the Tauri JS-layer
+  // plugins below (PluginManager), which are a different transport (Rust<->JS).
+  public bridgePlugins = [
+    new LazyPlugin(() => new AccessibilityPlugin()),
+    new LazyPlugin(() => new PermissionPlugin()),
+    new LazyPlugin(() => new AppControlPlugin()),
+    new LazyPlugin(() => new FilesPlugin()),
+    new LazyPlugin(() => new ResourcePlugin()),
+    new LazyPlugin(() => new WindowPlugin()),
+    new LazyPlugin(() => new WebviewPlugin()),
+    new LazyPlugin(() => new UrlPlugin()),
+    new LazyPlugin(() => new ClipboardPlugin()),
+    new LazyPlugin(() => new GlobalShortcutBridgePlugin()),
+    new LazyPlugin(() => new DeepLinkPlugin()),
+    new LazyPlugin(() => new AutostartPlugin()),
+    new LazyPlugin(() => new MenuPlugin()),
+    new LazyPlugin(() => new StatusbarPlugin()),
+    new LazyPlugin(() => new AccountPlugin()),
+    new LazyPlugin(() => new UpdaterPlugin()),
+  ]
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
     console.info('[Tauri] ===== EntryAbility onCreate =====');
     await super.onCreate(want, launchParam);
     console.info('[Tauri] ===== super.onCreate done =====');
     await this.initTauriPlugins();
+    this.handleNotificationAction(want);
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    super.onNewWant(want, launchParam);
+    this.handleNotificationAction(want);
+  }
+
+  onForeground(): void {
+    console.info('[Tauri] ===== EntryAbility onForeground =====');
+    this.pluginManager?.notifyForeground();
+  }
+
+  onBackground(): void {
+    console.info('[Tauri] ===== EntryAbility onBackground =====');
+  }
+
+  /**
+   * Dispatches notification action button clicks (from WantAgent) to the
+   * NotificationPlugin instance. On cold start the webview may not be ready,
+   * so emit failures are caught and logged.
+   */
+  private handleNotificationAction(want: Want): void {
+    try {
+      const params = want.parameters ?? {};
+      const actionId = params['_tauriActionId'];
+      const notificationIdStr = params['_tauriNotificationId'];
+      const actionTypeId = params['_tauriActionTypeId'];
+      if (actionId == null || notificationIdStr == null) {
+        return;
+      }
+      const notificationId = parseInt(String(notificationIdStr), 10);
+      if (isNaN(notificationId)) {
+        return;
+      }
+      console.info('[Tauri] Notification action: id=' + notificationId + ', actionId=' + String(actionId));
+      const plugin = this.pluginManager?.getPlugin('notification');
+      if (plugin != null) {
+        plugin.onNotificationAction(notificationId, String(actionId), String(actionTypeId ?? ''));
+      }
+    } catch (e) {
+      console.warn('[Tauri] handleNotificationAction failed: ' + (e as Error).message);
+    }
   }
 
   private async initTauriPlugins(): Promise<void> {
@@ -57,6 +149,18 @@ export default class EntryAbility extends NativeAbility {
 
     pluginManager.setResponseHandler(pluginManager.handlePluginResponse);
     pluginManager.setContext(this.context);
+
+    // Bridge ArkTS Plugin.emit(channelId, payload) to Rust NAPI tauri_send_channel_data.
+    Plugin.setEmitHandler((channelId: number, data: string): void => {
+      const emitFn = nativeModule?.tauri_send_channel_data ?? nativeModule?.tauriSendChannelData;
+      if (emitFn != null) {
+        emitFn(channelId, data);
+      } else {
+        console.error('[Tauri] tauri_send_channel_data not found in native module');
+      }
+    });
+
+    this.pluginManager = pluginManager;
 
     console.info('[Tauri] Native module loaded (static import)');
     console.info('[Tauri] Module keys: ' + Object.keys(nativeModule).join(', '));
@@ -95,7 +199,7 @@ export default class EntryAbility extends NativeAbility {
   async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
     console.info('[Tauri] ===== onWindowStageCreate =====');
     const win = windowStage.getMainWindowSync();
-    await win.setWindowLayoutFullScreen(false);
+    await win.setWindowLayoutFullScreen(true);
     await super.onWindowStageCreate(windowStage);
     console.info('[Tauri] ===== super.onWindowStageCreate done =====');
 
@@ -113,9 +217,9 @@ export default class EntryAbility extends NativeAbility {
         }
       }
       await win.setWindowSystemBarProperties({
-        statusBarColor: '#FFFFFFFF',
+        statusBarColor: '#00000000',
         statusBarContentColor: '#FF000000',
-        navigationBarColor: '#FFFFFFFF',
+        navigationBarColor: '#00000000',
         navigationBarContentColor: '#FF000000'
       });
       console.info('[Tauri] Window background and system bar set to white');

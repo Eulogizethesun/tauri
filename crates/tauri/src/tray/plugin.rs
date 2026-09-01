@@ -18,6 +18,9 @@ use crate::{
   AppHandle, Manager, Runtime, Webview,
 };
 
+#[cfg(not(target_env = "ohos"))]
+use super::{TrayIcon, TrayIconEvent};
+#[cfg(target_env = "ohos")]
 use super::{QuickOperationConfig, TrayIcon, TrayIconEvent};
 
 #[derive(Deserialize)]
@@ -32,9 +35,11 @@ struct TrayIconOptions {
   icon_as_template: Option<bool>,
   menu_on_left_click: Option<bool>,
   show_menu_on_left_click: Option<bool>,
+  #[cfg(target_env = "ohos")]
   quick_operation: Option<QuickOperationConfigDto>,
 }
 
+#[cfg(target_env = "ohos")]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QuickOperationConfigDto {
@@ -45,6 +50,7 @@ struct QuickOperationConfigDto {
   loading_status: Option<bool>,
 }
 
+#[cfg(target_env = "ohos")]
 impl From<QuickOperationConfigDto> for QuickOperationConfig {
   fn from(dto: QuickOperationConfigDto) -> Self {
     QuickOperationConfig {
@@ -110,6 +116,7 @@ fn new<R: Runtime>(
   if let Some(show_menu_on_left_click) = options.show_menu_on_left_click {
     builder = builder.show_menu_on_left_click(show_menu_on_left_click);
   }
+  #[cfg(target_env = "ohos")]
   if let Some(quick_operation) = options.quick_operation {
     builder = builder.quick_operation(quick_operation.into());
   }
@@ -240,6 +247,7 @@ fn set_show_menu_on_left_click<R: Runtime>(
   tray.set_show_menu_on_left_click(on_left)
 }
 
+#[cfg(target_env = "ohos")]
 #[command(root = "crate")]
 fn set_quick_operation<R: Runtime>(
   app: AppHandle<R>,
@@ -266,6 +274,7 @@ pub(crate) fn init<R: Runtime>() -> TauriPlugin<R> {
       set_temp_dir_path,
       set_icon_as_template,
       set_show_menu_on_left_click,
+      #[cfg(target_env = "ohos")]
       set_quick_operation,
     ])
     .build()

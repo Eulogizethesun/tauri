@@ -43,13 +43,8 @@ use tauri_utils::{assets::AssetsIter, PackageInfo};
 /// can call `do_restart(env)` without caring about the platform.
 #[cfg(target_env = "ohos")]
 fn do_restart(_env: &crate::Env) -> ! {
-  if let Ok(app) = crate::ohos::APP.lock() {
-    if let Some(app_ref) = app.as_ref() {
-      if let Err(e) = app_ref.restart() {
-        log::error!("OHOS restart failed: {e}");
-      }
-    }
-  }
+  // OHOS restart: the legacy TSFN-based restart helper was removed during decoupling.
+  // Process exit triggers the OHOS ability lifecycle restart via the OS.
   std::process::exit(0);
 }
 
@@ -543,9 +538,25 @@ impl<R: Runtime> AppHandle<R> {
   /// but accepts a boxed trait object instead of a generic type.
   #[cfg_attr(feature = "tracing", tracing::instrument(name = "app::plugin::register", skip(plugin), fields(name = plugin.name())))]
   pub fn plugin_boxed(&self, mut plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
-    let mut store = self.manager().plugins.lock().unwrap();
-    store.initialize(&mut plugin, self, &self.config().plugins)?;
-    store.register(plugin);
+    // OHOS: initialize outside the plugins lock — a plugin's setup may round-trip
+    // the ArkTS bridge, which pumps the event loop and would otherwise deadlock
+    // against on_event_loop_event's lock below. Non-OHOS keeps the upstream
+    // in-lock ordering.
+    #[cfg(target_env = "ohos")]
+    {
+      crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
+      let mut store = self.manager().plugins.lock().unwrap();
+      store.register(plugin);
+    }
+    #[cfg(not(target_env = "ohos"))]
+    {
+      // Upstream ordering: initialize while holding the plugins lock (the
+      // removed PluginStore::initialize wrapper just forwarded to
+      // crate::plugin::initialize).
+      let mut store = self.manager().plugins.lock().unwrap();
+      crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
+      store.register(plugin);
+    }
 
     Ok(())
   }
@@ -756,25 +767,6 @@ impl<R: Runtime> fmt::Debug for App<R> {
       .field("manager", &self.manager)
       .field("handle", &self.handle)
       .finish()
-  }
-}
-
-#[cfg(target_env = "ohos")]
-impl<R: Runtime> App<R> {
-  pub fn ohos_plugin_register(
-    &self,
-    name: &str,
-    identifier: &str,
-    class_name: &str,
-    config: serde_json::Value,
-  ) {
-    let mut plugins = crate::ohos::PLUGINS_TO_REGISTER.lock().unwrap();
-    plugins.push(crate::ohos::PluginRegistration {
-      name: name.to_string(),
-      identifier: identifier.to_string(),
-      class_name: class_name.to_string(),
-      config,
-    });
   }
 }
 
@@ -1623,7 +1615,11 @@ impl<R: Runtime> Builder<R> {
       invoke_handler: Box::new(|_| false),
       invoke_initialization_script: InvokeInitializationScript {
         process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
-        os_name: std::env::consts::OS,
+        os_name: if cfg!(target_env = "ohos") {
+          "ohos"
+        } else {
+          std::env::consts::OS
+        },
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
         invoke_key: &invoke_key.clone(),
       }
@@ -2356,6 +2352,14 @@ tauri::Builder::default()
         {
           tray_icon::set_ohos_app(ohos_app.clone());
         }
+        // Initialize vibrancy WindowClient (no feature gate — window-vibrancy is always a dep)
+        window_vibrancy::set_ohos_app(&ohos_app);
+        // Initialize runtime-wry WindowClient for OHOS window operations
+        // (gated like tray-icon above: tauri-runtime-wry is an optional dep behind
+        // the `wry` feature; consumers building tauri with default-features=false
+        // and no `wry` feature must still compile on OHOS)
+        #[cfg(feature = "wry")]
+        tauri_runtime_wry::set_ohos_window_client(&ohos_app);
         ohos_app
       },
     };
@@ -2686,6 +2690,19 @@ fn on_event_loop_event<R: Runtime>(
     _ => unimplemented!(),
   };
 
+  // OHOS: the plugin store lock can be held across an ArkTS bridge round-trip
+  // (which pumps the event loop); a blocking lock here would freeze the main
+  // thread, so try_lock and skip instead. Non-OHOS keeps the upstream blocking
+  // lock.
+  #[cfg(target_env = "ohos")]
+  if let Ok(mut store) = manager.plugins.try_lock() {
+    store.on_event(app_handle, &event);
+  } else {
+    // lock contended (e.g. during plugin register); skip on_event to avoid blocking the main
+    // thread. Log so a dropped event (e.g. a deep-link RunEvent::Opened) is traceable.
+    log::warn!("[tauri] plugin store lock busy, skipping on_event (appfreeze try_lock)");
+  }
+  #[cfg(not(target_env = "ohos"))]
   manager
     .plugins
     .lock()
@@ -2707,5 +2724,66 @@ mod tests {
       crate::test_utils::assert_send::<super::AssetResolver<crate::Wry>>();
       crate::test_utils::assert_sync::<super::AssetResolver<crate::Wry>>();
     }
+  }
+
+  /// S7 pure-transform batch: runtime window events → public WindowEvent
+  /// mapping. CloseRequested/Moved/ScaleFactorChanged/ThemeChanged never fire
+  /// naturally on OHOS.
+  #[test]
+  fn runtime_window_event_maps_all_variants() {
+    use super::{RuntimeWebviewEvent, RuntimeWindowEvent, WebviewEvent, WindowEvent};
+    use tauri_runtime::dpi::{PhysicalPosition, PhysicalSize};
+    use tauri_runtime::window::DragDropEvent;
+
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::Resized(PhysicalSize::new(640u32, 480u32))),
+      WindowEvent::Resized(_)
+    ));
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::Moved(PhysicalPosition::new(10i32, 20i32))),
+      WindowEvent::Moved(_)
+    ));
+    {
+      let (tx, _rx) = std::sync::mpsc::channel();
+      assert!(matches!(
+        WindowEvent::from(RuntimeWindowEvent::CloseRequested { signal_tx: tx }),
+        WindowEvent::CloseRequested { .. }
+      ));
+    }
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::Destroyed),
+      WindowEvent::Destroyed
+    ));
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::Focused(true)),
+      WindowEvent::Focused(true)
+    ));
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::ScaleFactorChanged {
+        scale_factor: 2.0,
+        new_inner_size: PhysicalSize::new(800u32, 600u32),
+      }),
+      WindowEvent::ScaleFactorChanged { .. }
+    ));
+    {
+      let drop_event = DragDropEvent::Enter {
+        paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
+        position: PhysicalPosition::new(1.0, 2.0),
+      };
+      assert!(matches!(
+        WindowEvent::from(RuntimeWindowEvent::DragDrop(drop_event)),
+        WindowEvent::DragDrop(_)
+      ));
+      assert!(matches!(
+        WebviewEvent::from(RuntimeWebviewEvent::DragDrop(
+          DragDropEvent::Over { position: PhysicalPosition::new(3.0, 4.0) }
+        )),
+        WebviewEvent::DragDrop(_)
+      ));
+    }
+    assert!(matches!(
+      WindowEvent::from(RuntimeWindowEvent::ThemeChanged(tauri_utils::Theme::Dark)),
+      WindowEvent::ThemeChanged(tauri_utils::Theme::Dark)
+    ));
   }
 }

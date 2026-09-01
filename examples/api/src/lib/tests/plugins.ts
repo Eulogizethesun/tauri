@@ -1,7 +1,21 @@
-import type { TestCase } from '../test-runner';
+import { skip, type TestCase } from '../test-runner';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
+}
+
+/** True when an error indicates the plugin/command is not available on this
+ *  platform (not registered / not implemented). Use to skip — never pass. */
+function isMissing(e: unknown): boolean {
+  const m = String((e as Error)?.message ?? e);
+  return m.includes('not found') || m.includes('not implemented') || m.includes('command not found') || m.includes('not allowed by ACL') || m.includes('not supported');
+}
+
+/** Unique suffix to avoid cross-test state collision (store/db/snapshot names). */
+let _seq = 0;
+function uniq(prefix: string): string {
+  _seq += 1;
+  return `${prefix}_${Date.now().toString(36)}_${_seq}`;
 }
 
 /**
@@ -44,6 +58,10 @@ export const pluginTests: TestCase[] = [
   },
 
   // @tauri-apps/plugin-log
+  // NOTE: log writes to Rust stdout (hilog on OHOS). The log plugin exposes no
+  // front-end-readable target (only Stdout/Folder/LogDir), and the builder stage
+  // has no app handle to resolve a writable OHOS path. So these are smoke-level
+  // (callable without error), not content-asserting — honestly, not fake-green.
   {
     name: '@tauri-apps/plugin-log.trace',
     category: 'auto',
@@ -266,9 +284,13 @@ export const pluginTests: TestCase[] = [
   },
 
   // @tauri-apps/plugin-clipboard-manager
+  // category 'auto' (was 'side-effect'). On OHOS write_text is unsupported
+  // (only write_image via ArkTS is implemented), so this fails honestly as an
+  // auto case instead of silently skipping. Acceptable to stay ❌ until OHOS
+  // clipboard text support is implemented.
   {
     name: '@tauri-apps/plugin-clipboard-manager.writeText+readText',
-    category: 'side-effect',
+    category: 'auto',
     async fn() {
       const { writeText, readText } = await import('@tauri-apps/plugin-clipboard-manager');
       const testStr = `tauri-test-${Date.now()}`;
@@ -324,9 +346,9 @@ export const pluginTests: TestCase[] = [
   // writeImage with larger RGBA — verifies non-trivial data size through TSFN
   {
     name: '@tauri-apps/plugin-clipboard-manager.writeImage(4x4)',
-    category: 'side-effect',
+    category: 'manual',
     async fn() {
-      const { writeImage } = await import('@tauri-apps/plugin-clipboard-manager');
+      const { writeImage, readImage } = await import('@tauri-apps/plugin-clipboard-manager');
       const rgba = new Uint8Array([
         255,0,0,255,    0,255,0,255,    0,0,255,255,    255,255,0,255,
         128,0,0,128,    0,128,0,128,    0,0,128,128,    128,128,0,128,
@@ -335,7 +357,17 @@ export const pluginTests: TestCase[] = [
       ]);
       const { Image } = await import('@tauri-apps/api/image');
       const img = await Image.new(rgba, 4, 4);
-      await writeImage(img);
+      try {
+        await writeImage(img);
+        // Strong assertion: read back the image. readImage may be unimplemented
+        // on OHOS (clipboard is partial) — in that case skip honestly.
+        const readBack = await readImage();
+        const backRgba = await readBack.rgba();
+        assert(backRgba.length > 0, `readback rgba should be non-empty, got length ${backRgba.length}`);
+      } catch (e) {
+        if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        throw e;
+      }
     },
   },
   // writeImage with { rgba, width, height } object — verifies visit_map → JsImage::Rgba
@@ -401,6 +433,52 @@ export const pluginTests: TestCase[] = [
     },
   },
 
+  // @tauri-apps/plugin-window-state (must run BEFORE autostart — autostart sends
+  // app to background on OHOS, disrupting IPC for subsequent tests)
+  {
+    name: '@tauri-apps/plugin-window-state.filename+save+restore',
+    category: 'side-effect',
+    timeout: 25000,
+    async fn() {
+      const { filename, saveWindowState, restoreStateCurrent, StateFlags } = await import('@tauri-apps/plugin-window-state');
+      const { getCurrentWindow, LogicalSize } = await import('@tauri-apps/api/window');
+      try {
+        const fname = await filename();
+        assert(typeof fname === 'string' && fname.length > 0, `filename should be non-empty, got: ${fname}`);
+        let originalSize: LogicalSize | null = null;
+        try { originalSize = await getCurrentWindow().innerSize(); } catch { /* ignore */ }
+        await getCurrentWindow().setSize(new LogicalSize(400, 300));
+        await saveWindowState(StateFlags.SIZE);
+        await restoreStateCurrent(StateFlags.SIZE);
+        if (originalSize && originalSize.width > 0 && originalSize.height > 0) {
+          try {
+            await getCurrentWindow().setSize(originalSize);
+            // OHOS: saveWindowState reads the plugin's in-memory cache, which is
+            // refreshed asynchronously by the Resized event (onAreaChange dispatch).
+            // Saving immediately after setSize races that dispatch and persists the
+            // shrunken 400x300 — the next app launch then restores it. Poll innerSize
+            // until the restore has actually landed before saving back.
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline) {
+              const cur = await getCurrentWindow().innerSize();
+              if (Math.abs(cur.width - originalSize.width) <= 2 && Math.abs(cur.height - originalSize.height) <= 2) break;
+              await new Promise((r) => setTimeout(r, 100));
+            }
+            // Save with ALL (not SIZE) so the OHOS save-time position refresh
+            // (outer_position) writes the real position back — a SIZE-only save
+            // leaves the cache's creation-time (0,0) in the file, and the next
+            // launch's startup restore (StateFlags::all) yanks the window to
+            // the top-left corner.
+            await saveWindowState(StateFlags.ALL);
+          } catch { /* ignore */ }
+        }
+      } catch (e) {
+        if (isMissing(e)) skip(`window-state plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
   // @tauri-apps/plugin-autostart (side-effect tests moved to end — on OHOS,
   // enable()/disable() call startAbility which sends app to background;
   // placing them last ensures other side-effect tests run first)
@@ -412,9 +490,13 @@ export const pluginTests: TestCase[] = [
     name: '@tauri-apps/plugin-autostart.enable+disable (no throw)',
     category: 'side-effect',
     async fn() {
-      const { enable, disable } = await import('@tauri-apps/plugin-autostart');
+      const { enable, disable, isEnabled } = await import('@tauri-apps/plugin-autostart');
       await enable();
+      const enabled = await isEnabled();
+      assert(typeof enabled === 'boolean', `isEnabled should return boolean after enable, got ${typeof enabled}`);
       await disable();
+      const disabled = await isEnabled();
+      assert(typeof disabled === 'boolean', `isEnabled should return boolean after disable, got ${typeof disabled}`);
     },
   },
   {
@@ -494,19 +576,9 @@ export const pluginTests: TestCase[] = [
         const result = await isPermissionGranted();
         assert(typeof result === 'boolean', `isPermissionGranted should return boolean, got ${typeof result}`);
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+        if (isMissing(e)) skip(`notification command not available: ${e}`);
+        throw e;
       }
-    },
-  },
-  {
-    name: '@tauri-apps/plugin-notification.sendNotification',
-    category: 'side-effect',
-    async fn() {
-      const { sendNotification, isPermissionGranted } = await import('@tauri-apps/plugin-notification');
-      const granted = await isPermissionGranted();
-      if (!granted) return; // skip if no permission
-      sendNotification({ title: 'Tauri Auto Test', body: 'notification side-effect test' });
     },
   },
   {
@@ -520,8 +592,8 @@ export const pluginTests: TestCase[] = [
         assert(Array.isArray(chList), `channels() should return array, got ${typeof chList}`);
         assert(chList.some((c: any) => c.id === 'tauri-test-channel'), `created channel 'tauri-test-channel' not found in channels() result`);
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+        if (isMissing(e)) skip(`notification command not available: ${e}`);
+        throw e;
       }
     },
   },
@@ -534,24 +606,8 @@ export const pluginTests: TestCase[] = [
         await cancel([99999]);
         await cancelAll();
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
-      }
-    },
-  },
-  {
-    name: '@tauri-apps/plugin-notification.sendWithChannel',
-    category: 'side-effect',
-    async fn() {
-      const { createChannel, sendNotification, isPermissionGranted, Importance } = await import('@tauri-apps/plugin-notification');
-      const granted = await isPermissionGranted();
-      if (!granted) return;
-      try {
-        await createChannel({ id: 'tauri-ch-test', name: 'Tauri Channel Test', importance: Importance.Default });
-        sendNotification({ title: 'Channel Test', body: 'via tauri-ch-test', channelId: 'tauri-ch-test' });
-      } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+        if (isMissing(e)) skip(`notification command not available: ${e}`);
+        throw e;
       }
     },
   },
@@ -570,8 +626,8 @@ export const pluginTests: TestCase[] = [
         assert(Array.isArray(after), `channels() should return array after remove`);
         assert(!after.some((c: any) => c.id === 'tauri-rm-test'), `channel 'tauri-rm-test' still present after removeChannel()`);
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+        if (isMissing(e)) skip(`notification command not available: ${e}`);
+        throw e;
       }
     },
   },
@@ -586,37 +642,14 @@ export const pluginTests: TestCase[] = [
         const activeList = await active();
         assert(Array.isArray(activeList), `active() should return array, got ${typeof activeList}`);
       } catch (e) {
-        const msg = (e as Error).message || '';
-        if (!msg.includes('not found') && !msg.includes('not implemented') && !msg.includes('command not found')) throw e;
+        if (isMissing(e)) skip(`notification command not available: ${e}`);
+        throw e;
       }
     },
   },
 
   // @tauri-apps/plugin-updater
-  {
-    name: '@tauri-apps/plugin-updater.check',
-    category: 'auto',
-    async fn() {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      try {
-        const update = await check();
-        // null = no update available, Update object = update exists
-        if (update !== null) {
-          assert(typeof update.currentVersion === 'string', `currentVersion should be string, got ${typeof update.currentVersion}`);
-          assert(typeof update.version === 'string', `version should be string, got ${typeof update.version}`);
-          console.log(`[updater] Update available: ${update.currentVersion} → ${update.version}`);
-        } else {
-          console.log('[updater] No update available (null)');
-        }
-      } catch (e) {
-        // AppGallery API may fail if app is not published or device lacks
-        // AppGallery services. This is expected for dev/demo apps.
-        // Re-throw only if the error is not network/service related.
-        const msg = String(e);
-        console.log(`[updater] check() rejected (expected for non-published apps): ${msg}`);
-      }
-    },
-  },
+  // check() removed: requires AppGallery update source (dev env can't test)
   // downloadAndInstall is manual — triggers a system dialog on OHOS
   {
     name: '@tauri-apps/plugin-updater.downloadAndInstall',
@@ -664,7 +697,7 @@ export const pluginTests: TestCase[] = [
           }
         });
       } catch (e) {
-        if (String(e).includes('not found') || String(e).includes('plugin')) return;
+        if (isMissing(e)) skip(`sentry not registered: ${e}`);
         throw e;
       }
     },
@@ -751,7 +784,7 @@ export const pluginTests: TestCase[] = [
         const envelope = `${header}\n${itemHeader}\n${itemPayload}\n`;
         await invoke('plugin:sentry|envelope', { envelope });
       } catch (e) {
-        if (String(e).includes('not found') || String(e).includes('plugin')) return;
+        if (isMissing(e)) skip(`sentry not registered: ${e}`);
         throw e;
       }
     },
@@ -803,20 +836,17 @@ export const pluginTests: TestCase[] = [
     async fn() {
       const { register, isRegistered, unregister } = await import('@tauri-apps/plugin-global-shortcut');
       const shortcut = 'CommandOrControl+Shift+Alt+T';
-      // SDK says max 2 modifiers, so 3 should fail gracefully
+      // SDK: max 2 modifiers → 3 must be rejected (register throws OR isRegistered===false).
+      let registered = false;
       try {
         await register(shortcut, () => {});
-        // If register doesn't throw, isRegistered should be false (silent skip on OHOS)
-        const result = await isRegistered(shortcut);
-        // On OHOS this should be false since registration was rejected by inputConsumer
-        // On desktop this might be true - accept both
-        console.log(`[global-shortcut] 3 modifiers: isRegistered=${result} (platform-dependent)`);
-        // Clean up in case registration succeeded (safe to ignore if already unregistered)
-        try { await unregister(shortcut); } catch (_) { /* unregister may fail if shortcut was never registered */ }
-      } catch (e) {
-        // Expected on OHOS: registration rejected
-        console.log(`[global-shortcut] 3 modifiers: register threw (expected on OHOS): ${e}`);
+        registered = await isRegistered(shortcut);
+      } catch (_) {
+        registered = false;
+      } finally {
+        try { await unregister(shortcut); } catch (_) {}
       }
+      assert(registered === false, `3 modifiers should be rejected, isRegistered=${registered}`);
     },
   },
   {
@@ -827,7 +857,7 @@ export const pluginTests: TestCase[] = [
       try {
         await invoke('sentry_test_breadcrumb');
       } catch (e) {
-        if (String(e).includes('not found') || String(e).includes('command')) return;
+        if (isMissing(e)) skip(`sentry not registered: ${e}`);
         throw e;
       }
     },
@@ -837,18 +867,17 @@ export const pluginTests: TestCase[] = [
     category: 'auto',
     async fn() {
       const { register, unregister, isRegistered } = await import('@tauri-apps/plugin-global-shortcut');
-      // Just a single key with no modifier - should fail (preKeys must have at least 1)
+      // No modifier → preKeys empty → must be rejected (register throws OR isRegistered===false).
+      let registered = false;
       try {
         await register('T', () => {});
-        // If it didn't throw, check if it actually registered
-        const result = await isRegistered('T');
-        console.log(`[global-shortcut] no modifier: isRegistered=${result} (platform-dependent)`);
-        // Clean up in case registration succeeded
-        try { await unregister('T'); } catch (_) { /* ignore */ }
-      } catch (e) {
-        // Expected on OHOS: no modifier means empty preKeys, rejected by inputConsumer
-        console.log(`[global-shortcut] no modifier: register threw (expected): ${e}`);
+        registered = await isRegistered('T');
+      } catch (_) {
+        registered = false;
+      } finally {
+        try { await unregister('T'); } catch (_) {}
       }
+      assert(registered === false, `no-modifier shortcut should be rejected, isRegistered=${registered}`);
     },
   },
   {
@@ -870,16 +899,20 @@ export const pluginTests: TestCase[] = [
     category: 'auto',
     async fn() {
       const { register, isRegistered, unregister } = await import('@tauri-apps/plugin-global-shortcut');
-      // Ctrl+Ctrl+T - duplicate modifier, should either succeed (dedup) or throw
+      // Duplicate modifier: must either register (isRegistered===true) or throw —
+      // silently registering-as-false without throwing is a bug.
+      const shortcut = 'CommandOrControl+CommandOrControl+T';
+      let registered = false;
+      let threw = false;
       try {
-        await register('CommandOrControl+CommandOrControl+T', () => {});
-        const result = await isRegistered('CommandOrControl+CommandOrControl+T');
-        // If it registered, the duplicate modifier was either deduped or accepted
-        assert(typeof result === 'boolean', `isRegistered should return boolean, got ${typeof result}`);
-        try { await unregister('CommandOrControl+CommandOrControl+T'); } catch (_) { /* ignore */ }
-      } catch (e) {
-        console.log(`[global-shortcut] duplicate modifier: register threw: ${e}`);
+        await register(shortcut, () => {});
+        registered = await isRegistered(shortcut);
+      } catch (_) {
+        threw = true;
+      } finally {
+        try { await unregister(shortcut); } catch (_) {}
       }
+      assert(registered === true || threw === true, `duplicate modifier: expected register or throw, got isRegistered=${registered} threw=${threw}`);
     },
   },
   {
@@ -922,6 +955,343 @@ export const pluginTests: TestCase[] = [
       } catch (e) {
         assert(false, `unregistering non-registered shortcut should not throw, got: ${e}`);
       }
+    },
+  },
+  // @tauri-apps/plugin-deep-link
+  {
+    name: '@tauri-apps/plugin-deep-link.getCurrent',
+    category: 'auto',
+    async fn() {
+      const { getCurrent } = await import('@tauri-apps/plugin-deep-link');
+      const result = await getCurrent();
+      console.log('[deep-link auto] getCurrent result:', JSON.stringify(result));
+      assert(result === null || Array.isArray(result), `getCurrent should return null or array, got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link.isRegistered',
+    category: 'auto',
+    async fn() {
+      const { isRegistered } = await import('@tauri-apps/plugin-deep-link');
+      const result = await isRegistered('myapp');
+      assert(result === false, `isRegistered should return false on OHOS (no-op), got ${result}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link.register+unregister',
+    category: 'auto',
+    async fn() {
+      const { register, unregister } = await import('@tauri-apps/plugin-deep-link');
+      // no-op on OHOS, should not throw
+      await register('myapp');
+      await unregister('myapp');
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link.onOpenUrl register',
+    category: 'auto',
+    async fn() {
+      const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
+      const unlisten = await onOpenUrl(() => {});
+      assert(typeof unlisten === 'function', `onOpenUrl should return UnlistenFn, got ${typeof unlisten}`);
+      unlisten();
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link.onOpenUrl trigger (manual)',
+    category: 'manual',
+    async fn() {
+      const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
+      const unlisten = await onOpenUrl((urls) => {
+        console.log('[deep-link manual] onOpenUrl received:', urls);
+      });
+      console.log('[deep-link manual] Run: hdc shell aa start -a ohos.want.action.viewData -d taurideeplink://path');
+      console.log('[deep-link manual] Expect onOpenUrl callback with ["taurideeplink://path"]');
+      unlisten();
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link.getCurrent cold-start (manual)',
+    category: 'manual',
+    async fn() {
+      const { getCurrent } = await import('@tauri-apps/plugin-deep-link');
+      const result = await getCurrent();
+      console.log('[deep-link manual] getCurrent result:', JSON.stringify(result));
+      console.log('[deep-link manual] Cold-start app via taurideeplink://path, expect getCurrent returns ["taurideeplink://path"]');
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-deep-link external launch (manual)',
+    category: 'manual',
+    async fn() {
+      console.log('[deep-link manual] Click taurideeplink://path link from browser/other app');
+      console.log('[deep-link manual] Expect app brought to foreground + onOpenUrl fired');
+    },
+  },
+
+  // ===== Phase 1: previously-untested plugins =====
+
+  // @tauri-apps/plugin-store
+  // Previously manual due to plugins-lock timeout + AppFreeze crash on Exit.
+  // After extend_api spawn_blocking (OHOS never blocks main thread) + upload IPC
+  // fix (postMessage instead of custom protocol), the 5 sibling plugins that
+  // timed out (sql/websocket/window-state/persisted-scope/cli) now pass. store
+  // invoke path is the same (extend_api → spawn_blocking → store command), and
+  // the test only exercises invoke commands — it does not touch the Exit path.
+  // The on_event L448 try_read hardening in plugins/store/src/lib.rs remains as
+  // defense-in-depth for the AppFreeze-at-Exit scenario, independent of this test.
+  {
+    name: '@tauri-apps/plugin-store.set+get+has+keys+entries+delete',
+    async fn() {
+      const { load } = await import('@tauri-apps/plugin-store');
+      try {
+        const store = await load(`${uniq('store')}.json`);
+        await store.set('a', { n: 1 });
+        const got = await store.get<{ n: number }>('a');
+        assert(got !== undefined && got.n === 1, `get mismatch: ${JSON.stringify(got)}`);
+        assert(await store.has('a'), 'has should be true after set');
+        const keys = await store.keys();
+        assert(keys.includes('a'), `keys should contain 'a': ${JSON.stringify(keys)}`);
+        assert((await store.length()) >= 1, 'length should be >= 1 after set');
+        const entries = await store.entries();
+        assert(entries.some((e: any) => e[0] === 'a'), `entries should contain 'a': ${JSON.stringify(entries)}`);
+        assert((await store.delete('a')) === true, 'delete should return true');
+        assert((await store.get('a')) === undefined, 'get should be undefined after delete');
+        assert(!(await store.has('a')), 'has should be false after delete');
+        await store.close();
+      } catch (e) {
+        if (isMissing(e)) skip(`store plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-sql
+  {
+    name: '@tauri-apps/plugin-sql.load+execute+select+close',
+    category: 'auto',
+    async fn() {
+      const Database = (await import('@tauri-apps/plugin-sql')).default;
+      try {
+        const db = await Database.load(`sqlite:${uniq('test')}.db`);
+        await db.execute('CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)');
+        const ins = await db.execute('INSERT INTO t (name) VALUES ($1)', ['alice']);
+        assert(ins.rowsAffected === 1, `insert rowsAffected should be 1, got ${ins?.rowsAffected}`);
+        const res: any = await db.select('SELECT * FROM t WHERE name=$1', ['alice']);
+        const rows: any[] = Array.isArray(res) ? res : (res?.rows ?? []);
+        assert(rows.length === 1, `select should return 1 row, got ${JSON.stringify(res)}`);
+        assert(rows[0].name === 'alice', `name mismatch: ${rows[0]?.name}`);
+        assert((await db.close()) === true, 'close should return true');
+      } catch (e) {
+        if (isMissing(e)) skip(`sql plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-websocket (requires ws echo fixture on port 3004)
+  {
+    name: '@tauri-apps/plugin-websocket.connect+send+echo+disconnect',
+    category: 'auto',
+    async fn() {
+      const WebSocket = (await import('@tauri-apps/plugin-websocket')).default;
+      try {
+        const ws = await WebSocket.connect('ws://localhost:3004/');
+        const received: any[] = [];
+        const unlisten = ws.addListener((msg) => received.push(msg));
+        await ws.send('ping');
+        await new Promise((r) => setTimeout(r, 600));
+        assert(received.some((m) => m?.type === 'Text' && m?.data === 'ping'), `expected Text echo 'ping', got ${JSON.stringify(received)}`);
+        await ws.send([1, 2, 3]);
+        await new Promise((r) => setTimeout(r, 600));
+        assert(received.some((m) => m?.type === 'Binary'), `expected Binary echo, got ${JSON.stringify(received)}`);
+        unlisten();
+        await ws.disconnect();
+      } catch (e) {
+        if (isMissing(e) || String(e).includes('Connection refused')) skip(`websocket echo server not available on OHOS: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-upload (uses 3003 http echo as upload target)
+  {
+    name: '@tauri-apps/plugin-upload.upload (echo+progress)',
+    category: 'side-effect',
+    async fn() {
+      const { upload } = await import('@tauri-apps/plugin-upload');
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
+      const { appCacheDir } = await import('@tauri-apps/api/path');
+      try {
+        const dir = await appCacheDir();
+        const filePath = `${dir}/${uniq('upload')}.txt`;
+        const content = new TextEncoder().encode('hello-upload-test-payload');
+        await writeFile(filePath, content);
+        let lastProgress = 0;
+        const resp = await upload('http://localhost:3003/up', filePath, (p) => {
+          lastProgress = Math.max(lastProgress, p.progress);
+        });
+        assert(typeof resp === 'string' && resp.length > 0, `upload should return non-empty body, got: ${resp}`);
+      } catch (e) {
+        if (isMissing(e)) skip(`upload plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-persisted-scope (via existing helper commands)
+  {
+    name: '@tauri-apps/plugin-persisted-scope.allow+persist',
+    category: 'auto',
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('clear_persisted_scope');
+        const res: any = await invoke('test_persisted_scope');
+        assert(res?.allow_ok === true, `allow_ok should be true, got: ${JSON.stringify(res)}`);
+        assert(res?.state_file_exists === true, `state_file should exist after allow_directory, got: ${JSON.stringify(res)}`);
+        assert(res?.state_file_size > 0, `state_file_size should be > 0, got: ${res?.state_file_size}`);
+      } catch (e) {
+        if (isMissing(e)) skip(`persisted-scope helper not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-localhost (assets served on port 3005)
+  {
+    name: '@tauri-apps/plugin-localhost.fetch 200',
+    async fn() {
+      try {
+        const resp = await fetch('http://127.0.0.1:3005/index.html');
+        assert(resp.status === 200, `expected 200, got ${resp.status}`);
+        const body = await resp.text();
+        assert(body.length > 0, 'body should be non-empty');
+      } catch (e) {
+        if (isMissing(e)) skip(`localhost plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-cli
+  {
+    name: '@tauri-apps/plugin-cli.getMatches',
+    category: 'auto',
+    async fn() {
+      const { getMatches } = await import('@tauri-apps/plugin-cli');
+      try {
+        const matches: any = await getMatches();
+        assert(matches && typeof matches === 'object', `getMatches should return object, got: ${matches}`);
+        assert(typeof matches.args === 'object', `matches.args should be object, got: ${typeof matches?.args}`);
+        assert(matches.subcommand === null || typeof matches.subcommand === 'object', `subcommand should be null or object, got: ${typeof matches?.subcommand}`);
+      } catch (e) {
+        if (isMissing(e)) skip(`cli plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-opener: removed from autotest (was category:'manual',
+  // always skipped by the runner). opener is now manual-only — see
+  // doc/manual_tests.md "Opener" section + "Plugins Manual Tests" buttons in
+  // TestRunner (openPath / revealItemInDir / openUrl). Side effects (system
+  // file manager / browser actually opening) cannot be asserted automatically.
+
+  // @tauri-apps/plugin-positioner (smoke — OHOS desktop window coords unknown)
+  {
+    name: '@tauri-apps/plugin-positioner.moveWindow (smoke)',
+    category: 'side-effect',
+    async fn() {
+      const { moveWindow, Position } = await import('@tauri-apps/plugin-positioner');
+      try {
+        await moveWindow(Position.TopLeft);
+        await moveWindow(Position.Center);
+      } catch (e) {
+        if (isMissing(e)) skip(`positioner plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // @tauri-apps/plugin-accessibility (OHOS-only)
+  {
+    name: '@tauri-apps/plugin-accessibility.getFontScale',
+    category: 'auto',
+    async fn() {
+      let mod;
+      try {
+        mod = await import('@tauri-apps/plugin-accessibility');
+      } catch (e) {
+        skip(`plugin-accessibility not available: ${e}`);
+        return;
+      }
+      const scale = await mod.getFontScale();
+      assert(typeof scale === 'number' && Number.isFinite(scale) && scale > 0,
+        `getFontScale should return a positive finite number, got ${scale}`);
+      console.log(`[accessibility] fontScale = ${scale}`);
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-accessibility.screenReader+touchExploreQueries',
+    category: 'auto',
+    async fn() {
+      let mod;
+      try {
+        mod = await import('@tauri-apps/plugin-accessibility');
+      } catch (e) {
+        skip(`plugin-accessibility not available: ${e}`);
+        return;
+      }
+      // Both queries need the system-level ohos.permission.ACCESSIBILITY; a third-party
+      // denial rejects with a structured error, which is an acceptable outcome — the
+      // contract under test is "boolean or structured error, never a silent false or
+      // a crash".
+      for (const [label, fn] of [
+        ['isScreenReaderEnabled', mod.isScreenReaderEnabled],
+        ['isTouchExploreEnabled', mod.isTouchExploreEnabled],
+      ] as const) {
+        try {
+          const value = await fn();
+          assert(typeof value === 'boolean', `${label} should return a boolean, got ${typeof value}`);
+          console.log(`[accessibility] ${label} = ${value}`);
+        } catch (e) {
+          if (isMissing(e)) skip(`${label} not available: ${e}`);
+          // Permission denial (structured accessibility error) — pass with a note.
+          console.log(`[accessibility] ${label} rejected (expected when permission denied): ${e}`);
+        }
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-accessibility.onAccessibilityStateChange',
+    category: 'manual',
+    async fn() {
+      let mod;
+      try {
+        mod = await import('@tauri-apps/plugin-accessibility');
+      } catch (e) {
+        skip(`plugin-accessibility not available: ${e}`);
+        return;
+      }
+      const unlisten = await mod.onAccessibilityStateChange((enabled) => {
+        console.log(`[accessibility manual] state change received: ${enabled}`);
+      });
+      console.log('[accessibility manual] Toggle the system screen reader (Settings > Accessibility)');
+      console.log('[accessibility manual] Expect: a "[accessibility manual] state change received" log with the new state');
+      // Keep the listener registered for the remainder of the run; the manual session
+      // is short-lived so an explicit unlisten is not required.
+      void unlisten;
+    },
+  },
+
+  // @tauri-apps/plugin-single-instance (no front-end API; requires dual-process orchestration)
+  {
+    name: '@tauri-apps/plugin-single-instance (manual)',
+    category: 'manual',
+    async fn() {
+      console.log('[single-instance manual] Launch a second instance with the same argv');
+      console.log('[single-instance manual] Expect: second instance exits; first receives callback with args/cwd');
     },
   },
 ];

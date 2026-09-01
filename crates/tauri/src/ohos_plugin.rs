@@ -1,5 +1,5 @@
 use crate::ohos::{PLUGINS_TO_REGISTER, PLUGIN_MANAGER, RUN_COMMAND_QUEUE, RUN_COMMAND_TSFN};
-use crate::plugin::mobile::PENDING_PLUGIN_CALLS;
+use crate::plugin::mobile::{CHANNELS, PENDING_PLUGIN_CALLS};
 use napi_derive_ohos::napi;
 use napi_ohos::bindgen_prelude::{FnArgs, Function, JsObjectValue, ObjectRef};
 use napi_ohos::Env;
@@ -105,5 +105,34 @@ pub fn tauri_handle_plugin_response(id: i32, success: bool, payload: String) {
   if let Some(handler) = handler {
     let json: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
     handler(if success { Ok(json) } else { Err(json) });
+  }
+}
+
+/// NAPI bridge for ArkTS Plugin.emit(channelId, payload) → Rust CHANNELS → Channel.send → webview.
+/// Mirrors Android `send_channel_data` and iOS `send_channel_data_handler`.
+#[napi]
+pub fn tauri_send_channel_data(channel_id: u32, data: String) {
+  if let Some(channels) = CHANNELS.get() {
+    let channel = {
+      let guard = channels
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      guard.get(&channel_id).cloned()
+    };
+    if let Some(channel) = channel {
+      let json: serde_json::Value =
+        serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+      let _ = channel.send(json);
+    } else {
+      log::warn!(
+        "[Tauri] tauri_send_channel_data: channel {} not found in CHANNELS registry",
+        channel_id
+      );
+    }
+  } else {
+    log::warn!(
+      "[Tauri] tauri_send_channel_data: CHANNELS registry not yet initialized (channel {})",
+      channel_id
+    );
   }
 }

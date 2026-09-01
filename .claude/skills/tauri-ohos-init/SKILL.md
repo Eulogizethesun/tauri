@@ -40,7 +40,7 @@ arkts-helper 提供 ArkTS/ArkUI 文档检索和华为官方 AI 问答能力。
 3. 如未配置：
    ```bash
    cd <项目根目录>
-   git clone https://github.com/LongLiveY96/arkts-helper-mcp.git
+   git clone 
    cd arkts-helper-mcp
    npm install
    npm run build

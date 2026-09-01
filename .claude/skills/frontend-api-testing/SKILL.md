@@ -13,6 +13,7 @@ description: Tauri 前端 API 自动化测试开发技能。使用场景：(1) �
 |------|------|
 | 添加自动测试 | [添加自动测试](#添加自动测试) |
 | 添加手动测试 | [添加手动测试](#添加手动测试) |
+| 添加自定义测试命令 | [添加自定义测试命令](#添加自定义测试命令) |
 | 接入新 plugin | [接入新 plugin](#接入新-plugin) |
 | 运行测试 | [运行测试](#运行测试) |
 | 查看报告 | [测试报告](#测试报告) |
@@ -133,6 +134,20 @@ async function manualMyApi() {
 - 将测试结果赋值给 `manualResult`，`wrapManual` 会自动捕获
 - 按钮文案建议包含预期结果（如 `isFocused (should be true)`）
 
+## 添加自定义测试命令（app command）
+
+手动测试/自动测试若需调用自定义 Rust 命令（`#[command]`，如 `set_ime_position_test`），必须**三处都注册**，漏任何一处症状不同：
+
+| # | 位置 | 作用 | 漏了的症状 |
+|---|------|------|-----------|
+| 1 | `src-tauri/src/cmd.rs` 定义 + `src/lib.rs` `invoke_handler` 注册 | 命令存在且可路由 | 编译错 `cannot find` / invoke 报 `unknown command` |
+| 2 | `src-tauri/build.rs` `AppManifest::new().commands(&[...])` 清单 | 生成 ACL 权限标识 | **构建期 panic**：`Permission xxx not found`（改 build.rs 后会触发 codegen 重跑，暴露其他漏网命令） |
+| 3 | `src-tauri/capabilities/run-app.json` 加 `"allow-<命令名>"` | 运行时授权 | **编译安装正常，点击按钮时报 `not allowed. Permissions associated with this command: allow-xxx`**（ACL 拦截，见 hilog ARKWEB-CONSOLE） |
+
+> 坑点：第 3 处最隐蔽——前两处漏了会在编译期暴露，第 3 处只有真机点击才触发。新增命令后顺手检查 run-app.json（对照同批已有命令如 `allow-set-ime-position-test` 的位置追加）。
+
+另需注意命令的 cfg 门控要对称：`#[cfg(target_env = "ohos")]` 实现和 `#[cfg(not(...))]` stub 都要定义，否则其他平台编译失败。
+
 ## 接入新 plugin
 
 除了添加 TestCase，还需配置依赖和权限。
@@ -233,6 +248,8 @@ hdc shell "cat /data/app/el2/100/base/com.tauri.api/cache/test-report.md"
 ## 常见问题
 
 **Plugin command 未注册** — 检查 `capabilities/run-app.json` 是否包含对应权限。
+
+**App command 报 `not allowed`（编译安装都正常）** — 命令在 build.rs 和 lib.rs 都注册了，但 `capabilities/run-app.json` 漏了 `allow-<命令名>` 授权。真机点击时 hilog（ARKWEB-CONSOLE）可见 `xxx not allowed. Permissions associated with this command: allow-xxx`。详见 [添加自定义测试命令](#添加自定义测试命令)。
 
 **HTTP scope 限制** — `plugin-http` fetch 需声明 URL scope：
 ```json

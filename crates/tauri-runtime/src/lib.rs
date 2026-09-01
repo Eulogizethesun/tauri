@@ -401,8 +401,30 @@ pub struct RuntimeInitArgs {
   pub app_id: Option<String>,
   #[cfg(windows)]
   pub msg_hook: Option<Box<dyn FnMut(*const std::ffi::c_void) -> bool + 'static>>,
+  // Runtime integration layer: legitimate coupling — tauri-runtime needs the OHOS app instance to bootstrap
   #[cfg(target_env = "ohos")]
   pub app: openharmony_ability::OpenHarmonyApp,
+}
+
+#[cfg(not(target_env = "ohos"))]
+impl Default for RuntimeInitArgs {
+  fn default() -> Self {
+    Self {
+      #[cfg(all(
+        any(
+          target_os = "linux",
+          target_os = "dragonfly",
+          target_os = "freebsd",
+          target_os = "netbsd",
+          target_os = "openbsd",
+        ),
+        not(target_env = "ohos")
+      ))]
+      app_id: None,
+      #[cfg(windows)]
+      msg_hook: None,
+    }
+  }
 }
 
 /// The webview runtime interface.
@@ -523,6 +545,7 @@ pub trait Runtime<T: UserEvent>: Debug + Sized + 'static {
 }
 
 /// PDF generation configuration.
+#[cfg(target_env = "ohos")]
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfConfig {

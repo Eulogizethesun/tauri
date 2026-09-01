@@ -109,7 +109,7 @@ OHPM 发布**必须**包含 4 个文件（缺一不可），位于 `package/` �
 | `package/CHANGELOG.md` | 非空，包含版本变更记录 | **权威源文件**，在此编辑 |
 | `package/LICENSE` | 非空，实际许可证文本（非引用） | 需确保内容正确 |
 
-> **重要**：`package/` 下的 oh-package.json5、README.md、CHANGELOG.md 是权威源文件，`pack.sh` 不应覆盖它们。根目录的同名文件与发布无关。
+> **重要**：`package/` 下的 oh-package.json5、README.md、CHANGELOG.md 是权威源文件，`pack.bat` 不应覆盖它们。根目录的同名文件与发布无关。
 
 #### 2a. 检查包文件
 
@@ -139,9 +139,9 @@ cp LICENSE package/LICENSE
 
 验证：`head -3 package/LICENSE` 应显示 `MIT License` 而非 `../LICENSE`。
 
-#### 2c. 确认 pack.sh 不覆盖发布文件
+#### 2c. 确认 pack.bat 不覆盖发布文件
 
-`pack.sh` 应该：
+`pack.bat` 应该：
 - ✅ 复制 `.ets` 源码到 `package/src/main/ets/`
 - ✅ 仅在 `package/LICENSE` 是 broken reference 时修复
 - ❌ **不应**覆盖 `package/CHANGELOG.md`、`package/README.md`、`package/oh-package.json5`
@@ -210,7 +210,7 @@ grep -rn "旧包名" package/ --include="*.md" --include="*.json5" --include="*.
 - `package/oh-package.json5` — `name` 字段
 - `package/README.md` — 标题、安装命令、import 语句
 - `native_ability/oh-package.json5` — `name` 字段（**重要**：`ohrs artifact` 从此文件读取模块名生成 `package/src/main/module.json5`）
-- `package/src/main/module.json5` — `name` 字段（由 `ohrs artifact` 自动生成，改 `native_ability/oh-package.json5` 后重跑 `pack.sh` 即可更新）
+- `package/src/main/module.json5` — `name` 字段（由 `ohrs artifact` 自动生成，改 `native_ability/oh-package.json5` 后重跑 `pack.bat` 即可更新）
 
 #### 2g. 确认 OHPM 组织已创建
 
@@ -222,21 +222,21 @@ grep -rn "旧包名" package/ --include="*.md" --include="*.json5" --include="*.
 
 ### Step 3: 构建 HAR 包
 
-#### 3a. 运行 pack.sh
+#### 3a. 运行 pack.bat
 
 ```bash
 cd ${PROJECT_ROOT}/openharmony-ability
 source ${PROJECT_ROOT}/tauri/.claude/skills/ohos-build/scripts/env.sh
-bash scripts/pack.sh
+./pack.bat
 ```
 
-`pack.sh` 完成：
+`pack.bat` 完成：
 1. 清除 `package/src/main/ets/` 和 `dist/`
 2. 从 `native_ability/src/main/ets/` 复制源码到 `package/src/main/ets/`
 3. 运行 `ohrs artifact --skip-libs` 生成构建产物（会**自动生成** `package/src/main/module.json5`，其中 `name` 取自 `oh-package.json5`）
 4. 修复 `package/LICENSE`（如果是 broken reference）
 
-> **注意**：`pack.sh` 不会覆盖 `package/CHANGELOG.md`、`package/README.md`、`package/oh-package.json5`，这些是权威源文件。
+> **注意**：`pack.bat` 不会覆盖 `package/CHANGELOG.md`、`package/README.md`、`package/oh-package.json5`，这些是权威源文件。
 
 #### 3b. 打包 HAR
 
@@ -325,8 +325,8 @@ $OHPM publish <har_file>
 **审核拒绝后处理流程**：
 1. 在 Package 管理页面查看具体驳回原因
 2. 根据驳回原因定位并修复问题（可能在 `package/`、`native_ability/`、`scripts/` 或其他位置）
-3. 重新跑 `pack.sh`（安全操作：只重新生成 `package/src/main/ets/`、`module.json5` 等派生文件，不会覆盖 `README.md`、`CHANGELOG.md`、`oh-package.json5` 等权威源文件）
-   - **注意**：`module.json5` 的 `name` 字段由 `ohrs artifact` 从 `native_ability/oh-package.json5` 读取生成。如果修改了包名，必须同时更新 `native_ability/oh-package.json5` 中的 `name`，否则 `pack.sh` 会生成旧名字的 `module.json5`
+3. 重新跑 `pack.bat`（安全操作：只重新生成 `package/src/main/ets/`、`module.json5` 等派生文件，不会覆盖 `README.md`、`CHANGELOG.md`、`oh-package.json5` 等权威源文件）
+   - **注意**：`module.json5` 的 `name` 字段由 `ohrs artifact` 从 `native_ability/oh-package.json5` 读取生成。如果修改了包名，必须同时更新 `native_ability/oh-package.json5` 中的 `name`，否则 `pack.bat` 会生成旧名字的 `module.json5`
 4. 重新打包 HAR（`tar -czf <har_file> package/`）
 5. 执行 Step 3c 全面检查（包名一致性、必需文件、功能代码）
 6. 重新 `ohpm publish`（**不需要递增版本号**，被拒绝的版本未上架，可直接重发）
@@ -356,7 +356,7 @@ git checkout -- package/README.md
 git checkout -- package/src/main/module.json5
 ```
 
-验证：`git status --short` 应只剩永久变更（CHANGELOG、LICENSE、pack.sh）。
+验证：`git status --short` 应只剩永久变更（CHANGELOG、LICENSE、pack.bat）。
 
 #### 5c. 提交永久代码变更
 
@@ -364,8 +364,8 @@ git checkout -- package/src/main/module.json5
 
 ```bash
 cd ${PROJECT_ROOT}/openharmony-ability
-git add package/CHANGELOG.md package/LICENSE scripts/pack.sh
-git commit -m "chore: add X.Y.Z changelog, fix LICENSE, improve pack.sh"
+git add package/CHANGELOG.md package/LICENSE pack.bat
+git commit -m "chore: add X.Y.Z changelog, fix LICENSE, improve pack.bat"
 git push origin ohdev
 ```
 
@@ -380,7 +380,7 @@ git push origin ohdev
 下次发布需要：
 1. **永久变更**（提交到仓库）：递增 `package/oh-package.json5` 版本 → 更新 `package/CHANGELOG.md`
 2. **临时修改**（发布后还原）：按 Step 2f 修改包名和 repository → 按 Step 2g 检查一致性
-3. `bash scripts/pack.sh && tar -czf ohrs-ability.har package/`
+3. `./pack.bat && tar -czf ohrs-ability.har package/`
 4. `ohpm publish ohrs-ability.har`
 5. 审核通过后按 Step 5b 还原临时修改，按 Step 5c 提交永久变更
 
@@ -398,9 +398,9 @@ git push origin ohdev
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| `LICENSE` 内容为 `../LICENSE` | pack.sh 未复制根目录 LICENSE | pack.sh 已自动修复（Step 2b） |
+| `LICENSE` 内容为 `../LICENSE` | pack.bat 未复制根目录 LICENSE | pack.bat 已自动修复（Step 2b） |
 | 发布被拒：版本号已存在 | 未递增版本号 | 更新 `package/oh-package.json5` 中的 `version` |
-| 发布被拒：缺少必要文件 | HAR 内缺少 4 个必需文件之一 | 检查 pack.sh 是否复制完整（Step 3c） |
+| 发布被拒：缺少必要文件 | HAR 内缺少 4 个必需文件之一 | 检查 pack.bat 是否复制完整（Step 3c） |
 | 发布被拒：README 包名不一致 | README 中的安装命令包名与 oh-package.json5 的 name 不同 | 全局搜索替换旧包名（Step 2f） |
 | 发布被拒：Failed to verify OHPM package group | 组织未创建或未认证 | OHPM → 个人中心 → 组织管理 → 创建并认证 |
 | `Private key without passphrase is not supported` | 密钥未设置密码 | 重新生成密钥时设置非空密码 |

@@ -10,6 +10,7 @@ node_modules/
 
 # dotenv environment variables file
 .env
+.env.local
 
 # .vscode workspace settings file
 .vscode/settings.json
@@ -68,3 +69,14 @@ oh_modules
 .cxx
 ohos/entry/build
 ohos/entry/libs
+.env.local
+test-report.md
+examples/huawei-account/dist/
+
+# ── OHOS build/diagnostic artifacts ──
+*.har
+*.hap
+*.rar
+hilog-trace*.txt
+examples/api/src-tauri/.gen-ohos-backup/
+.claude/plans/

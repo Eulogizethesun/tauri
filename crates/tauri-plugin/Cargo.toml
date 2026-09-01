@@ -21,6 +21,7 @@ build = [
   "dep:glob",
   "dep:plist",
   "dep:walkdir",
+  "dep:json5",
 ]
 runtime = []
 
@@ -35,6 +36,7 @@ glob = { version = "0.3", optional = true }
 # Our code requires at least 0.8.21 so don't simplify this to 0.8
 schemars = { version = "0.8.21", features = ["preserve_order"] }
 walkdir = { version = "2", optional = true }
+json5 = { version = "0.4", optional = true }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 plist = { version = "1", optional = true }

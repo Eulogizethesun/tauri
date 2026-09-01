@@ -1,0 +1,42 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ohos-plugins",
+  "description": "permissions for plugins that are only dependencies under cfg(target_env = \"ohos\") in Cargo.toml; not collected on Windows/macOS/Linux native builds, so they must be platform-gated to avoid tauri-build ACL panics (e.g. Permission deep-link:default not found)",
+  "platforms": ["openHarmony"],
+  "windows": ["main", "main-*", "test-*"],
+  "permissions": [
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-unregister-all",
+    "global-shortcut:allow-is-registered",
+    "store:default",
+    "sql:default",
+    "sql:allow-execute",
+    "websocket:default",
+    "cli:default",
+    "upload:default",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPCACHE/*" }]
+    },
+    "positioner:default",
+    "haptics:allow-vibrate",
+    "haptics:allow-impact-feedback",
+    "haptics:allow-notification-feedback",
+    "haptics:allow-selection-feedback",
+    "geolocation:allow-get-current-position",
+    "geolocation:allow-watch-position",
+    "geolocation:allow-clear-watch",
+    "geolocation:allow-check-permissions",
+    "geolocation:allow-request-permissions",
+    "geolocation:allow-open-location-settings",
+    "biometric:default",
+    "nfc:default",
+    "barcode-scanner:default",
+    "huawei-account:default",
+    "accessibility:default",
+    "screenshot:default",
+    "continuation:default"
+  ]
+}

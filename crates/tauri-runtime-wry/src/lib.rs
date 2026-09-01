@@ -135,6 +135,76 @@ use tauri_runtime::ActivationPolicy;
 #[cfg(target_env = "ohos")]
 pub use tauri_runtime::OHOSWindowKind;
 
+// ─── OHOS: global WindowClient for fire-and-forget bridge calls ────────────────
+// The bridge facade is async, but tauri-runtime-wry's call sites (focus_window,
+// set_window_focusable, destroy_window) run on the main thread where block_on
+// would deadlock. We store a WindowClient globally and spawn a worker thread for
+// each call, letting the main thread process the TSFN response asynchronously.
+#[cfg(target_env = "ohos")]
+static OHOS_WINDOW_CLIENT: std::sync::OnceLock<openharmony_ability_plugin_window::WindowClient> =
+  std::sync::OnceLock::new();
+
+/// Initializes the global `WindowClient` used by tauri-runtime-wry for OHOS window
+/// operations. Must be called once during app setup.
+#[cfg(target_env = "ohos")]
+pub fn set_ohos_window_client(app: &openharmony_ability::OpenHarmonyApp) {
+  // Register the Rust-side WebView bridge plugin. `WebviewClient::create`
+  // (called from wry's webview builder) is a bridge call routed through
+  // `WebviewBridgePlugin`; the ArkTS counterpart (`WebviewPlugin`) is already
+  // in EntryAbility's `bridgePlugins` list, but without registering the Rust
+  // side here, `create` fails with "not installed for '<module>'". This mirrors
+  // how tray-icon's `set_ohos_app` registers StatusBarBridgePlugin/MenuBridgePlugin.
+  if let Err(e) = app.register_plugin(wry::WebviewBridgePlugin) {
+    log::error!("[WRY] failed to register WebviewBridgePlugin: {}", e);
+  }
+  // Register the Rust-side Window bridge plugin (id="ohos.window"). tao's OHOS window ops
+  // (restore_window / set_window_decorations / show_window / move_window_to / resize_window ...)
+  // are routed through WindowBridgePlugin via WindowClient. The ArkTS counterpart (WindowPlugin)
+  // is already in EntryAbility's bridgePlugins list, but without this Rust-side declaration
+  // configurePlugins never installs it and every window op fails with
+  // "Bridge plugin 'ohos.window' is not installed for '<module>'". Symmetric with the
+  // WebviewBridgePlugin registration above and the demo's app.register_plugin(WindowBridgePlugin).
+  if let Err(e) = app.register_plugin(openharmony_ability_plugin_window::WindowBridgePlugin) {
+    log::error!("[WRY] failed to register WindowBridgePlugin: {}", e);
+  }
+  // Register the Rust-side URL bridge plugin (id="ohos.url"). tauri_plugin_opener's
+  // open_url/open_path route through UrlBridgePlugin via UrlExt. The ArkTS counterpart
+  // (UrlPlugin) is already in EntryAbility's bridgePlugins list, but without this Rust-side
+  // declaration configurePlugins never installs it and every open call fails with
+  // "Bridge plugin 'ohos.url' is not installed for '<module>'". Symmetric with the
+  // Webview/WindowBridgePlugin registrations above.
+  if let Err(e) = app.register_plugin(openharmony_ability_plugin_url::UrlBridgePlugin) {
+    log::error!("[WRY] failed to register UrlBridgePlugin: {}", e);
+  }
+  if let Ok(client) = openharmony_ability_plugin_window::WindowClient::new(app) {
+    if OHOS_WINDOW_CLIENT.set(client).is_err() {
+      log::warn!("[WRY] OHOS_WINDOW_CLIENT already initialized");
+    }
+  } else {
+    log::error!("[WRY] Failed to create WindowClient for OHOS");
+  }
+}
+
+/// Fire-and-forget helper: spawns a worker thread to call an async WindowClient method.
+/// Avoids main-thread deadlock since the bridge TSFN dispatch is processed on the main
+/// thread's event loop, which remains free.
+#[cfg(target_env = "ohos")]
+fn ohos_window_spawn<F>(label: &'static str, f: F)
+where
+  F: std::future::Future<Output = napi_ohos::Result<()>> + Send + 'static,
+{
+  if let Some(client) = OHOS_WINDOW_CLIENT.get() {
+    let client = client.clone();
+    std::thread::spawn(move || {
+      if let Err(e) = futures_executor::block_on(f) {
+        log::warn!("[WRY] {} failed: {:?}", label, e);
+      }
+    });
+  } else {
+    log::warn!("[WRY] {} skipped: OHOS_WINDOW_CLIENT not initialized", label);
+  }
+}
+
 use std::{
   cell::RefCell,
   collections::{
@@ -196,9 +266,9 @@ pub struct WindowIdStore(Arc<Mutex<HashMap<TaoWindowId, WindowId>>>);
 
 impl WindowIdStore {
   pub fn insert(&self, w: TaoWindowId, id: WindowId) {
-    // On OHOS, WindowId is a ZST - all windows share the same key.
-    // Use or_insert to keep the first (main) window mapping and prevent
-    // child window creation from overwriting it.
+    // On OHOS, WindowId carries the real OHOS window id (0=main, >0=Float
+    // sub-window), so keys are distinct per window. or_insert only guards
+    // against an accidental double-insert of the same window.
     #[cfg(target_env = "ohos")]
     {
       self.0.lock().unwrap().entry(w).or_insert(id);
@@ -348,6 +418,7 @@ impl<T: UserEvent> Context<T> {
       Message::CreateWindow(
         window_id,
         Box::new(move |event_loop| {
+          #[cfg(target_env = "ohos")]
           log::debug!("[WRY] CreateWindow callback: start");
           let window = create_window(
             window_id,
@@ -1870,12 +1941,27 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
   }
 
   fn cookies_for_url(&self, url: Url) -> Result<Vec<Cookie<'static>>> {
-    let current_window_id = self.window_id.lock().unwrap();
+    // Lock hygiene (design.md D1 fix-3, OHOS only): release the window_id guard
+    // before rx.recv() — the original code held the Mutex across a blocking
+    // channel receive, stalling other ops (set_position/set_focus/set_cookie)
+    // on the same webview. On OHOS the receive can take long enough (bridge
+    // round-trip through the main thread) for that to matter, so the guard is
+    // dropped early there; other platforms keep the upstream behavior exactly.
+    // Upstream holds the guard for the whole function on other platforms.
+    #[cfg(not(target_env = "ohos"))]
+    let _window_id_guard = self.window_id.lock().unwrap();
+    #[cfg(target_env = "ohos")]
+    let current_window_id = {
+      let guard = self.window_id.lock().unwrap();
+      *guard
+    };
+    #[cfg(not(target_env = "ohos"))]
+    let current_window_id = *_window_id_guard;
     let (tx, rx) = channel();
     send_user_message(
       &self.context,
       Message::Webview(
-        *current_window_id,
+        current_window_id,
         self.webview_id,
         WebviewMessage::CookiesForUrl(url, tx),
       ),
@@ -2520,15 +2606,17 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
             "[WRY] set_focus: dispatching focus_window({}) to main thread",
             id
           );
-          // NAPI env is only available on the main thread — dispatch via event loop
-          return send_user_message(
-            &self.context,
-            Message::Task(Box::new(move || {
-              if let Err(e) = openharmony_ability::window::focus_window(id) {
-                log::warn!("[WRY] focus_window({}) failed: {:?}", id, e);
-              }
-            })),
-          );
+          // Bridge facade is async; use fire-and-forget worker thread to avoid
+          // main-thread deadlock (bridge TSFN dispatch needs main thread free).
+          ohos_window_spawn("focus_window", async move {
+            OHOS_WINDOW_CLIENT
+              .get()
+              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
+              .clone()
+              .focus_window(id)
+              .await
+          });
+          return Ok(());
         }
         return Ok(()); // Main window: focus is OS-managed
       }
@@ -2549,19 +2637,15 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
       };
       if let Some(id) = ohos_id {
         if id > 0 {
-          return send_user_message(
-            &self.context,
-            Message::Task(Box::new(move || {
-              if let Err(e) = openharmony_ability::window::set_window_focusable(id, focusable) {
-                log::warn!(
-                  "[WRY] set_window_focusable({},{}) failed: {:?}",
-                  id,
-                  focusable,
-                  e
-                );
-              }
-            })),
-          );
+          ohos_window_spawn("set_window_focusable", async move {
+            OHOS_WINDOW_CLIENT
+              .get()
+              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
+              .clone()
+              .set_window_focusable(id, focusable)
+              .await
+          });
+          return Ok(());
         }
         return Ok(());
       }
@@ -3797,15 +3881,21 @@ fn handle_user_message<T: UserEvent>(
           }
           #[allow(unused_variables)]
           WindowMessage::SetSkipTaskbar(skip) => {
-            #[cfg(all(
-              any(
-                target_os = "linux",
-                target_os = "dragonfly",
-                target_os = "freebsd",
-                target_os = "netbsd",
-                target_os = "openbsd"
-              ),
-              not(target_env = "ohos")
+            // Upstream cfg restored verbatim, with the Linux family additionally
+            // excluding OHOS (target_os is "linux" there but the backend has no
+            // skip-taskbar support).
+            #[cfg(any(
+              windows,
+              all(
+                any(
+                  target_os = "linux",
+                  target_os = "dragonfly",
+                  target_os = "freebsd",
+                  target_os = "netbsd",
+                  target_os = "openbsd"
+                ),
+                not(target_env = "ohos")
+              )
             ))]
             let _ = window.set_skip_taskbar(skip);
           }
@@ -4145,6 +4235,7 @@ fn handle_user_message<T: UserEvent>(
             }
           }
           WebviewMessage::SetBackgroundColor(color) => {
+            #[cfg(target_env = "ohos")]
             log::debug!(
               "[tauri-runtime-wry] SetBackgroundColor message received: {:?}",
               color
@@ -4153,8 +4244,6 @@ fn handle_user_message<T: UserEvent>(
               webview.set_background_color(color.map(Into::into).unwrap_or((255, 255, 255, 255)))
             {
               log::error!("failed to set webview background color: {e}");
-            } else {
-              log::debug!("[tauri-runtime-wry] SetBackgroundColor succeeded");
             }
           }
           WebviewMessage::ClearAllBrowsingData => {
@@ -4460,6 +4549,10 @@ fn handle_event_loop<T: UserEvent>(
     #[cfg(feature = "tracing")]
     active_tracing_spans,
   } = context;
+  // On non-OHOS platforms the close/destroy lifecycle is upstream-verbatim and
+  // never reads exit_state (OHOS-only ExitRequested dedup guard).
+  #[cfg(not(target_env = "ohos"))]
+  let _ = exit_state;
   if *control_flow != ControlFlow::Exit {
     *control_flow = ControlFlow::Wait;
   }
@@ -4470,6 +4563,14 @@ fn handle_event_loop<T: UserEvent>(
   // synchronously at the start of the next Rust event loop iteration, reading from
   // stored Rust values before the async destruction completes. See defensive guard
   // on wrapper.inner below.
+  //
+  // NOTE (known-issue #1, partially remediated): tao WindowId now carries the
+  //   real OHOS window id (the ZST deficiency was fixed — see openspec change
+  //   p1-window-state-per-window-rect Phase 3). This drain bypass is still
+  //   required: Float subwindow close goes through ArkTS destroyWindow → this
+  //   queue and produces no MainEvent::WindowDestroy (that event only fires
+  //   when the main window stage is torn down). Root-cause analysis:
+  //   doc/OHOS窗口遗留问题.md (issue 1).
   #[cfg(target_env = "ohos")]
   {
     use tao::platform::ohos::WindowExtOpenHarmony;
@@ -4494,12 +4595,55 @@ fn handle_event_loop<T: UserEvent>(
           })
       });
       if let Some(window_id) = matching_id {
-        on_close_requested(callback, window_id, windows.clone(), exit_state.clone());
+        on_close_requested_ohos(callback, window_id, windows.clone(), exit_state.clone());
       } else {
         log::debug!(
           "[wry] OHOS pending close: no matching Tauri window for OHOS window ID {}",
           ohos_win_id
         );
+      }
+    }
+
+    // Feed system window status back into the tao mirror state (known-issue #5,
+    // §5.3). windowStatusChange events are enqueued via the notify_window_status
+    // NAPI call; drained here and routed by real OHOS windowId to the matching
+    // tao Window, whose apply_window_status updates the visible/fullscreen
+    // mirror. Routing mirrors drain_pending_window_closes above (does not rely
+    // on the tao ZST WindowId; correct for multiple windows). Details:
+    // doc/OHOS窗口遗留问题.md (issue 5, §5.3).
+    let pending_status = tao::platform::ohos::ability::drain_pending_window_status();
+    for (ohos_win_id, status) in pending_status {
+      let applied = windows.0.borrow().iter().find_map(|(_id, wrapper)| {
+        let w = wrapper.inner.as_ref()?;
+        if w.window_id() == Some(ohos_win_id as i64) {
+          w.apply_window_status(status);
+          Some(())
+        } else {
+          None
+        }
+      });
+      if applied.is_none() {
+        // G6 / cross-cutting (tao#20): a failed Float window has window_id=None
+        // (ohos_win_id() == 0) — it matches no drained status and produces no
+        // status events (no real OHOS window), so its mirror stays silently
+        // stale. A drained-but-unmatched status therefore means either a real
+        // window (id != 0) destroyed between enqueue and drain (stale id) or a
+        // routing mismatch. Non-zero ids are diagnosable stale ids → warn;
+        // id == 0 (main window / failed-Float sentinel) stays at debug to
+        // avoid noise.
+        if ohos_win_id != 0 {
+          log::warn!(
+            "[wry] OHOS pending status drained but no matching window for id {} (status={}); \
+             stale id (window destroyed between queue and drain) or routing mismatch \
+             (failed Float windows never match: window_id=None)",
+            ohos_win_id, status
+          );
+        } else {
+          log::debug!(
+            "[wry] OHOS pending status: no match for id 0 (main window / failed-Float sentinel), status={}",
+            status
+          );
+        }
       }
     }
   }
@@ -4509,7 +4653,16 @@ fn handle_event_loop<T: UserEvent>(
       callback(RunEvent::Ready);
     }
 
+    // Upstream fires RunEvent::Resumed on every poll cycle; OHOS instead gets
+    // an Event::Resumed from the tao backend on foreground/restore, where the
+    // poll-based path never runs (ControlFlow::Wait).
+    #[cfg(not(target_env = "ohos"))]
     Event::NewEvents(StartCause::Poll) => {
+      callback(RunEvent::Resumed);
+    }
+
+    #[cfg(target_env = "ohos")]
+    Event::Resumed => {
       callback(RunEvent::Resumed);
     }
 
@@ -4518,7 +4671,6 @@ fn handle_event_loop<T: UserEvent>(
     }
 
     Event::LoopDestroyed => {
-      log::info!("[wry] Event::LoopDestroyed received");
       #[cfg(target_env = "ohos")]
       {
         // OHOS: check if ExitRequested was already sent via the window-close path
@@ -4655,19 +4807,41 @@ fn handle_event_loop<T: UserEvent>(
             }
           }
           TaoWindowEvent::CloseRequested => {
-            if on_close_requested(callback, window_id, windows, exit_state) {
-              #[cfg(not(target_env = "ohos"))]
-              {
-                *control_flow = ControlFlow::Exit;
-              }
+            #[cfg(not(target_env = "ohos"))]
+            on_close_requested(callback, window_id, windows);
+            // OHOS: on_close_requested_ohos drives destruction + exit checks
+            // itself; loop exit is driven by the system (LoopDestroyed), so its
+            // return value is intentionally ignored.
+            #[cfg(target_env = "ohos")]
+            {
+              let _ = on_close_requested_ohos(callback, window_id, windows, exit_state);
             }
           }
           TaoWindowEvent::Destroyed => {
-            if on_window_close(callback, window_id, windows, exit_state) {
-              #[cfg(not(target_env = "ohos"))]
-              {
-                *control_flow = ControlFlow::Exit;
+            #[cfg(not(target_env = "ohos"))]
+            {
+              let removed = windows.0.borrow_mut().remove(&window_id).is_some();
+              if removed {
+                let is_empty = windows.0.borrow().is_empty();
+                if is_empty {
+                  let (tx, rx) = channel();
+                  callback(RunEvent::ExitRequested { code: None, tx });
+
+                  let recv = rx.try_recv();
+                  let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
+
+                  if !should_prevent {
+                    *control_flow = ControlFlow::Exit;
+                  }
+                }
               }
+            }
+            // OHOS: the store entry is removed by the window-close path
+            // (on_window_close_ohos, idempotent); this arm is a safety net for
+            // any Destroyed event that arrives without a prior close.
+            #[cfg(target_env = "ohos")]
+            {
+              let _ = on_window_close_ohos(callback, window_id, windows, exit_state);
             }
           }
           TaoWindowEvent::Resized(size) => {
@@ -4707,10 +4881,14 @@ fn handle_event_loop<T: UserEvent>(
         let recv = rx.try_recv();
         let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
 
-        // Mark ExitRequested as sent to prevent duplicate from LoopDestroyed path
+        // OHOS: mark ExitRequested as sent to prevent the LoopDestroyed path
+        // from firing a duplicate.
+        #[cfg(target_env = "ohos")]
         exit_state.0.store(true, Ordering::SeqCst);
 
         if !should_prevent {
+          // OHOS: loop teardown is system-driven (LoopDestroyed); ControlFlow::Exit
+          // must not be set from here.
           #[cfg(not(target_env = "ohos"))]
           {
             *control_flow = ControlFlow::Exit;
@@ -4718,20 +4896,21 @@ fn handle_event_loop<T: UserEvent>(
         }
       }
       Message::Window(id, WindowMessage::Close) => {
-        if on_close_requested(callback, id, windows, exit_state) {
-          #[cfg(not(target_env = "ohos"))]
-          {
-            *control_flow = ControlFlow::Exit;
-          }
+        #[cfg(not(target_env = "ohos"))]
+        on_close_requested(callback, id, windows);
+        #[cfg(target_env = "ohos")]
+        {
+          let _ = on_close_requested_ohos(callback, id, windows, exit_state);
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
-        // Call on_window_close directly, skip CloseRequested to avoid recursion
-        if on_window_close(callback, id, windows, exit_state) {
-          #[cfg(not(target_env = "ohos"))]
-          {
-            *control_flow = ControlFlow::Exit;
-          }
+        #[cfg(not(target_env = "ohos"))]
+        on_window_close(id, windows);
+        // OHOS: call the full close handler directly, skipping CloseRequested
+        // to avoid recursion.
+        #[cfg(target_env = "ohos")]
+        {
+          let _ = on_window_close_ohos(callback, id, windows, exit_state);
         }
       }
       Message::UserEvent(t) => callback(RunEvent::UserEvent(t)),
@@ -4770,7 +4949,59 @@ fn handle_event_loop<T: UserEvent>(
   }
 }
 
+// Non-OHOS platforms keep the upstream close/destroy lifecycle verbatim:
+// CloseRequested/null-inner close here, and the Destroyed event handler in
+// `handle_event_loop` performs store removal + the all-windows-closed exit
+// check. The OHOS rework below (system-driven teardown, no reliable Destroyed
+// event, ExitRequested dedup) lives in separate `_ohos` functions.
+
+#[cfg(not(target_env = "ohos"))]
 fn on_close_requested<'a, T: UserEvent>(
+  callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
+  window_id: WindowId,
+  windows: Arc<WindowsStore>,
+) {
+  let (tx, rx) = channel();
+  let windows_ref = windows.0.borrow();
+  if let Some(w) = windows_ref.get(&window_id) {
+    let label = w.label.clone();
+    let window_event_listeners = w.window_event_listeners.clone();
+
+    drop(windows_ref);
+
+    let listeners = window_event_listeners.lock().unwrap();
+    let handlers = listeners.values();
+    for handler in handlers {
+      handler(&WindowEvent::CloseRequested {
+        signal_tx: tx.clone(),
+      });
+    }
+    callback(RunEvent::WindowEvent {
+      label,
+      event: WindowEvent::CloseRequested { signal_tx: tx },
+    });
+    if let Ok(true) = rx.try_recv() {
+    } else {
+      on_window_close(window_id, windows);
+    }
+  }
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn on_window_close(window_id: WindowId, windows: Arc<WindowsStore>) {
+  if let Some(window_wrapper) = windows.0.borrow_mut().get_mut(&window_id) {
+    window_wrapper.inner = None;
+    #[cfg(windows)]
+    window_wrapper.surface.take();
+  }
+}
+
+/// OHOS variant of `on_close_requested`: forwards to `on_window_close_ohos`
+/// (which also drives OS window destruction and the exit check).
+/// Returns `true` if the loop should exit (unused on OHOS — the system drives
+/// teardown via LoopDestroyed).
+#[cfg(target_env = "ohos")]
+fn on_close_requested_ohos<'a, T: UserEvent>(
   callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
   window_id: WindowId,
   windows: Arc<WindowsStore>,
@@ -4798,16 +5029,18 @@ fn on_close_requested<'a, T: UserEvent>(
     if let Ok(true) = rx.try_recv() {
       // User prevented close, do not call on_window_close
     } else {
-      return on_window_close(callback, window_id, windows, exit_state);
+      return on_window_close_ohos(callback, window_id, windows, exit_state);
     }
   }
   false
 }
 
-/// Handle window close: remove from store, fire events, check if event loop should exit.
-/// Returns `true` if all windows are closed and user did not prevent exit.
-/// Callers must set `ControlFlow::Exit` on non-OHOS platforms when this returns `true`.
-fn on_window_close<'a, T: UserEvent>(
+/// OHOS variant of `on_window_close`: remove from store, fire events, check if
+/// event loop should exit. Returns `true` if all windows are closed and user
+/// did not prevent exit (callers on OHOS never act on it — teardown is
+/// system-driven).
+#[cfg(target_env = "ohos")]
+fn on_window_close_ohos<'a, T: UserEvent>(
   callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
   window_id: WindowId,
   windows: Arc<WindowsStore>,
@@ -4816,6 +5049,35 @@ fn on_window_close<'a, T: UserEvent>(
   // Remove window entry from WindowsStore (idempotent)
   let removed = windows.0.borrow_mut().remove(&window_id);
   if let Some(mut window_wrapper) = removed {
+    // OHOS: tao's Window has no close/destroy impl, so the OS window is NOT
+    // destroyed by the default close path — only the Rust-side store entry is
+    // removed here. Without an explicit destroy_window call, the OS Float
+    // window stays on screen → ghost windows that diverge from Rust's records.
+    // destroy_window (NAPI→ArkHelper.closeWindow) actually destroys the OS
+    // window (Float: win.destroyWindow(); UIAbility: context.terminateSelf()).
+    //
+    // Recursion safety: destroy_window → ArkTS destroyWindow → FloatPage
+    // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
+    // The second on_window_close call hits `removed == None` (this block already
+    // removed it) and returns early — the idempotent remove breaks the cycle.
+    #[cfg(target_env = "ohos")]
+    {
+      use tao::platform::ohos::WindowExtOpenHarmony;
+      if let Some(ref inner) = window_wrapper.inner {
+        if let Some(ohos_id) = inner.window_id() {
+          log::info!("[wry] on_window_close: destroy_window ohos_id={}", ohos_id);
+          ohos_window_spawn("destroy_window", async move {
+            OHOS_WINDOW_CLIENT
+              .get()
+              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
+              .clone()
+              .destroy_window(ohos_id)
+              .await
+          });
+        }
+      }
+    }
+
     // Maintain drop order: surface must be dropped before window.
     // softbuffer::Surface holds Arc<Window>; if Window drops first,
     // Surface may access freed resources on drop.
@@ -5231,8 +5493,23 @@ You may have it installed on another user account, but it is not available for t
     use tao::platform::ohos::WindowExtOpenHarmony;
     use wry::WebViewBuilderExtOhos;
     if let Some(window_id) = window.window_id() {
+      log::info!("[tauri-runtime-wry DBG] window.window_id()=Some({}), passing to wry WebViewBuilder", window_id);
       webview_builder = webview_builder.with_window_id(window_id);
+    } else {
+      log::info!("[tauri-runtime-wry DBG] window.window_id()=None, NOT passing window_id to wry");
     }
+    // Forward use_https_scheme to wry (OHOS branch was missing this — Windows/Android
+    // branch above sets it, but OHOS didn't, so pl_attrs.use_https was always false
+    // and rewrite_https_url_if_matching never triggered). See ohos-webview-https-scheme.
+    webview_builder = webview_builder.with_https_scheme(webview_attributes.use_https_scheme);
+    // Forward drag_drop_overlay to wry (OHOS-only: transparent Stack that receives
+    // ArkUI drag events when ArkWeb doesn't bubble OS file drags to Web handlers).
+    // See ohos-webview-drag-drop-overlay.
+    webview_builder = webview_builder.with_drag_drop_overlay(webview_attributes.drag_drop_overlay);
+    // Pass the BridgeRuntime from the tao Window to wry's WebViewBuilder.
+    // This is required for the bridge-based webview backend (Phase B2).
+    let bridge_runtime = window.bridge_runtime();
+    webview_builder = webview_builder.with_bridge_runtime(bridge_runtime);
   }
 
   if let Some(background_throttling) = webview_attributes.background_throttling {
@@ -5359,10 +5636,14 @@ You may have it installed on another user account, but it is not available for t
           }
         }
         #[cfg(target_env = "ohos")]
-        tauri_runtime::webview::NewWindowResponse::Create { .. } => {
+        tauri_runtime::webview::NewWindowResponse::Create { window_id } => {
+          log::info!("[tauri-runtime-wry DBG] on_new_window response: Create (OHOS) window_id={:?}", window_id);
           wry::NewWindowResponse::Create {}
         }
-        tauri_runtime::webview::NewWindowResponse::Deny => wry::NewWindowResponse::Deny,
+        tauri_runtime::webview::NewWindowResponse::Deny => {
+          log::info!("[tauri-runtime-wry DBG] on_new_window response: Deny");
+          wry::NewWindowResponse::Deny
+        }
       }
     });
   }
@@ -5395,7 +5676,7 @@ You may have it installed on another user account, but it is not available for t
       None
     }
   } else {
-    #[cfg(feature = "unstable")]
+    #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
     {
       webview_builder = webview_builder.with_bounds(wry::Rect {
         position: LogicalPosition::new(0, 0).into(),
@@ -5408,7 +5689,16 @@ You may have it installed on another user account, but it is not available for t
         height_rate: 1.,
       })
     }
-    #[cfg(not(feature = "unstable"))]
+    #[cfg(all(not(feature = "unstable"), not(target_env = "ohos")))]
+    {
+      None
+    }
+    // On OHOS, a webview created without explicit bounds must stay bounds-less:
+    // wry marks it natural-layout in WebViewStyle (no width/height → ArkTS
+    // "100%"), so it follows window resizes. Passing full-window pixel bounds
+    // here would make it explicit-size and desync its page layout on resize
+    // (BuilderNode.update does not notify ArkWeb to relayout).
+    #[cfg(target_env = "ohos")]
     None
   };
 
@@ -5860,5 +6150,274 @@ fn to_tao_theme(theme: Option<Theme>) -> Option<TaoTheme> {
     Some(Theme::Light) => Some(TaoTheme::Light),
     Some(Theme::Dark) => Some(TaoTheme::Dark),
     _ => None,
+  }
+}
+
+#[cfg(test)]
+mod with_config_tests {
+  use super::*;
+  use tauri_utils::config::{Color, PreventOverflowConfig, PreventOverflowMargin, WindowConfig};
+
+  #[test]
+  fn with_config_default_applies_shared_flags() {
+    let cfg = WindowConfig::default();
+    let wb = WindowBuilderWrapper::with_config(&cfg);
+    assert!(!wb.center);
+    assert!(wb.prevent_overflow.is_none());
+    assert_eq!(wb.inner.window.title, cfg.title);
+    // Default config carries 800x600, so the size is always applied on OHOS.
+    assert!(wb.inner.window.inner_size.is_some());
+  }
+
+  #[test]
+  fn with_config_explicit_position_and_center() {
+    let mut cfg = WindowConfig::default();
+    cfg.label = "main".into();
+    cfg.x = Some(10.0);
+    cfg.y = Some(20.0);
+    let wb = WindowBuilderWrapper::with_config(&cfg);
+    assert!(!wb.center);
+    assert!(wb.inner.window.position.is_some());
+    // On OHOS the label is applied via the platform builder extension.
+    assert!(!cfg.label.is_empty());
+
+    let mut centered = WindowConfig::default();
+    centered.center = true;
+    let wb = WindowBuilderWrapper::with_config(&centered);
+    assert!(wb.center);
+  }
+
+  #[test]
+  fn with_config_size_constraints_and_background() {
+    let mut cfg = WindowConfig::default();
+    cfg.width = 800.0;
+    cfg.height = 600.0;
+    cfg.min_width = Some(200.0);
+    cfg.min_height = Some(100.0);
+    cfg.max_width = Some(1000.0);
+    cfg.max_height = Some(900.0);
+    cfg.background_color = Some(Color(1, 2, 3, 4));
+    let wb = WindowBuilderWrapper::with_config(&cfg);
+    assert!(wb.inner.window.inner_size.is_some());
+    let c = &wb.inner.window.inner_size_constraints;
+    assert!(c.min_width.is_some());
+    assert!(c.min_height.is_some());
+    assert!(c.max_width.is_some());
+    assert!(c.max_height.is_some());
+  }
+
+  #[test]
+  fn with_config_prevent_overflow_variants() {
+    let mut margin = WindowConfig::default();
+    margin.prevent_overflow = Some(PreventOverflowConfig::Margin(PreventOverflowMargin {
+      width: 12,
+      height: 34,
+    }));
+    let wb = WindowBuilderWrapper::with_config(&margin);
+    assert!(wb.prevent_overflow.is_some());
+
+    let mut disabled = WindowConfig::default();
+    disabled.prevent_overflow = Some(PreventOverflowConfig::Enable(false));
+    let wb = WindowBuilderWrapper::with_config(&disabled);
+    assert!(wb.prevent_overflow.is_none());
+
+    let mut enabled = WindowConfig::default();
+    enabled.prevent_overflow = Some(PreventOverflowConfig::Enable(true));
+    let wb = WindowBuilderWrapper::with_config(&enabled);
+    assert!(wb.prevent_overflow.is_some());
+  }
+
+  // ─── S9 fmt batch: WindowBuilderWrapper Debug impl (L915, host-constructible) ──
+
+  #[test]
+  fn window_builder_wrapper_debug_formats_fields() {
+    let cfg = WindowConfig::default();
+    let wb = WindowBuilderWrapper::with_config(&cfg);
+    let dbg = format!("{wb:?}");
+    assert!(dbg.contains("WindowBuilderWrapper"), "struct name missing: {dbg}");
+    assert!(dbg.contains("center"), "center field missing: {dbg}");
+    assert!(dbg.contains("prevent_overflow"), "prevent_overflow field missing: {dbg}");
+    assert!(!dbg.trim().is_empty());
+
+    let centered = WindowConfig::default();
+    let wb2 = WindowBuilderWrapper::with_config(&centered);
+    let dbg2 = format!("{wb2:?}");
+    assert!(dbg2.contains("center"), "second format run missing center: {dbg2}");
+  }
+}
+
+/// S7 pure-transform batch: runtime-abstract → tao type enum/struct mappings.
+/// These arms never fire naturally on OHOS (cursor changes, progress bar, DPI
+/// changes, …), so tests light them up directly from constructed inputs.
+#[cfg(test)]
+mod mapping_tests {
+  use super::*;
+  use tauri_runtime::window::CursorIcon;
+  use tauri_runtime::{ProgressBarState, ProgressBarStatus, UserAttentionType};
+
+  #[test]
+  fn cursor_icon_wrapper_maps_all_variants() {
+    let cases: Vec<(CursorIcon, fn(TaoCursorIcon) -> bool)> = vec![
+      (CursorIcon::Default, |i| matches!(i, TaoCursorIcon::Default)),
+      (CursorIcon::Crosshair, |i| matches!(i, TaoCursorIcon::Crosshair)),
+      (CursorIcon::Hand, |i| matches!(i, TaoCursorIcon::Hand)),
+      (CursorIcon::Arrow, |i| matches!(i, TaoCursorIcon::Arrow)),
+      (CursorIcon::Move, |i| matches!(i, TaoCursorIcon::Move)),
+      (CursorIcon::Text, |i| matches!(i, TaoCursorIcon::Text)),
+      (CursorIcon::Wait, |i| matches!(i, TaoCursorIcon::Wait)),
+      (CursorIcon::Help, |i| matches!(i, TaoCursorIcon::Help)),
+      (CursorIcon::Progress, |i| matches!(i, TaoCursorIcon::Progress)),
+      (CursorIcon::NotAllowed, |i| matches!(i, TaoCursorIcon::NotAllowed)),
+      (CursorIcon::ContextMenu, |i| matches!(i, TaoCursorIcon::ContextMenu)),
+      (CursorIcon::Cell, |i| matches!(i, TaoCursorIcon::Cell)),
+      (CursorIcon::VerticalText, |i| matches!(i, TaoCursorIcon::VerticalText)),
+      (CursorIcon::Alias, |i| matches!(i, TaoCursorIcon::Alias)),
+      (CursorIcon::Copy, |i| matches!(i, TaoCursorIcon::Copy)),
+      (CursorIcon::NoDrop, |i| matches!(i, TaoCursorIcon::NoDrop)),
+      (CursorIcon::Grab, |i| matches!(i, TaoCursorIcon::Grab)),
+      (CursorIcon::Grabbing, |i| matches!(i, TaoCursorIcon::Grabbing)),
+      (CursorIcon::AllScroll, |i| matches!(i, TaoCursorIcon::AllScroll)),
+      (CursorIcon::ZoomIn, |i| matches!(i, TaoCursorIcon::ZoomIn)),
+      (CursorIcon::ZoomOut, |i| matches!(i, TaoCursorIcon::ZoomOut)),
+      (CursorIcon::EResize, |i| matches!(i, TaoCursorIcon::EResize)),
+      (CursorIcon::NResize, |i| matches!(i, TaoCursorIcon::NResize)),
+      (CursorIcon::NeResize, |i| matches!(i, TaoCursorIcon::NeResize)),
+      (CursorIcon::NwResize, |i| matches!(i, TaoCursorIcon::NwResize)),
+      (CursorIcon::SResize, |i| matches!(i, TaoCursorIcon::SResize)),
+      (CursorIcon::SeResize, |i| matches!(i, TaoCursorIcon::SeResize)),
+      (CursorIcon::SwResize, |i| matches!(i, TaoCursorIcon::SwResize)),
+      (CursorIcon::WResize, |i| matches!(i, TaoCursorIcon::WResize)),
+      (CursorIcon::EwResize, |i| matches!(i, TaoCursorIcon::EwResize)),
+      (CursorIcon::NsResize, |i| matches!(i, TaoCursorIcon::NsResize)),
+      (CursorIcon::NeswResize, |i| matches!(i, TaoCursorIcon::NeswResize)),
+      (CursorIcon::NwseResize, |i| matches!(i, TaoCursorIcon::NwseResize)),
+      (CursorIcon::ColResize, |i| matches!(i, TaoCursorIcon::ColResize)),
+      (CursorIcon::RowResize, |i| matches!(i, TaoCursorIcon::RowResize)),
+    ];
+    for (icon, check) in cases {
+      let mapped = CursorIconWrapper::from(icon).0;
+      assert!(check(mapped), "CursorIcon mapping mismatch for {icon:?}");
+    }
+  }
+
+  #[test]
+  fn map_theme_covers_light_dark_and_fallback() {
+    assert!(matches!(map_theme(&TaoTheme::Light), Theme::Light));
+    assert!(matches!(map_theme(&TaoTheme::Dark), Theme::Dark));
+  }
+
+  #[test]
+  fn progress_state_wrapper_maps_all_statuses() {
+    let cases: Vec<(ProgressBarStatus, fn(TaoProgressState) -> bool)> = vec![
+      (ProgressBarStatus::None, |s| matches!(s, TaoProgressState::None)),
+      (ProgressBarStatus::Normal, |s| matches!(s, TaoProgressState::Normal)),
+      (ProgressBarStatus::Indeterminate, |s| matches!(s, TaoProgressState::Indeterminate)),
+      (ProgressBarStatus::Paused, |s| matches!(s, TaoProgressState::Paused)),
+      (ProgressBarStatus::Error, |s| matches!(s, TaoProgressState::Error)),
+    ];
+    for (status, check) in cases {
+      let mapped = ProgressStateWrapper::from(status).0;
+      assert!(check(mapped), "ProgressState mapping mismatch for {status:?}");
+    }
+  }
+
+  #[test]
+  fn progress_bar_state_wrapper_maps_fields() {
+    let full = ProgressBarState {
+      status: Some(ProgressBarStatus::Paused),
+      progress: Some(42),
+      desktop_filename: Some("app.desktop".into()),
+    };
+    let mapped = ProgressBarStateWrapper::from(full).0;
+    assert_eq!(mapped.progress, Some(42));
+    assert_eq!(mapped.desktop_filename.as_deref(), Some("app.desktop"));
+    assert!(matches!(mapped.state, Some(TaoProgressState::Paused)));
+
+    let none_state = ProgressBarState {
+      status: None,
+      progress: None,
+      desktop_filename: None,
+    };
+    let mapped = ProgressBarStateWrapper::from(none_state).0;
+    assert!(mapped.state.is_none());
+    assert_eq!(mapped.progress, None);
+  }
+
+  #[test]
+  fn device_event_filter_wrapper_maps_all_variants() {
+    assert!(matches!(
+      DeviceEventFilterWrapper::from(DeviceEventFilter::Always).0,
+      TaoDeviceEventFilter::Always
+    ));
+    assert!(matches!(
+      DeviceEventFilterWrapper::from(DeviceEventFilter::Never).0,
+      TaoDeviceEventFilter::Never
+    ));
+    assert!(matches!(
+      DeviceEventFilterWrapper::from(DeviceEventFilter::Unfocused).0,
+      TaoDeviceEventFilter::Unfocused
+    ));
+  }
+
+  #[test]
+  fn size_and_position_wrappers_map_logical_and_physical() {
+    let logical_size = SizeWrapper::from(Size::Logical(LogicalSize::new(640.0, 480.0)));
+    assert!(matches!(logical_size.0, TaoSize::Logical(_)));
+    let physical_size = SizeWrapper::from(Size::Physical(PhysicalSize::new(800u32, 600u32)));
+    assert!(matches!(physical_size.0, TaoSize::Physical(_)));
+
+    let logical_pos = PositionWrapper::from(Position::Logical(LogicalPosition::new(1.0, 2.0)));
+    assert!(matches!(logical_pos.0, TaoPosition::Logical(_)));
+    let physical_pos = PositionWrapper::from(Position::Physical(PhysicalPosition::new(3i32, 4i32)));
+    assert!(matches!(physical_pos.0, TaoPosition::Physical(_)));
+  }
+
+  #[test]
+  fn user_attention_type_wrapper_maps_both_variants() {
+    assert!(matches!(
+      UserAttentionTypeWrapper::from(UserAttentionType::Critical).0,
+      TaoUserAttentionType::Critical
+    ));
+    assert!(matches!(
+      UserAttentionTypeWrapper::from(UserAttentionType::Informational).0,
+      TaoUserAttentionType::Informational
+    ));
+  }
+
+  #[test]
+  fn dpi_wrapper_roundtrips_fields() {
+    let pos = PhysicalPosition::new(10i32, 20i32);
+    let wrapped: PhysicalPositionWrapper<i32> = PhysicalPositionWrapper::from(pos);
+    let back: PhysicalPosition<i32> = wrapped.into();
+    assert_eq!((back.x, back.y), (10, 20));
+
+    let size = PhysicalSize::new(640u32, 480u32);
+    let wrapped: PhysicalSizeWrapper<u32> = PhysicalSizeWrapper::from(size);
+    let back: PhysicalSize<u32> = wrapped.into();
+    assert_eq!((back.width, back.height), (640, 480));
+  }
+
+  #[test]
+  fn rect_wrapper_maps_position_and_size() {
+    let rect = tauri_runtime::dpi::Rect {
+      position: Position::Physical(PhysicalPosition::new(1i32, 2i32)),
+      size: Size::Physical(PhysicalSize::new(3u32, 4u32)),
+    };
+    let mapped = RectWrapper::from(rect).0;
+    assert!(matches!(mapped.position, TaoPosition::Physical(_)));
+    assert!(matches!(mapped.size, TaoSize::Physical(_)));
+  }
+
+  #[test]
+  fn synthesized_window_event_maps_focused_and_drag_drop() {
+    let focused = WindowEventWrapper::from(SynthesizedWindowEvent::Focused(true));
+    assert!(matches!(focused.0, Some(WindowEvent::Focused(true))));
+
+    let drop_event = DragDropEvent::Enter {
+      paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
+      position: PhysicalPosition::new(5.0, 6.0),
+    };
+    let dd = WindowEventWrapper::from(SynthesizedWindowEvent::DragDrop(drop_event));
+    assert!(matches!(dd.0, Some(WindowEvent::DragDrop(_))));
   }
 }

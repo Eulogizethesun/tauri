@@ -472,6 +472,35 @@ impl<R: Runtime> AppManager<R> {
     (self.webview.invoke_handler)(invoke)
   }
 
+  #[cfg(target_env = "ohos")]
+  pub fn extend_api(self: &Arc<Self>, plugin: &str, invoke: Invoke<R>) -> bool {
+    // try_lock fast path first: when the plugin store lock is free (the common
+    // case), run the command SYNCHRONOUSLY on the calling thread (the OHOS main
+    // thread, where `on_message` dispatches IPC). Plugin resolve/reject then
+    // drives the response `webview.eval` from that same main thread — required
+    // by ArkWeb's main-thread affinity. Only on actual lock contention do we
+    // offload to `spawn_blocking` so the main thread never blocks on the lock
+    // (appfreeze safeguard), trading away main-thread eval affinity in that
+    // rare path. See openspec/changes/p1-invoke-appfreeze/design.md Decision 2.
+    match self.plugins.try_lock() {
+      Ok(mut store) => store.extend_api(plugin, invoke),
+      Err(_) => {
+        // Plugin store lock contention -> offload to the tokio blocking pool;
+        // the main thread returns immediately and the command is not lost.
+        let this = self.clone();
+        let plugin_owned = plugin.to_owned();
+        crate::async_runtime::spawn_blocking(move || {
+          this
+            .plugins
+            .lock()
+            .expect("poisoned plugin store")
+            .extend_api(&plugin_owned, invoke)
+        });
+        true
+      }
+    }
+  }
+  #[cfg(not(target_env = "ohos"))]
   pub fn extend_api(&self, plugin: &str, invoke: Invoke<R>) -> bool {
     self
       .plugins

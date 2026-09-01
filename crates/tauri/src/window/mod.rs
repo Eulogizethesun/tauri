@@ -54,6 +54,55 @@ use std::{
   sync::{Arc, Mutex, MutexGuard},
 };
 
+/// Obtains a `MenuClient` from the global OHOS app singleton.
+/// Returns `None` if the app is not yet initialized.
+#[cfg(target_env = "ohos")]
+fn ohos_menu_client() -> Option<openharmony_ability_plugin_menu::MenuClient> {
+  use openharmony_ability_plugin_menu::MenuExt;
+  let guard = crate::ohos::APP.lock().ok()?;
+  let app = guard.as_ref()?;
+  app.menu().ok()
+}
+
+/// Dispatches a menu visibility update through muda's dedicated OHOS worker so
+/// that all menu operations (set_menu, remove_menu, show/hide) share one FIFO
+/// queue. Previously this used `async_runtime::spawn` (tokio) while
+/// `refresh_menubar` used muda's worker — two executors with no FIFO guarantee
+/// meant the empty "remove_menu" dispatch could land 1ms after the real data,
+/// clearing the Menu Bar. Routing both through muda's worker ensures the empty
+/// dispatch (called first in `remove_menu`) always precedes the real data.
+#[cfg(target_env = "ohos")]
+fn ohos_menu_set_visible(visible: bool, window_id: String) {
+  use openharmony_ability_plugin_menu::MenuExt;
+  muda::dispatch_menu_bridge_call(move || {
+    if let Some(client) = ohos_menu_client() {
+      futures_executor::block_on(async move {
+        let _ = client
+          .set_menubar_visible(openharmony_ability_plugin_menu::MenuSetVisibleRequest {
+            visible,
+            window_id,
+          })
+          .await;
+      });
+    }
+  });
+}
+
+/// Dispatches a menu JSON update through muda's dedicated OHOS worker (same
+/// rationale as `ohos_menu_set_visible`): serialise all menu dispatches through
+/// the single FIFO queue so real data always becomes the final state.
+#[cfg(target_env = "ohos")]
+fn ohos_menu_set_json(json_data: String, window_id: String) {
+  use openharmony_ability_plugin_menu::MenuExt;
+  muda::dispatch_menu_bridge_call(move || {
+    if let Some(client) = ohos_menu_client() {
+      futures_executor::block_on(async move {
+        let _ = client.set_menu_json(json_data, window_id).await;
+      });
+    }
+  });
+}
+
 /// Monitor descriptor.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -478,7 +527,7 @@ tauri::Builder::default()
         .inner()
         .refresh_menubar(window.label())
         .ok();
-      openharmony_ability::menu::set_menubar_visible(true, window.label().to_string()).ok();
+      ohos_menu_set_visible(true, window.label().to_string());
     }
 
     Ok(window)
@@ -1336,7 +1385,7 @@ tauri::Builder::default()
     #[cfg(target_env = "ohos")]
     {
       menu.inner().refresh_menubar(self.label()).ok();
-      openharmony_ability::menu::set_menubar_visible(true, self.label().to_string()).ok();
+      ohos_menu_set_visible(true, self.label().to_string());
     }
 
     let window = self.clone();
@@ -1387,8 +1436,8 @@ tauri::Builder::default()
 
     #[cfg(target_env = "ohos")]
     if let Some(_menu) = &prev_menu {
-      openharmony_ability::menu::set_menubar_visible(false, self.label().to_string()).ok();
-      openharmony_ability::menu::set_menu_json("[]".to_string(), self.label().to_string()).ok();
+      ohos_menu_set_visible(false, self.label().to_string());
+      ohos_menu_set_json("[]".to_string(), self.label().to_string());
     }
 
     // remove from the window
@@ -1428,7 +1477,7 @@ tauri::Builder::default()
   pub fn hide_menu(&self) -> crate::Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      openharmony_ability::menu::set_menubar_visible(false, self.label().to_string()).ok();
+      ohos_menu_set_visible(false, self.label().to_string());
       return Ok(());
     }
 
@@ -1469,7 +1518,7 @@ tauri::Builder::default()
       if let Some(window_menu) = &*self.menu_lock() {
         window_menu.menu.inner().refresh_menubar(self.label()).ok();
       }
-      openharmony_ability::menu::set_menubar_visible(true, self.label().to_string()).ok();
+      ohos_menu_set_visible(true, self.label().to_string());
       return Ok(());
     }
 
@@ -1507,7 +1556,10 @@ tauri::Builder::default()
   pub fn is_menu_visible(&self) -> crate::Result<bool> {
     #[cfg(target_env = "ohos")]
     {
-      return Ok(openharmony_ability::menu::is_menubar_visible(self.label()));
+      if let Some(client) = ohos_menu_client() {
+        return Ok(client.is_menubar_visible(self.label()));
+      }
+      return Ok(true);
     }
 
     #[cfg(not(target_env = "ohos"))]

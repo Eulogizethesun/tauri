@@ -2,7 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "run-app",
   "description": "permissions to run the app",
-  "windows": ["main", "main-*", "test-*"],
+  "windows": [
+    "main",
+    "main-*",
+    "test-*"
+  ],
   "permissions": [
     "core:window:allow-is-enabled",
     "core:window:allow-set-enabled",
@@ -15,9 +19,13 @@
       ]
     },
     "allow-perform-request",
+    "allow-probe-app-monitors",
+    "allow-probe-display-refresh-rate",
+    "allow-probe-app-menu-set-remove",
+    "allow-probe-window-menu-set-remove",
+    "allow-probe-webview-reparent",
     "allow-echo",
     "allow-spam",
-    "allow-write-test-report",
     "allow-clear-test-report",
     "allow-append-test-result",
     "allow-console-log",
@@ -39,9 +47,17 @@
     "allow-create-window-no-throttle",
     "allow-create-transparent-window",
     "allow-create-borderless-window",
+    "allow-create-decorated-window",
     "allow-create-transparent-borderless-window",
-    "allow-dummy-command", 
-    "allow-close-test-window",
+    "allow-create-ui-ability-window",
+    "allow-create-ui-ability-windows-x3",
+    "allow-create-transparent-ui-ability-window",
+    "allow-set-ime-position-test",
+    "allow-get-ime-position-result",
+    "core:window:allow-request-user-attention",
+    "allow-transparent-test-start",
+    "allow-create-ohos-test-webview",
+    "allow-dummy-command",
     "allow-get-ohos-version-info",
     "allow-set-deny-new-window",
     "allow-set-create-new-window",
@@ -50,6 +66,8 @@
     "allow-test-web-page-snapshot",
     "allow-test-create-pdf",
     "allow-set-download-test-mode",
+    "allow-count-webview-windows",
+    "allow-close-all-test-windows",
     "allow-create-counter",
     "allow-increment-counter",
     "allow-get-counter-value",
@@ -62,6 +80,10 @@
     "allow-test-async-spawn",
     "allow-simulate-tray-click",
     "app-menu:default",
+    "deep-link:default",
+    "deep-link:allow-register",
+    "deep-link:allow-unregister",
+    "deep-link:allow-is-registered",
     "sample:allow-ping-scoped",
     "sample:global-scope",
     "core:default",
@@ -73,7 +95,6 @@
     "core:app:allow-default-window-icon",
     "core:window:allow-set-theme",
     "core:window:allow-center",
-    "core:window:allow-request-user-attention",
     "core:window:allow-set-resizable",
     "core:window:allow-set-maximizable",
     "core:window:allow-set-minimizable",
@@ -107,10 +128,18 @@
     "core:window:allow-set-cursor-position",
     "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "core:window:allow-set-progress-bar",
     "core:window:allow-set-icon",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-background-color",
+    "core:window:allow-current-monitor",
+    "core:window:allow-primary-monitor",
+    "core:window:allow-available-monitors",
+    "core:window:allow-monitor-from-point",
+    "core:window:allow-cursor-position",
+    "core:window:allow-set-visible-on-all-workspaces",
+    "core:window:allow-set-title-bar-style",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-create-webview",
     "core:webview:allow-set-webview-size",
@@ -139,14 +168,37 @@
     "http:allow-fetch-read-body",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://httpbin.org/*" }, { "url": "https://www.example.com/*" }, { "url": "https://jsonplaceholder.typicode.com/*" }, { "url": "http://localhost:3003/*" }]
+      "allow": [
+        {
+          "url": "https://httpbin.org/*"
+        },
+        {
+          "url": "https://www.example.com/*"
+        },
+        {
+          "url": "https://jsonplaceholder.typicode.com/*"
+        },
+        {
+          "url": "http://localhost:3003/*"
+        },
+        {
+          "url": "http://localhost:3005/*"
+        },
+        {
+          "url": "http://127.0.0.1:3005/*"
+        }
+      ]
     },
     "os:default",
     "os:allow-platform",
+    "os:allow-hostname",
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-image",
+    "clipboard-manager:allow-read-image",
+    "clipboard-manager:allow-write-html",
+    "clipboard-manager:allow-clear",
     "process:default",
     "process:allow-restart",
     "updater:default",
@@ -159,11 +211,28 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "notification:default",
+    "window-state:default",
     "sentry:default",
     "allow-sentry-test-breadcrumb",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-unregister-all",
-    "global-shortcut:allow-is-registered"
+    "allow-test-persisted-scope",
+    "allow-clear-persisted-scope",
+    "allow-clear-window-state",
+    "allow-sentry-test-panic",
+    "allow-fault-injection-set-rule",
+    "allow-fault-injection-clear",
+    "core:window:allow-destroy",
+    "core:window:allow-set-badge-count",
+    "core:window:allow-set-badge-label",
+    "core:window:allow-set-size-constraints",
+    "core:webview:allow-set-webview-zoom",
+    "core:webview:allow-clear-all-browsing-data",
+    "core:webview:allow-set-webview-auto-resize",
+    "core:webview:allow-set-webview-focus",
+    "fs:allow-write-text-file",
+    "fs:allow-read-text-file",
+    "shell:allow-spawn",
+    "fs:allow-write",
+    "fs:allow-read-text-file-lines",
+    "fs:allow-read-text-file-lines-next"
   ]
 }

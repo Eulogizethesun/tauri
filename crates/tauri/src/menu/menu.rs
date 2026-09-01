@@ -117,17 +117,6 @@ impl<R: Runtime> Menu<R> {
     let handle = manager.app_handle();
     let app_handle = handle.clone();
 
-    #[cfg(target_env = "ohos")]
-    let menu = {
-      let menu = muda::Menu::new();
-      MenuInner {
-        id: menu.id().clone(),
-        inner: Some(menu),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let menu = run_main_thread!(handle, || {
       let menu = muda::Menu::new();
       MenuInner {
@@ -146,17 +135,6 @@ impl<R: Runtime> Menu<R> {
     let app_handle = handle.clone();
 
     let id = id.into();
-    #[cfg(target_env = "ohos")]
-    let menu = {
-      let menu = muda::Menu::with_id(id.clone());
-      MenuInner {
-        id,
-        inner: Some(menu),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let menu = run_main_thread!(handle, || {
       let menu = muda::Menu::with_id(id.clone());
       MenuInner {
@@ -316,19 +294,13 @@ impl<R: Runtime> Menu<R> {
   /// [`Submenu`]: super::Submenu
   pub fn append(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().append(kind.inner().inner_muda())
+    })?
+    .map_err(Into::<crate::Error>::into)?;
     #[cfg(target_env = "ohos")]
-    {
-      (*self.0).as_ref().append(kind.inner().inner_muda())?;
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0).as_ref().append(kind.inner().inner_muda())
-      })?
-      .map_err(Into::into)
-    }
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(())
   }
 
   /// Add menu items to the end of this menu. It calls [`Menu::append`] in a loop internally.
@@ -366,19 +338,13 @@ impl<R: Runtime> Menu<R> {
   /// [`Submenu`]: super::Submenu
   pub fn prepend(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().prepend(kind.inner().inner_muda())
+    })?
+    .map_err(Into::<crate::Error>::into)?;
     #[cfg(target_env = "ohos")]
-    {
-      (*self.0).as_ref().prepend(kind.inner().inner_muda())?;
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0).as_ref().prepend(kind.inner().inner_muda())
-      })?
-      .map_err(Into::into)
-    }
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(())
   }
 
   /// Add menu items to the beginning of this menu. It calls [`Menu::insert_items`] with position of `0` internally.
@@ -413,21 +379,13 @@ impl<R: Runtime> Menu<R> {
   /// [`Submenu`]: super::Submenu
   pub fn insert(&self, item: &dyn IsMenuItem<R>, position: usize) -> crate::Result<()> {
     let kind = item.kind();
+    run_item_main_thread!(self, |self_: Self| (*self_.0)
+      .as_ref()
+      .insert(kind.inner().inner_muda(), position))?
+    .map_err(Into::<crate::Error>::into)?;
     #[cfg(target_env = "ohos")]
-    {
-      (*self.0)
-        .as_ref()
-        .insert(kind.inner().inner_muda(), position)?;
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| (*self_.0)
-        .as_ref()
-        .insert(kind.inner().inner_muda(), position))?
-      .map_err(Into::into)
-    }
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(())
   }
 
   /// Insert menu items at the specified `position` in the menu.
@@ -461,41 +419,26 @@ impl<R: Runtime> Menu<R> {
   /// Remove a menu item from this menu.
   pub fn remove(&self, item: &dyn IsMenuItem<R>) -> crate::Result<()> {
     let kind = item.kind();
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().remove(kind.inner().inner_muda())
+    })?
+    .map_err(Into::<crate::Error>::into)?;
     #[cfg(target_env = "ohos")]
-    {
-      (*self.0).as_ref().remove(kind.inner().inner_muda())?;
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0).as_ref().remove(kind.inner().inner_muda())
-      })?
-      .map_err(Into::into)
-    }
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(())
   }
 
   /// Remove the menu item at the specified position from this menu and returns it.
   pub fn remove_at(&self, position: usize) -> crate::Result<Option<MenuItemKind<R>>> {
-    #[cfg(target_env = "ohos")]
-    {
-      let result = (*self.0)
+    let result = run_item_main_thread!(self, |self_: Self| {
+      (*self_.0)
         .as_ref()
         .remove_at(position)
-        .map(|i| MenuItemKind::from_muda(self.0.app_handle.clone(), i));
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(result)
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0)
-          .as_ref()
-          .remove_at(position)
-          .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
-      })
-    }
+        .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
+    })?;
+    #[cfg(target_env = "ohos")]
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(result)
   }
 
   /// Retrieves the menu item matching the given identifier.
@@ -513,28 +456,14 @@ impl<R: Runtime> Menu<R> {
 
   /// Returns a list of menu items that has been added to this menu.
   pub fn items(&self) -> crate::Result<Vec<MenuItemKind<R>>> {
-    #[cfg(target_env = "ohos")]
-    {
-      Ok(
-        (*self.0)
-          .as_ref()
-          .items()
-          .into_iter()
-          .map(|i| MenuItemKind::from_muda(self.0.app_handle.clone(), i))
-          .collect::<Vec<_>>(),
-      )
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0)
-          .as_ref()
-          .items()
-          .into_iter()
-          .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
-          .collect::<Vec<_>>()
-      })
-    }
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0)
+        .as_ref()
+        .items()
+        .into_iter()
+        .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
+        .collect::<Vec<_>>()
+    })
   }
 
   /// Set this menu as the application menu.

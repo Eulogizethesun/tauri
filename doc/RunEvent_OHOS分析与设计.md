@@ -178,7 +178,7 @@ tao/winit 的生命周期事件设计经历了两代演进：
 | RunEvent 变体 | 功能 | tao 映射来源 | OHOS 触发时机 | OHOS 状态 | 备注 |
 |--------------|------|------------|-------------|-----------|------|
 | `Ready` | 应用就绪 | `NewEvents(StartCause::Init)` | `SurfaceCreate` | ✅ 正常触发 | |
-| `ExitRequested` | 即将退出 | 合成（窗口关闭/`RequestExit`） | 最后窗口关闭 / `AppHandle::exit()` | ✅ 正常触发 | |
+| `ExitRequested` | 即将退出 | 合成（窗口关闭/`RequestExit`/`LoopDestroyed`） | 最后窗口关闭 / `AppHandle::exit()` / `onDestroy`（含系统关闭，见 2.2 时序修复） | ✅ 正常触发 | |
 | `Exit` | 已退出 | `LoopDestroyed` | `MainEvent::Destroy` | ✅ 正常触发 | |
 | `WindowEvent` | 窗口事件 | `Event::WindowEvent` | 各种窗口操作 | ✅ 正常触发 | Resized/Focused/ScaleFactorChanged/CloseRequested |
 | `WebviewEvent` | Webview 事件 | `Event::UserEvent(WebviewEvent)` | JS→Rust 事件 | ✅ 正常触发 | |
@@ -202,7 +202,7 @@ tao/winit 的生命周期事件设计经历了两代演进：
 | `onResume` (MainEvent::Resume) | Ability 获焦可交互 | `Event::Resumed` | 🚫 跨平台遗留：tauri 未适配，`_ => ()` 丢弃（不在本次解决） |
 | `onPause` (MainEvent::Pause) | Ability 失焦但仍可见 | `debug!("App Paused")` — 未映射 | 🚫 跨平台遗留（不在本次解决） |
 | `onStop` | Ability 不再可见 | 无 | ❌ 无 |
-| `onDestroy` (MainEvent::Destroy) | Ability 被销毁 | `warn!("TODO")` — 未映射 | ❌ 无 |
+| `onDestroy` (MainEvent::Destroy) | Ability 被销毁 | `MainEvent::Destroy` → `Event::LoopDestroyed`（tao/src/platform_impl/ohos/mod.rs） | ✅ 已映射：`RunEvent::ExitRequested{code:None}` + `RunEvent::Exit`（tauri-runtime-wry OHOS 分支；prevent_exit 在此路径被丢弃，无法阻止退出） |
 | `onSaveState` (MainEvent::SaveState) | 状态保存 | `warn!("TODO")` — 未映射 | ❌ 无 |
 | `onNewWant` | 深链接/新 Intent | `MainEvent::NewWant` → `Event::Opened` | ✅ 已映射 |
 | `SurfaceCreate` | 界面创建 | `Event::NewEvents(Init)` + `Event::Resumed` | `RunEvent::Ready` + `Event::Resumed` 被 `_ => ()` 丢弃（🚫 跨平台遗留） |
@@ -214,6 +214,7 @@ tao/winit 的生命周期事件设计经历了两代演进：
 |------|----------|------|-------------|
 | `Resumed`/`Suspended` 跨平台遗留 — tauri 未适配 Tao 生命周期事件演进，`Event::Resumed`/`Event::Suspended` 被 `_ => ()` 丢弃，`StartCause::Poll → Resumed` 是死代码 | 🔴 高 | 所有平台（含桌面）都无法响应后台恢复/挂起，但目前无人依赖该事件所以静默失效 | 🚫 不在本次解决，标记为历史遗留 |
 | `onNewWant` / Opened 深链接缺失 | 🟡 中 | OHOS 应用无法处理深链接跳转 | ✅ 已解决：openharmony-ability 新增 `NewWant` + ArkTS `onNewWant`，tao 映射到 `Event::Opened`，tauri-runtime cfg 扩展 |
+| `onDestroy` 退出链时序缺陷 — `onAbilityDestroy()`（触发 Rust `Event::Destroy → LoopDestroyed → RunEvent::ExitRequested/Exit` 的唯一 ArkTS 钩子）曾排在 `onDestroy` 异步队列尾部、位于两个 await 桥接往返之后；系统在 onDestroy 后 ~12ms 即 ClearSession 强杀进程（hilog 实测 onWindowStageDestroy→onDestroy→PROCESS_KILL 仅 12ms），异步链永远跑不完 → 系统关闭（最近任务/任务管理器）场景 RunEvent 退出链零日志，与桌面端语义不一致 | 🔴 高 | app 在 `on_run_event` 里写的退出清理逻辑（保存状态/flush 文件）在系统关闭时不执行 | ✅ 已解决（2026-08-31）：`NativeAbility.onDestroy` 将 `onAbilityDestroy()` 同步前置到入口（`BridgeHostRegistry.beginClosing` 之后、`enqueueLifecycleOperation` 之前），全链同步微秒级完成；审计确认 prevent_exit 在 LoopDestroyed 路径被 tauri-runtime-wry 丢弃（不会挂起）、`RunEvent::Exit → cleanup_before_exit` 只清内存表不发 bridge 调用、不影响接续（onWindowStageRestore）路径。注：窗口关闭按钮路径（CloseRequested→Destroyed→ExitRequested→Exit）修复前即正常；本修复补齐的是系统强杀路径 |
 | `onStart/onStop` 生命周期缺失 | 🟢 低 | 大多数应用不需要，但完整性缺失 | 🚫 不解决 |
 | `onSaveState` 状态保存缺失 | 🟢 低 | OHOS 特定需求，大多数应用不使用 | 🚫 不解决 |
 

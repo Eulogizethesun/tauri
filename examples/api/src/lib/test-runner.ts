@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export type TestStatus = 'pass' | 'fail' | 'skip';
-export type TestCategory = 'auto' | 'side-effect' | 'manual';
+export type TestCategory = 'auto' | 'side-effect' | 'manual' | 'driver';
 
 export interface TestCase {
   name: string;
@@ -27,6 +27,19 @@ export interface TestReport {
   results: TestResult[];
 }
 
+/**
+ * Throw to mark a test as skipped at runtime — e.g. a command is not
+ * implemented on this platform, a permission is missing, or an optional
+ * plugin is not registered. runTests recognises the `skip:` prefix and
+ * records status='skip' (with the reason) instead of 'fail'.
+ *
+ * This is the honest alternative to silently catching an error and
+ * returning (which would falsely report 'pass').
+ */
+export function skip(reason: string): never {
+  throw new Error(`skip: ${reason}`);
+}
+
 const TEST_TIMEOUT_MS = 5000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -49,17 +62,22 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 /**
  * Append a test result to the report file on the device.
  * Called automatically by runTests after each test completes.
- * Fire-and-forget: does not block test execution if the invoke hangs.
+ * Timeouts after 5s so a hung IPC cannot stall the whole suite
+ * (2026-08-27: a killed app left the runner awaiting forever with
+ * a partial report and no footer — indistinguishable from a hang).
  */
 function appendResult(result: TestResult, index: number, total: number): void {
-  invoke('append_test_result', {
-    name: result.name,
-    status: result.status,
-    duration: result.duration,
-    error: result.error || null,
-    index,
-    total,
-  }).catch((e) => { console.error('append_test_result failed:', e, 'name:', result.name); });
+  withTimeout(
+    invoke('append_test_result', {
+      name: result.name,
+      status: result.status,
+      duration: result.duration,
+      error: result.error || null,
+      index,
+      total,
+    }),
+    5000
+  ).catch((e: unknown) => { console.error('append_test_result failed:', e, 'name:', result.name); });
 }
 
 export async function runTests(
@@ -96,12 +114,14 @@ export async function runTests(
         duration: Math.round(performance.now() - start),
       };
     } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      const isSkip = typeof msg === 'string' && msg.startsWith('skip:');
       result = {
         name: test.name,
         category: test.category,
-        status: 'fail',
+        status: isSkip ? 'skip' : 'fail',
         duration: Math.round(performance.now() - start),
-        error: e?.message || String(e),
+        error: isSkip ? msg.slice('skip:'.length).trim() : msg,
       };
     }
 

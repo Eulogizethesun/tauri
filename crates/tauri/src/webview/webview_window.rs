@@ -25,6 +25,8 @@ use crate::{
   runtime::{window::CursorIcon, UserAttentionType},
 };
 use tauri_runtime::webview::NewWindowFeatures;
+#[cfg(target_env = "ohos")]
+use tauri_runtime::WindowDispatch;
 use tauri_utils::config::{BackgroundThrottlingPolicy, Color, WebviewUrl, WindowConfig};
 use url::Url;
 
@@ -1037,9 +1039,25 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///
   /// **macOS** doesn't provide such method and is always enabled by default,
   /// but you still need to add menu item accelerators to use shortcuts.
+  ///
+  /// **OHOS** is enabled by default (ArkWeb native clipboard shortcuts);
+  /// use [`Self::disable_clipboard_access`] to intercept keyboard
+  /// Ctrl+C/X/V/A/Z/Y.
   #[must_use]
   pub fn enable_clipboard_access(mut self) -> Self {
     self.webview_builder = self.webview_builder.enable_clipboard_access();
+    self
+  }
+
+  /// Disables clipboard access for the page.
+  ///
+  /// This is the default on **Linux** and **Windows**. On **OHOS** the default
+  /// is enabled (ArkWeb native clipboard shortcuts); calling this intercepts
+  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview. See the
+  /// ohos-webview-flag-clipboard spec.
+  #[must_use]
+  pub fn disable_clipboard_access(mut self) -> Self {
+    self.webview_builder = self.webview_builder.disable_clipboard_access();
     self
   }
 
@@ -1151,6 +1169,18 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   #[must_use]
   pub fn use_https_scheme(mut self, enabled: bool) -> Self {
     self.webview_builder = self.webview_builder.use_https_scheme(enabled);
+    self
+  }
+
+  /// Sets whether to render a transparent drag-drop overlay (OHOS-only).
+  ///
+  /// When enabled, a transparent Stack with `HitTestMode.Transparent` is rendered
+  /// above the Web component to receive ArkUI drag events. Pointer events pass
+  /// through to the Web. See `WebviewBuilder::drag_drop_overlay`.
+  #[cfg(target_env = "ohos")]
+  #[must_use]
+  pub fn drag_drop_overlay(mut self, enabled: bool) -> Self {
+    self.webview_builder = self.webview_builder.drag_drop_overlay(enabled);
     self
   }
 
@@ -1429,13 +1459,30 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
 impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: Main window that reuses the existing UIAbility container. Only one can exist (singleton).
+  /// - `UIAbility`: UIAbility main window. The first one (windowId=0) reuses the
+  ///   existing container; subsequent ones start a new EntryAbility instance via
+  ///   `context.startAbility` (requires `launchType: standard` in module.json5).
   /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
   ///
   /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
   pub fn ohos_window_kind(mut self, kind: crate::ohos::OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
+  }
+}
+
+#[cfg(target_env = "ohos")]
+impl<R: Runtime> WebviewWindow<R> {
+  /// Returns the OHOS OS-level window ID (0 for main UIAbility window, >0 for
+  /// Float sub-windows / subsequent UIAbility instances).
+  ///
+  /// Exposed so application code (e.g. close_all_test_windows) can call
+  /// openharmony-ability's `destroy_window(id)` to actually destroy the system
+  /// window — tao's `Window::close` is a no-op on OHOS and does not call
+  /// ArkTS `destroyWindow()`, so `WebviewWindow::close()` alone leaves the
+  /// system window visible on screen.
+  pub fn ohos_window_id(&self) -> Option<i64> {
+    self.window.window.dispatcher.ohos_window_id().ok().flatten()
   }
 }
 

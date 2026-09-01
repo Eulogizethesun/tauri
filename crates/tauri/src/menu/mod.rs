@@ -19,9 +19,27 @@ pub use builders::*;
 pub use menu::{HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use serde::{Deserialize, Serialize};
 
-use crate::{image::Image, sealed::ManagerBase, AppHandle, Runtime};
+use crate::{image::Image, AppHandle, Runtime};
+#[cfg(all(target_env = "ohos", desktop))]
+use crate::sealed::ManagerBase;
 pub use muda::MenuId;
 
+// On OHOS, `run_on_main_thread` + `rx.recv()` deadlocks (ohos-constraints §1.2).
+// The OHOS muda/tray backends are safe to call from any non-main thread, so the
+// closure executes inline on the calling thread. `self_.clone()` is kept (cheap
+// Arc bump) because the closure signature takes owned `Self`. Result wrapped in
+// `Ok` so both arms yield `Result<T, Error>` and call-site `?`/`.map_err` chains
+// compile unchanged. Non-OHOS behavior is byte-for-byte unchanged.
+#[cfg(target_env = "ohos")]
+macro_rules! run_item_main_thread {
+  ($self:ident, $ex:expr) => {{
+    let self_ = $self.clone();
+    let f = $ex;
+    Ok::<_, crate::Error>(f(self_))
+  }};
+}
+
+#[cfg(not(target_env = "ohos"))]
 macro_rules! run_item_main_thread {
   ($self:ident, $ex:expr) => {{
     use std::sync::mpsc::channel;

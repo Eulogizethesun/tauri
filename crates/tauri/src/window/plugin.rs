@@ -98,20 +98,31 @@ mod commands {
   setter!(set_position, Position);
   setter!(set_focus);
   setter!(set_focusable, bool);
-  // Custom implementation for set_background_color with debug logging
+  // Custom implementation for set_background_color (upstream setter! output on
+  // non-OHOS; OHOS additionally mirrors the color onto the webview layer).
   #[command(root = "crate")]
   pub async fn set_background_color<R: Runtime>(
     window: Window<R>,
     label: Option<String>,
     value: Option<Color>,
   ) -> crate::Result<()> {
-    log::debug!(
+    #[cfg(target_env = "ohos")]
+    log::info!(
       "[tauri-window] set_background_color called with value: {:?}",
       value
     );
-    get_window(window, label)?
-      .set_background_color(value)
-      .map_err(Into::into)
+    let window = get_window(window, label)?;
+    // On OHOS the OS window background is structurally covered by the window
+    // container + ArkUI content layers, so the window-layer dispatch alone has
+    // no visible effect. `WebviewWindow::set_background_color` (the Rust API)
+    // sets BOTH the window and webview backgrounds — mirror that here for the
+    // JS command: also dispatch to the webview layer (ArkWeb component
+    // backgroundColor) so the color is visible through a transparent page.
+    #[cfg(target_env = "ohos")]
+    for webview in window.webviews() {
+      webview.set_background_color(value.clone())?;
+    }
+    window.set_background_color(value).map_err(Into::into)
   }
   setter!(set_size_constraints, WindowSizeConstraints);
   setter!(set_theme, Option<Theme>);

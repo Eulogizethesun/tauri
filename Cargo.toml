@@ -33,6 +33,7 @@ members = [
   "examples/resources/src-tauri",
   "examples/api/src-tauri",
   "examples/api/src-tauri/tauri-plugin-sample",
+  "examples/huawei-account/src-tauri",
 ]
 resolver = "2"
 
@@ -80,4 +81,8 @@ muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git" }
 tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git" }
 openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 openharmony-ability-derive = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+# window-vibrancy: crates/tauri restores the upstream "0.6" requirement for
+# windows/macos (non-OHOS builds resolve crates.io exactly like upstream); the
+# OHOS-only "0.7" requirement is redirected here to the local fork (0.7.1,
+# matching upstream repo main).
 window-vibrancy = { git = "https://github.com/Eulogizethesun/window-vibrancy", branch = "ohdev-git" }

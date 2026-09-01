@@ -8,9 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
   include_image,
   menu::{Menu, MenuItem},
-  tray::{MouseButton, MouseButtonState, QuickOperationConfig, TrayIconBuilder, TrayIconEvent},
+  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   Emitter, EventTarget, Manager, Runtime, WebviewUrl,
 };
+#[cfg(target_env = "ohos")]
+use tauri::tray::QuickOperationConfig;
 
 #[cfg(target_env = "ohos")]
 #[tauri::command]
@@ -22,13 +24,7 @@ pub fn simulate_tray_click<R: Runtime>(
     "Right" => "rightClick",
     _ => "leftClick",
   };
-  tauri::ohos::openharmony_ability::statusbar::icon_click_sender()
-    .send(
-      tauri::ohos::openharmony_ability::statusbar::StatusBarClickEvent::IconClick {
-        click_type: click_type.to_string(),
-      },
-    )
-    .map_err(|e| format!("Failed to send tray click event: {}", e))?;
+  tray_icon::send_icon_click(click_type.to_string());
   Ok(())
 }
 
@@ -42,6 +38,7 @@ pub fn simulate_tray_click<R: Runtime>(
 }
 
 pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
+  log::info!("[create_tray] enter");
   let toggle_i = MenuItem::with_id(app, "toggle", "Toggle", true, None::<&str>)?;
   let new_window_i = MenuItem::with_id(app, "new-window", "New window", true, None::<&str>)?;
   let icon_i_1 = MenuItem::with_id(app, "icon-1", "Icon 1", true, None::<&str>)?;
@@ -79,22 +76,33 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
       &remove_tray_i,
     ],
   )?;
+  log::info!("[create_tray] menus built");
 
   let is_menu1 = AtomicBool::new(true);
 
-  let _ = TrayIconBuilder::with_id("tray-1")
+  let mut builder = TrayIconBuilder::with_id("tray-1")
     .tooltip("Tauri")
     .icon(app.default_window_icon().unwrap().clone())
     .menu(&menu1)
-    .show_menu_on_left_click(false)
-    // OHOS: enable QuickOperation left-click popup (no-op on other platforms)
-    .quick_operation(QuickOperationConfig {
+    .show_menu_on_left_click(false);
+  // OHOS: enable QuickOperation left-click popup (no-op on other platforms)
+  #[cfg(target_env = "ohos")]
+  {
+    builder = builder.quick_operation(QuickOperationConfig {
       title: "Tauri API".into(),
       height: 300,
       ability_name: "TestTrayAbility".into(),
-      module_name: Some("entry".into()),
+      // moduleName must match the OHOS module that declares the statusBarView
+      // extension ability named in ability_name. This desktop target's module
+      // is "entry_desktop" (module.json5: "name": "entry_{{form}}" → form=desktop).
+      // Sending "entry" (the mobile form's module) makes statusBarManager
+      // addToStatusBar fail to resolve the ability in that module →
+      // 401 "parameter check failed". See spec §7.5.
+      module_name: Some("entry_desktop".into()),
       loading_status: None,
-    })
+    });
+  }
+  let _ = builder
     .on_menu_event(move |app, event| {
       let id = event.id().as_ref();
       // Tray's on_menu_event fires for ALL menu events (by tauri design).
@@ -140,11 +148,14 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
           }
         }
         "new-window" => {
-          let _webview =
+          let mut wb =
             tauri::WebviewWindowBuilder::new(app, "new", WebviewUrl::App("index.html".into()))
-              .title("Tauri")
-              .build()
-              .unwrap();
+              .title("Tauri");
+          #[cfg(target_env = "ohos")]
+          {
+            wb = wb.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+          }
+          let _webview = wb.build().unwrap();
         }
         #[cfg(target_os = "macos")]
         "set-title" => {
@@ -178,7 +189,10 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         "toggle-qo" => {
           if let Some(tray) = app.tray_by_id("tray-1") {
             // Toggle QuickOperation off (demonstrates runtime update)
-            let _ = tray.set_quick_operation(None);
+            #[cfg(target_env = "ohos")]
+            {
+              let _ = tray.set_quick_operation(None);
+            }
           }
         }
 
@@ -201,6 +215,7 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
       }
     })
     .build(app);
+  log::info!("[create_tray] TrayIconBuilder::build returned, create_tray done");
 
   Ok(())
 }

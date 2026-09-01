@@ -14,6 +14,8 @@
   import Tray from './views/Tray.svelte'
   import TestRunner from './views/TestRunner.svelte'
   import TransparencyTest from './views/TransparencyTest.svelte'
+  import Screenshot from './views/Screenshot.svelte'
+  import Continuation from './views/Continuation.svelte'
 
   import { runTests } from './lib/test-runner'
   import { coreTests } from './lib/tests/core'
@@ -89,6 +91,16 @@
       label: 'Transparency',
       component: TransparencyTest,
       icon: 'i-ph-eye'
+    },
+    {
+      label: 'Screenshot',
+      component: Screenshot,
+      icon: 'i-ph-camera'
+    },
+    {
+      label: 'Continuation',
+      component: Continuation,
+      icon: 'i-ph-arrows-left-right'
     }
   ]
 

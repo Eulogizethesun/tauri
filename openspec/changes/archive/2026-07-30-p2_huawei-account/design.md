@@ -1,0 +1,71 @@
+## Context
+
+p1 已在 `openharmony-ability` 仓内提供 `HuaweiAccount::{login,silent_login,logout}` 异步 API(返回 `AccountInfo`,错误以 `Error::from_reason("rejected: <code>:<msg>")` 透传),`account` feature 默认关闭,`ability.har` 已重建。本 Phase 把它包装成 Tauri 插件。
+
+既有 OHOS 插件范式已验证(经源码探索确认):
+- `updater`(`src/ohos.rs` cfg ohos + 普通 `#[tauri::command]` + `tauri::generate_handler!`,经 `tauri::ohos::APP.lock().app.updater()` 访问 openharmony-ability;Cargo.toml 不直接依赖 openharmony-ability)。
+- `autostart`(单 `lib.rs` + cfg 内联;`Cargo.toml` 在 `cfg(target_env="ohos")` 下 `openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }` + `use openharmony_ability::AutostartManager`)。
+- `tauri::ohos` 模块:`pub use openharmony_ability;` + `pub static APP: Mutex<Option<OpenHarmonyApp>>`。tauri core 的 openharmony-ability dep 带 `webview`/`menu`(+ default 含 `updater`/`window`/`log`),**不含 `account`**。
+- `plugins-workspace` 用 `tauri = "2.10"`(version),examples/api path-dep 插件经 lockfile 与本地 tauri 统一(既有 updater/autostart 已跑通)。
+- examples/api:`.plugin(tauri_plugin_xxx::init())` 或 `Builder::new().build()`;插件作为正常 dep(非 target 门控)。
+
+## Goals / Non-Goals
+
+**Goals:**
+- 新建 `tauri-plugin-huawei-account` 纯 Rust+JS 薄插件,OHOS 命令路由到 `openharmony_ability::HuaweiAccount`,desktop stub `unsupported`。
+- 注册进 examples/api,命令可被 invoke。
+- 遵守 ohos-constraints(cfg 隔离、绕开 mobile 插件管道、不碰 tauri 核心 crate)。
+- `cargo check` 在 ohos + desktop 双 target 通过。
+
+**Non-Goals:**
+- 不做设备端真实登录/`module.json5` 的 `client_id`/capabilities 授权(Phase 3)。
+- 不做前端测试用例(Phase 4)。
+- 不改 openharmony-ability(仅消费 `account` feature)。
+- 不碰 tauri 核心 crate。
+
+## Decisions
+
+### D1:插件直接依赖 openharmony-ability+account,独立调用 `HuaweiAccount::new()`(不碰 tauri core)
+**选择**:插件 `Cargo.toml` 在 `cfg(target_env="ohos")` 下加 `openharmony-ability = { path = "../../../openharmony-ability/crates/ability", features = ["account"] }`,`ohos.rs` 直接 `openharmony_ability::HuaweiAccount::new().login().await`。不经 `tauri::ohos::APP`、不加 `OpenHarmonyApp::huawei_account()` 访问器。
+**理由**:p1 design D3 已选 `HuaweiAccount::new()` 独立句柄(Account Kit 无 per-app 状态)。直接依赖使插件自包含,无需改 tauri core 的 openharmony-ability feature 列表(铁律:不碰核心 crate)。Cargo feature 统一:插件启用 `account` 后,整个构建(含 tauri core 引用的同一 openharmony-ability 实例)统一启用 account,`HuaweiAccount` 可用。
+**备选(否决)**:仿 updater 经 `tauri::ohos::APP` + `app.updater()` 访问器——需在 openharmony-ability 加 `OpenHarmonyApp::huawei_account()` 并在 tauri core 启用 account feature,改动跨两仓核心,违反"不碰核心"且 p1 D3 已否决访问器。
+**路径核对**:插件位于 `plugins-workspace/plugins/huawei-account`,`../../../openharmony-ability/crates/ability` = `D:/ohdev/openharmony-ability/crates/ability`(3 级上),与 tauri core 引用同一 crate,feature 可统一。
+
+### D2:命令路由用普通 `#[tauri::command]` + `generate_handler!`,绕开 mobile 插件管道
+**选择**:`ohos.rs`/`commands.rs` 的 `login`/`silent_login`/`logout` 为 `#[tauri::command] async fn`,在 `Builder::build()` 里 `tauri::generate_handler![...]` 注册。**不**用 `run_mobile_plugin`/`dispatch_run_command`/`PENDING_PLUGIN_CALLS`。
+**理由**:updater/autostart 实证该范式在 OHOS 可行且更简单;account 命令是纯 Rust→openharmony-ability await,无需 ArkTS 插件命令管道(插件无业务 ArkTS,铁律 1)。
+
+### D3:插件本地 `AccountInfo` model(跨平台一致 + 解耦)
+**选择**:`models.rs` 定义插件自己的 `AccountInfo`(`#[serde(rename_all="camelCase")]`,字段同 openharmony-ability:uid/open_id/union_id/display_name/avatar_uri/authorization_code + access_token: Option),OHOS 命令把 `openharmony_ability::AccountInfo` 转换为插件 `AccountInfo` 返回。
+**理由**:desktop stub 不引用 openharmony-ability,命令返回类型必须跨平台统一 → 用插件本地 model。同时解耦插件公共 API 与底层仓(底层 AccountInfo 字段变动不直接泄漏到插件 API)。字段 shape 与 p1 一致(选项 A:登录流资料字段空)。
+**备选(否决)**:OHOS 侧 re-export `openharmony_ability::AccountInfo`——desktop 无该类型,返回类型不统一。
+
+### D4:`Error` 枚举按 code 分类 + Serialize 为字符串
+**选择**:`error.rs` 定义 `enum Error { Unsupported, Cancelled, NotLoggedIn, Other(String) }`,`impl Serialize`(序列化为 `to_string()` 字符串,仿 autostart)。`from_napi_reason(&str)` 解析底层 reason `"rejected: <code>:<msg>"`:剥前缀 → 取 code → `1001500001`→Unsupported、`1001502001`→NotLoggedIn、取消码→Cancelled、其余→Other(保留原 code:msg)。
+**理由**:spec 要求前端可区分不支持/取消/未登录/其他以做降级(未登录→交互式)。底层透传 code 串(p1 D5),插件层是分类的合适位置(底层不耦合业务语义)。
+**取消码待定**:Account Kit 用户取消的确切 code 未由 arkts-helper 给出,Phase 3 设备实测确认;Phase 2 先按"非已知码 → Other"处理,实测后补 Cancelled 映射。
+
+### D5:desktop stub(`cfg(not(target_env="ohos"))`)
+**选择**:`commands.rs` 的三个命令在非 OHOS 直接 `Err(Error::Unsupported)`。`lib.rs` 的 `build()` 用 cfg 分两路:OHOS 注册 `ohos::*`,非 OHOS 注册 `commands::*`(stub)。
+**理由**:与 updater 双 `build()` 模式一致;desktop 不引入 openharmony-ability 依赖(target 门控)。
+
+### D6:插件结构(单 `lib.rs` 入口 + 分文件)
+**选择**:`src/{lib.rs, ohos.rs, commands.rs, error.rs, models.rs}` + `build.rs` + `guest-js/index.ts` + `permissions/`。`lib.rs` 含 `Builder` + `init()`(`init()` 无参,仿 notification/dialog)+ cfg 双 `build()`。
+**理由**:account 有 3 命令 + error + model,分文件比 autostart 单文件清晰;`init()` 无参符合无配置插件的注册习惯(examples/api 用 `.plugin(tauri_plugin_huawei_account::init())`)。
+
+### D7:ACL 权限(default + 3 allow)
+**选择**:`permissions/default.toml`(含 `allow-login`/`allow-silent-login`/`allow-logout`)+ 三个 `allow-*.toml`;`build.rs` 经 tauri-plugin build 生成 `autogenerated/`。
+**理由**:仿 updater/default.toml;每命令一 allow 便于最小授权。examples/api 的 capabilities 授权在 Phase 3。
+**实现更新(2026-07-30)**:`allow-*.toml` **由 `build.rs` 自动生成**到 `permissions/autogenerated/commands/{login,silent_login,logout}.toml`(每个文件定义对应 `allow-<cmd>` 权限),非手写;`schemas/schema.json` + `autogenerated/reference.md` 亦自动生成。手写仅需 `default.toml`(引用三个 `allow-*`)。与 updater 权限结构一致。
+
+### D8:examples/api 集成(正常 dep + `.plugin(init())`)
+**选择**:`examples/api/src-tauri/Cargo.toml` 加 `tauri-plugin-huawei-account = { path = "../../../../plugins-workspace/plugins/huawei-account" }`(正常 dep,非 target 门控,与 updater/autostart 同);`src/lib.rs` 加 `.plugin(tauri_plugin_huawei_account::init())`。
+**理由**:插件跨平台(ohos 真实 + desktop stub),作为正常 dep;path 与既有插件一致(4 级上到 plugins-workspace)。
+
+## Risks / Trade-offs
+
+- **[跨 workspace tauri 版本统一]** → plugins-workspace 用 `tauri="2.10"`,examples/api 用本地 dev tauri;既有 updater/autostart 已跑通此路径,照搬即可。若 lockfile 未统一会编译失败 → 验证时 `cargo check` 双 target 把关。
+- **[feature 统一未生效]** → 若插件 openharmony-ability path 与 tauri core 不完全一致,Cargo 视为两份 crate,account 不统一 → `HuaweiAccount` 在 tauri 侧不可见但插件侧可见(插件自带 dep 仍可用)。path 已核对一致。
+- **[取消码未知]** → D4 已述,Phase 2 暂归 Other,Phase 3 实测补 Cancelled。
+- **[examples/api hvigor 首编译 p1 account.ets]** → 本 Phase examples/api ohos 构建是 p1 ArkTS `account.ets` 首次经真实消费者编译(p1 仅 demo 工程单独验证过);若报错需回 openharmony-ability 修并重建 HAR + ohpm install(全链重建,ohos-constraints 3.2)。
+- **[JS API 与 Rust 命令名一致]** → guest-js invoke 的命令名需与 `#[tauri::command]` 注册名(login/silent_login/logout)一致;napi snake→camel 仅适用于 napi-ohos 函数,Tauri 命令名按 Rust fn 名 invoke(`plugin:huawei-account|login`)。

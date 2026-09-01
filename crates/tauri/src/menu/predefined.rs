@@ -16,17 +16,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
     let handle = manager.app_handle();
     let app_handle = handle.clone();
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::separator();
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::separator();
       PredefinedMenuItemInner {
@@ -46,17 +35,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::copy(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::copy(text.as_deref());
       PredefinedMenuItemInner {
@@ -76,17 +54,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::cut(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::cut(text.as_deref());
       PredefinedMenuItemInner {
@@ -106,17 +73,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::paste(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::paste(text.as_deref());
       PredefinedMenuItemInner {
@@ -136,17 +92,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::select_all(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::select_all(text.as_deref());
       PredefinedMenuItemInner {
@@ -170,17 +115,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::undo(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::undo(text.as_deref());
       PredefinedMenuItemInner {
@@ -203,17 +137,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::redo(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::redo(text.as_deref());
       PredefinedMenuItemInner {
@@ -237,17 +160,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::minimize(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::minimize(text.as_deref());
       PredefinedMenuItemInner {
@@ -271,17 +183,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::maximize(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::maximize(text.as_deref());
       PredefinedMenuItemInner {
@@ -305,17 +206,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::fullscreen(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::fullscreen(text.as_deref());
       PredefinedMenuItemInner {
@@ -339,17 +229,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::hide(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::hide(text.as_deref());
       PredefinedMenuItemInner {
@@ -373,17 +252,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::hide_others(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::hide_others(text.as_deref());
       PredefinedMenuItemInner {
@@ -407,17 +275,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::show_all(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::show_all(text.as_deref());
       PredefinedMenuItemInner {
@@ -441,17 +298,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::close_window(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::close_window(text.as_deref());
       PredefinedMenuItemInner {
@@ -475,17 +321,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::quit(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::quit(text.as_deref());
       PredefinedMenuItemInner {
@@ -514,17 +349,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
       None => None,
     };
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::about(text.as_deref(), metadata);
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::about(text.as_deref(), metadata);
       PredefinedMenuItemInner {
@@ -548,17 +372,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::services(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::services(text.as_deref());
       PredefinedMenuItemInner {
@@ -582,17 +395,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
     let text = text.map(|t| t.to_owned());
 
-    #[cfg(target_env = "ohos")]
-    let item = {
-      let item = muda::PredefinedMenuItem::bring_all_to_front(text.as_deref());
-      PredefinedMenuItemInner {
-        id: item.id().clone(),
-        inner: Some(item),
-        app_handle,
-      }
-    };
-
-    #[cfg(not(target_env = "ohos"))]
     let item = run_main_thread!(handle, || {
       let item = muda::PredefinedMenuItem::bring_all_to_front(text.as_deref());
       PredefinedMenuItemInner {
@@ -612,14 +414,7 @@ impl<R: Runtime> PredefinedMenuItem<R> {
 
   /// Get the text for this menu item.
   pub fn text(&self) -> crate::Result<String> {
-    #[cfg(target_env = "ohos")]
-    {
-      Ok(self.0.inner.as_ref().unwrap().text())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().text())
-    }
+    run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().text())
   }
 
   /// Set the text for this menu item. `text` could optionally contain
@@ -627,16 +422,10 @@ impl<R: Runtime> PredefinedMenuItem<R> {
   /// for this menu item. To display a `&` without assigning a mnemenonic, use `&&`.
   pub fn set_text<S: AsRef<str>>(&self, text: S) -> crate::Result<()> {
     let text = text.as_ref().to_string();
+    run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_text(text))?;
     #[cfg(target_env = "ohos")]
-    {
-      self.0.inner.as_ref().unwrap().set_text(text);
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_text(text))
-    }
+    super::auto_refresh_menubar(&self.0.app_handle);
+    Ok(())
   }
 
   /// The application handle associated with this type.

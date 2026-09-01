@@ -22,10 +22,10 @@ TBD - created by archiving change p1-window-vibrancy. Update Purpose after archi
 - **THEN** SHALL 调用 `openharmony_ability::set_window_blur(window_id, radius)` 并设置半透明背景色
 - **测试分类**: `manual`
 
-#### Scenario: apply_ohos_mica 设置 Mica 效果
-- **WHEN** 调用 `window_vibrancy::apply_ohos_mica(window_id, radius, dark)`
-- **THEN** SHALL 调用 `openharmony_ability::set_window_blur(window_id, radius)` 并根据 dark 参数设置深浅背景色
-- **测试分类**: `manual`
+#### Scenario: Mica 系列不支持（2026-08-26 移除云母近似）
+- **WHEN** 传入 Mica/Tabbed 系列 Effect
+- **THEN** SHALL 不应用任何效果（no-op 跳过并记录 info 日志），`apply_ohos_mica` API 已删除
+- **测试分类**: `auto`
 
 #### Scenario: 设备不支持时静默跳过
 - **WHEN** 调用 OHOS 模糊 API 但设备不支持
@@ -85,15 +85,10 @@ ArkTS `WindowManager` SHALL 新增 `setWindowBlur(windowId: number, radius: numb
 - **THEN** SHALL 调用 `window_vibrancy::apply_ohos_acrylic(window_id, 25.0, color)`
 - **测试分类**: `manual`
 
-#### Scenario: Mica 系列效果映射
-- **WHEN** `WindowEffectsConfig.effects` 包含 `Effect::Mica` / `MicaDark` / `MicaLight`
-- **THEN** SHALL 调用 `window_vibrancy::apply_ohos_mica(window_id, 20.0, dark)`
-- **测试分类**: `manual`
-
-#### Scenario: Tabbed 系列效果映射
-- **WHEN** `WindowEffectsConfig.effects` 包含 `Effect::Tabbed` / `TabbedDark` / `TabbedLight`
-- **THEN** SHALL 采用与 Mica 系列相同的映射策略
-- **测试分类**: `manual`
+#### Scenario: Mica/Tabbed 系列效果不支持
+- **WHEN** `WindowEffectsConfig.effects` 包含 `Effect::Mica` / `MicaDark` / `MicaLight` / `Effect::Tabbed` / `TabbedDark` / `TabbedLight`
+- **THEN** SHALL 不应用任何效果（no-op 跳过并记录 info 日志），不返回错误
+- **测试分类**: `auto`
 
 #### Scenario: 清除效果
 - **WHEN** `set_window_effects` 传入 `effects: None`
@@ -131,7 +126,7 @@ ArkTS `WindowManager` SHALL 新增 `setWindowBlur(windowId: number, radius: numb
 
 #### Scenario: tao OHOS Window 处理窗口效果
 - **WHEN** tao `Window::set_window_effects` 被调用且 `self.window_id` 不为 None
-- **THEN** SHALL 根据 Effect 类型调用 `window_vibrancy::apply_ohos_blur` / `apply_ohos_acrylic` / `apply_ohos_mica`
+- **THEN** SHALL 根据 Effect 类型调用 `window_vibrancy::apply_ohos_blur` / `apply_ohos_acrylic`（Mica/Tabbed 系列跳过）
 - **测试分类**: `manual`
 
 ### Requirement: 运行时 backdropBlur/backgroundColor 刷新（AttributeUpdater）
@@ -144,8 +139,8 @@ ArkTS `WindowManager` SHALL 新增 `setWindowBlur(windowId: number, radius: numb
 - **AND** SHALL 通过 `BlurModifier.attribute?.backdropBlur(radius)` 立即刷新组件 backdropBlur
 - **测试分类**: `manual`（需人工确认模糊效果可见）
 
-#### Scenario: 运行时 setEffects 刷新 backgroundColor（Acrylic/Mica tint）
-- **WHEN** `set_window_background_color` 调用（Acrylic/Mica tint）
+#### Scenario: 运行时 setEffects 刷新 backgroundColor（Acrylic tint）
+- **WHEN** `set_window_background_color` 调用（Acrylic tint）
 - **THEN** SHALL 通过 `BlurModifier.attribute?.backgroundColor(color)` 立即刷新组件 backgroundColor
 - **AND** SHALL 用 `FnArgs<(i64, u32)>` 调用 NAPI（裸 tuple 只传 1 个参数，7bd67be 修了 set_window_blur 但漏了 set_window_background_color）
 - **测试分类**: `manual`（需人工确认 tint 可见）

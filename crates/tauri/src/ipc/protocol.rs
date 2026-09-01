@@ -37,6 +37,9 @@ pub fn message_handler<R: Runtime>(
 
 pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler {
   Box::new(move |label, request, responder| {
+    #[cfg(target_env = "ohos")]
+    log::info!("[IPC] request: label={:?}, method={}, uri={}", label, request.method(), request.uri());
+
     #[cfg(feature = "tracing")]
     let span = tracing::trace_span!(
       "ipc::request",
@@ -151,6 +154,11 @@ pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler 
             }
           }
         } else {
+          #[cfg(target_env = "ohos")]
+          {
+            let all_labels: Vec<String> = manager.webviews().keys().cloned().collect();
+            log::warn!("[IPC] failed to acquire webview reference: label={:?}, known_labels={:?}", label, all_labels);
+          }
           respond(
             http::Response::builder()
               .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -296,6 +304,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
         let options = message.options.unwrap_or_default();
 
         let uri = request.uri().to_string();
+        #[cfg(target_env = "ohos")]
         let url = if uri == "/" {
           webview
             .url()
@@ -303,6 +312,8 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
         } else {
           Url::parse(&uri).expect("invalid IPC request URL")
         };
+        #[cfg(not(target_env = "ohos"))]
+        let url = Url::parse(&uri).expect("invalid IPC request URL");
         let request = InvokeRequest {
           cmd: message.cmd,
           callback: message.callback,

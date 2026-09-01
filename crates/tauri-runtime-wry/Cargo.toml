@@ -67,6 +67,10 @@ jni = "0.21"
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+openharmony-ability-plugin-window = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+openharmony-ability-plugin-url = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+napi-ohos = "1.2"
+futures-executor = "0.3"
 
 [features]
 default = ["x11", "dbus"]

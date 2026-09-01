@@ -231,7 +231,7 @@ impl<TSend> Channel<TSend> {
       phantom: Default::default(),
     };
 
-    #[cfg(mobile)]
+    #[cfg(any(mobile, target_env = "ohos"))]
     crate::plugin::mobile::register_channel(Channel {
       inner: channel.inner.clone(),
       phantom: Default::default(),

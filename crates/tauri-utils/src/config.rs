@@ -3269,6 +3269,21 @@ pub struct OpenHarmonyConfig {
   /// `desktop` feeds `cfg(desktop)` (defaults to `["2in1"]`).
   #[serde(alias = "device-types", default)]
   pub device_types: OpenHarmonyDeviceTypes,
+
+  /// Marks the app's ability as continuable (app continuation / task handoff).
+  ///
+  /// When `Some(true)`, the CLI writes `continuable: true` into each entry
+  /// module.json5's abilities entry at build time (same injection point as
+  /// `deviceTypes`). Requires `continueType` matching between devices.
+  /// `None`/`Some(false)` keeps module.json5 unchanged.
+  #[serde(alias = "continuable")]
+  pub continuable: Option<bool>,
+
+  /// The continuation type identifiers used to match source/target devices for
+  /// app continuation (module.json5 `continueType`). Only written when
+  /// `continuable` is `Some(true)`; defaults to `[identifier]` when omitted.
+  #[serde(alias = "continue-type")]
+  pub continue_type: Option<Vec<String>>,
 }
 
 impl Default for OpenHarmonyConfig {
@@ -3276,6 +3291,8 @@ impl Default for OpenHarmonyConfig {
     Self {
       version_code: None,
       device_types: OpenHarmonyDeviceTypes::default(),
+      continuable: None,
+      continue_type: None,
     }
   }
 }

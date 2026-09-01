@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "huawei-account",
+  "description": "Huawei account one-tap login permissions (login/silent_login/logout)",
+  "windows": ["main", "main-*"],
+  "permissions": ["huawei-account:default"]
+}

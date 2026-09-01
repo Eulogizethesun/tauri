@@ -1,4 +1,5 @@
 import { Plugin, Invoke, CommandHandler } from './Plugin';
+import { common } from '@kit.AbilityKit';
 
 interface PluginInstance {
   name: string;
@@ -17,6 +18,7 @@ type ResponseHandler = (id: number, success: number, payload: string) => void;
 
 let globalPlugins: Map<string, PluginInstance> = new Map();
 let globalHandlePluginResponse: ResponseHandler | null = null;
+let globalContext: common.UIAbilityContext | null = null;
 
 class InvokeImpl implements Invoke {
   private args: string;
@@ -55,7 +57,12 @@ export class PluginManager {
   private plugins: Map<string, PluginInstance> = globalPlugins;
   public handlePluginResponse: ResponseHandler | null = null;
 
+  setContext(context: common.UIAbilityContext): void {
+    globalContext = context;
+  }
+
   load(pluginName: string, plugin: Plugin, config: string): void {
+    plugin.context = globalContext;
     globalPlugins.set(pluginName, {
       name: pluginName,
       instance: plugin,
@@ -66,6 +73,33 @@ export class PluginManager {
   setResponseHandler(handler: ResponseHandler): void {
     this.handlePluginResponse = handler;
     globalHandlePluginResponse = handler;
+  }
+
+  /**
+   * Returns the plugin instance registered under `name`, or undefined if not found.
+   * Used by EntryAbility to dispatch notification action clicks to the
+   * NotificationPlugin instance without needing a direct reference.
+   */
+  getPlugin(name: string): Plugin | undefined {
+    const entry = globalPlugins.get(name);
+    return entry != null ? entry.instance : undefined;
+  }
+
+  /**
+   * Called by EntryAbility.onForeground(). Iterates all loaded plugins and
+   * invokes onForeground() on each. Plugins use this to settle pending
+   * operations (e.g. permission request promises) that may have been
+   * interrupted when the ability went to background (system permission dialog).
+   */
+  notifyForeground(): void {
+    console.info('[PluginManager] notifyForeground — ' + globalPlugins.size + ' plugins');
+    globalPlugins.forEach((entry: PluginInstance): void => {
+      try {
+        entry.instance.onForeground();
+      } catch (e) {
+        console.warn('[PluginManager] onForeground failed for ' + entry.name + ': ' + (e as Error).message);
+      }
+    });
   }
 
   runCommand(id: number, pluginName: string, command: string, payload: string): void {

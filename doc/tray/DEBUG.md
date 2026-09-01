@@ -168,6 +168,8 @@ addToStatusBarWithRgba: (iconsRgba, iconSize, quickOperation, ...) => {
 
 **文件**：`openharmony-ability/native_ability/src/main/ets/components/DefaultXComponent.ets`
 
+> **桥接迁移后更正（2026-08-13 device 验证）**：本条所述「空 `quickOperation.abilityName` → 401」**已证伪**。桥接迁移用 `StatusbarPlugin.ets` 取代 `DefaultXComponent.ets` 后，example app 的 `quick_operation.ability_name` = `"TestTrayAbility"`（非空），故空串场景未触发；即便 `??` vs `||` 行为一致，401 依旧。真正 401 根因是 `menu_json` 内层 `subMenu: null`（present-but-null 而非 absent），见 spec §7.3。legacy 路径此处的 abilityName 回退填充**保留**（语义无害），但非 401 原因。
+
 ---
 
 ## Fix 10: `build_menu_item_object_static` 函数实现
@@ -740,5 +742,5 @@ case 'fullscreen': {
 | 错误 | 说明 | 解决方案 |
 |------|------|----------|
 | `AppClientNotifier: Register client pid fail: out of range` | sceneboard PID 注册表溢出，反复 debug 部署累积残留条目 | 重启设备 |
-| `Multi-instance is not supported` (16000078) | 重复调用 addToStatusBar | 先 removeFromStatusBar |
-| `The size of the pixelmap exceeds the limit` (1010710001) | PixelMap 尺寸超限（疑似 OHOS bug，24×24 也触发） | 可忽略，不影响功能 |
+| `Multi-instance is not supported` (16000078) | statusBarManager 内部 `getCurrentInstanceKey` 对 singleton 调用方**按设计抛出**并被内部 catch/日志（add & remove 路径均出现） | **无需处理**——非致命、不导致 401。device 验证：tray 成功注册（`worker: add Ok`）时此日志仍出现。见 spec §7.5 |
+| `The size of the pixelmap exceeds the limit` (1010710001) | PixelMap 为固定物理像素，未按 24vp × display.densityPixels 校正 | **已修复**——`StatusBarUtils.ets::createPixelMapFromRgba` 用 `display.getDefaultDisplaySync().densityPixels` + `scaleSync` 做 density 校正（src=32→target=46）。见 spec §7.4 |

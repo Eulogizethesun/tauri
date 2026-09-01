@@ -129,13 +129,16 @@ fn exec(
     binary.pop();
   }
 
-  // TODO: temp `\ -> /` conversion for ohos
-  map.insert(
-    "tauri-binary",
+  // OHOS templates need forward slashes (hvigor/ArkTS tooling); other targets
+  // keep the upstream raw value.
+  let tauri_binary = if matches!(target, Target::OpenHarmony) {
     dunce::simplified(std::path::Path::new(&binary))
-        .to_string_lossy()
-        .replace('\\', "/"),
-  );
+      .to_string_lossy()
+      .replace('\\', "/")
+  } else {
+    binary.clone()
+  };
+  map.insert("tauri-binary", tauri_binary);
   map.insert("tauri-binary-args", &build_args);
   map.insert("tauri-binary-args-str", build_args.join(" "));
 

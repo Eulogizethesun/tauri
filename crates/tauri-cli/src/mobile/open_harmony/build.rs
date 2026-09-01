@@ -214,6 +214,16 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
         &super::device_types_for_form(&tauri_config.bundle.open_harmony.device_types, form),
       )
       .context("failed to align entry deviceTypes")?;
+      // Same injection point: gate app continuation (continuable/continueType)
+      // per conf `bundle.openHarmony` so it also applies on rebuild.
+      plugins::write_entry_continuation(
+        &config.project_dir(),
+        form,
+        tauri_config.bundle.open_harmony.continuable,
+        tauri_config.bundle.open_harmony.continue_type.as_deref(),
+        &tauri_config.identifier,
+      )
+      .context("failed to align entry continuation gating")?;
     }
     run_app(
       &config,
@@ -358,6 +368,16 @@ fn run_build(
     &form_device_types,
   )
   .context("failed to align entry deviceTypes")?;
+  // Same injection point: gate app continuation (continuable/continueType)
+  // per conf `bundle.openHarmony` so it also applies on rebuild.
+  plugins::write_entry_continuation(
+    &config.project_dir(),
+    &options.device_type,
+    tauri_config.bundle.open_harmony.continuable,
+    tauri_config.bundle.open_harmony.continue_type.as_deref(),
+    &tauri_config.identifier,
+  )
+  .context("failed to align entry continuation gating")?;
 
   // The CLI has already compiled the Rust `.so` via `first_target.build` in
   // `command`. In the non-`--open` path, tell the hvigor `tauriPlugin` to

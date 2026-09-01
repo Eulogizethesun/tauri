@@ -8,11 +8,23 @@
   import { imageTests } from '../lib/tests/image';
   import { menuTests } from '../lib/tests/menu';
   import { trayTests } from '../lib/tests/tray';
+  import { ohosAdapterTests } from '../lib/tests/ohos-adapter';
+  import { ohosInitTests } from '../lib/tests/ohos-init';
+  import { ohosGapTests } from '../lib/tests/ohos-gap';
+  import { ohosMobilePluginTests } from '../lib/tests/ohos-mobile-plugins';
+  import { ohosScreenshotTests } from '../lib/tests/ohos-screenshot';
+  import { ohosContinuationTests } from '../lib/tests/ohos-continuation';
+  import { windowOpsTests } from '../lib/tests/window-ops';
+  import { windowOpsExtraTests } from '../lib/tests/window-ops-extra';
+  import { driverTests, sideReplayTests, badInputTests } from '../lib/tests/driver-generated';
+  import { faultInjectionTests } from '../lib/tests/fault-injection-generated';
+  import { apiGapTests } from '../lib/tests/api-gap';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow, currentMonitor, cursorPosition, Effect } from '@tauri-apps/api/window';
+  import { getCurrentWindow, currentMonitor, cursorPosition, Effect, LogicalSize, PhysicalPosition, PhysicalSize, UserAttentionType } from '@tauri-apps/api/window';
   import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+  import { saveWindowState, restoreStateCurrent, filename as windowStateFilename, StateFlags } from '@tauri-apps/plugin-window-state';
   import { appCacheDir, join } from '@tauri-apps/api/path';
   import { flushConsoleLog, clearConsoleLog } from '../lib/console-capture';
 
@@ -24,9 +36,15 @@
 
   // Manual test state
   let manualResult = $state('');
+  let revealPublicPath = $state('/storage/media/100/local/files/Docs/IDEProjects');
   let focusWatchActive = $state(false);
   let focusWatchUnlisten = null;
   let focusEvents = $state([]);
+  // Window-event watch state (Resized/Moved/FocusChanged) for the toggle button
+  let winEventWatchActive = $state(false);
+  let winEventUnlistens = null;
+  let winEventCount = $state(0);
+  let winEventTypes = $state([]);
   let menuEvents = $state([]);
   let snapshotCanvas = $state(null);
   let snapshotContainer = $state(null);
@@ -62,7 +80,12 @@
     pressedKeys.clear();
   }
 
-  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests];
+  // driver 盲调用 + side-effect 复放按 design 放最后（S2 覆盖率套件）。
+  // 门控：仅覆盖率验证构建（cov-build.sh VITE_COVERAGE_TESTS=true）注入覆盖率批次；
+  // VITE_AUTOTEST（自动跑测试）不注入，普通 demo 保持 283 用例标准集。
+  // api-gap 批（S10）压轴：含 app 隐显 / 设置页跳转等破坏性操作，必须在所有批次之后。
+  const coverageTests = import.meta.env.VITE_COVERAGE_TESTS ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
+  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...coverageTests];
   const webview = getCurrentWebview();
 
   async function runAll() {
@@ -91,12 +114,36 @@
     report = r;
     onMessage(`--- Done: ${r.passed} passed, ${r.failed} failed, ${r.skipped} skipped ---`);
     running = false;
+
+    // Flush LLVM coverage data on OHOS instrumented builds. No-op / rejected
+    // silently on non-cov-dump builds (command not registered).
+    try {
+      await invoke('dump_coverage');
+      onMessage('[cov-dump] coverage flushed');
+    } catch (e) {
+      // command absent on non-cov-dump builds — ignore
+    }
   }
 
-  // Auto-run on first mount
+  // Auto-run on first mount — ONLY in the main window, and only in autotest
+  // builds (VITE_AUTOTEST / VITE_COVERAGE_TESTS，由 run-tests.sh / cov-build.sh
+  // 设置)。普通 demo 构建（cargo tauri ohos run）不自动跑，手动点 Run All。
+  // Test sub-windows (clipboard/zoom/https-scheme tests created via
+  // create_ohos_test_webview) load the same index.html, so their onMount
+  // would also fire runAll() and spawn a flood of auto-test sub-windows,
+  // polluting keyboard-interaction verification (Ctrl+C / Ctrl+= intercept).
+  // Gate on the main window label so sub-windows stay static.
   let listenId = 0;
   onMount(async () => {
-    runAll();
+    const isMainWindow = getCurrentWindow().label === 'main';
+    const isAutotest = Boolean(import.meta.env.VITE_AUTOTEST || import.meta.env.VITE_COVERAGE_TESTS);
+    if (isMainWindow && isAutotest) {
+      runAll();
+    } else if (isMainWindow) {
+      onMessage('[TestRunner] autotest disabled (no VITE_AUTOTEST/VITE_COVERAGE_TESTS) — click Run All to test');
+    } else {
+      onMessage(`[TestRunner] sub-window "${getCurrentWindow().label}" — auto-test skipped (static test window)`);
+    }
     // Listen for menu events from Rust (tray + global on_menu_event)
     const myListenId = ++listenId;
     let fireCount = 0;
@@ -196,6 +243,91 @@
       } else {
         manualResult = `Monitor: ${m.size.width}×${m.size.height} @ scale ${m.scaleFactor} | position (${m.position.x}, ${m.position.y}) | name "${m.name ?? ''}"`;
       }
+      onMessage(manualResult);
+    });
+  }
+
+  // setIgnoreCursorEvents smoke test (ohos-window-ignore-cursor-events).
+  // Toggle true → false on the current window: fire-and-forget TSFN bridge
+  // (tao set_ignore_cursor_events → openharmony_ability set_window_touchable →
+  // ArkHelper → WindowManager → win.setWindowTouchable). Rust always returns Ok;
+  // real proof is hilog `grep setWindowTouchable` + visual pass-through. Briefly
+  // setting true lets the user observe the window stop consuming events; false
+  // restores. For full pass-through verification create a Float overlay window.
+  async function manualIgnoreCursorEvents() {
+    await wrapManual('setIgnoreCursorEvents', async () => {
+      const win = getCurrentWindow();
+      // 1. Safe restore first — verifies the TSFN bridge is wired (no throw).
+      await win.setIgnoreCursorEvents(false);
+      manualResult = 'setIgnoreCursorEvents(false) → OK (TSFN bridge wired, events consumed normally)';
+      onMessage(manualResult);
+      // 2. Briefly enable ignore=true (events pass through) so the user can observe.
+      await win.setIgnoreCursorEvents(true);
+      onMessage('setIgnoreCursorEvents(true) → dispatched. For ~3s the window ignores events (pass-through). Click to test, then auto-restore.');
+      await new Promise((r) => setTimeout(r, 3000));
+      // 3. Auto-restore so the window doesn't get stuck non-interactive.
+      await win.setIgnoreCursorEvents(false);
+      manualResult = 'Restored: setIgnoreCursorEvents(false). Check hilog `grep setWindowTouchable` for debug logs.';
+      onMessage(manualResult);
+    });
+  }
+
+  // Full pass-through test on a Float overlay sub-window (manual_tests.md §二十八).
+  // The 3s-toggle smoke above only exercises the TSFN bridge on the main window;
+  // T0/T1 require an overlay ABOVE the main window so click/hover pass-through is
+  // observable. setIgnoreCursorEvents DOES pass label (unlike setBackgroundColor),
+  // so targeting the sub-window via getByLabel works.
+  let overlayIgnoreCursorWin = null;
+  async function manualOverlayIgnoreCursor() {
+    await wrapManual('overlayIgnoreCursor', async () => {
+      const label = 'manual-ignore-cursor-overlay';
+      // Reuse if still open; otherwise create a fresh transparent Float overlay.
+      let win = await WebviewWindow.getByLabel(label);
+      if (!win) {
+        await invoke('create_transparent_window', { windowId: label });
+        win = await WebviewWindow.getByLabel(label);
+      }
+      if (!win) throw new Error('overlay window not created');
+      overlayIgnoreCursorWin = win;
+      await win.setIgnoreCursorEvents(true);
+      manualResult = '✅ overlay 子窗口（"manual-ignore-cursor-overlay"，800×600 Float）已 setIgnoreCursorEvents(true)。\n' +
+        '验证步骤（30 秒窗口）：\n' +
+        '  T0 触摸/点击穿透：点击 overlay 深色卡片覆盖区域 → 点击应落到下层主窗口（主窗口按钮可点/有反应，overlay 不响应不获焦）\n' +
+        '  T1 hover 穿透：鼠标悬停 overlay 覆盖的主窗口按钮 → hover 高亮应生效\n' +
+        '  30 秒后自动恢复 touchable（overlay 重新消费事件）。';
+      onMessage(manualResult);
+      setTimeout(async () => {
+        try {
+          await overlayIgnoreCursorWin?.setIgnoreCursorEvents(false);
+          onMessage('Restored: overlay setIgnoreCursorEvents(false) — overlay consumes events again.');
+        } catch (e) {
+          onMessage('overlay restore failed: ' + e);
+        }
+      }, 30000);
+    });
+  }
+
+  // RunEvent::Resumed manual test (ohos-event-lifecycle-forward).
+  // Listens for the 'tauri://resumed' event, then prompts the user to background
+  // and foreground the app. On OHOS, MainEvent::Start (SHOWN) is forwarded as
+  // Event::Resumed. Returns whether the event fired within the wait window.
+  async function manualEventResumed() {
+    await wrapManual('RunEvent::Resumed', async () => {
+      let fired = false;
+      const unlisten = await listen('tauri://resumed', () => {
+        fired = true;
+      });
+      manualResult = 'Listening for tauri://resumed.\nBackground the app (Home/最小化) then bring it back to foreground.\nWaiting up to 30s...';
+      onMessage(manualResult);
+      // Give the user up to 30s to background/foreground.
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (fired) break;
+      }
+      unlisten();
+      manualResult = fired
+        ? 'PASS: RunEvent::Resumed fired after background→foreground.'
+        : 'FAIL: RunEvent::Resumed did not fire within 30s. (background the app and return to trigger SHOWN→Resumed)';
       onMessage(manualResult);
     });
   }
@@ -570,17 +702,17 @@ Expected behavior:
       const { Menu, Submenu, IconMenuItem } = await import('@tauri-apps/api/menu');
       const { NativeIcon } = await import('@tauri-apps/api/menu/iconMenuItem');
 
-      // 3 mapped variants (should show icons)
+      // 4 mapped variants (should show icons)
       const mapped = [
         { variant: NativeIcon.Add, label: 'Add (mapped: ohos_star)' },
         { variant: NativeIcon.LockLocked, label: 'LockLocked (mapped: ohos_lock)' },
         { variant: NativeIcon.Network, label: 'Network (mapped: ohos_wifi)' },
+        { variant: NativeIcon.Folder, label: 'Folder (mapped: folder)' },
       ];
 
       // unmapped variants (should show no icon)
       const unmapped = [
         { variant: NativeIcon.Home, label: 'Home (unmapped)' },
-        { variant: NativeIcon.Folder, label: 'Folder (unmapped)' },
         { variant: NativeIcon.Share, label: 'Share (unmapped)' },
         { variant: NativeIcon.User, label: 'User (unmapped)' },
         { variant: NativeIcon.Refresh, label: 'Refresh (unmapped)' },
@@ -612,8 +744,9 @@ Expected behavior:
         'Mapped → should show icons for:\n' +
         '  • Add → ★ (ohos_star)\n' +
         '  • LockLocked → 🔒 (ohos_lock)\n' +
-        '  • Network → 📶 (ohos_wifi)\n\n' +
-        'Unmapped → no icons (Home, Folder, Share, etc.)\n\n' +
+        '  • Network → 📶 (ohos_wifi)\n' +
+        '  • Folder → 📁 (folder, no ohos_ prefix)\n\n' +
+        'Unmapped → no icons (Home, Share, etc.)\n\n' +
         'If mapped items show system icons and unmapped show text only → PASS.';
       onMessage(manualResult);
     });
@@ -818,16 +951,23 @@ Expected behavior:
 
   // ─── Window Decorations & Transparency Manual Tests (Phase 1+2+3) ───
   let decorationsState = $state('unknown');
+  // Tracks the label of the most-recently-created Float sub-window so the BG
+  // buttons (set_background_color) can target it instead of the main window.
+  // @tauri-apps/api Window.setBackgroundColor omits `label` in the invoke payload
+  // (upstream bug), so we invoke the command directly with this label.
+  let lastCreatedWindowLabel = $state(null);
 
   async function manualCreateBorderlessWindow() {
     await wrapManual('createBorderlessWindow', async () => {
       const windowId = 'borderless-test-' + Date.now();
       await invoke('create_borderless_window', { windowId });
+      lastCreatedWindowLabel = windowId;
       manualResult = `Borderless window created (id: "${windowId}").\n\n` +
         `Expected: Window should appear WITHOUT title bar, drag area, or close button.\n` +
         `Only the dark content area with "🖼️ Borderless Window" text should be visible.\n\n` +
         `If no title bar visible → PASS.\n` +
         `If title bar still visible → FAIL (decorations=false not working).\n\n` +
+        `This window is now the BG color target — click a Set BG button below to change its background.\n\n` +
         `Close with Ctrl+W or Cmd+W.`;
       onMessage(manualResult);
     });
@@ -837,6 +977,7 @@ Expected behavior:
     await wrapManual('createTransparentBorderlessWindow', async () => {
       const windowId = 'transparent-borderless-' + Date.now();
       await invoke('create_transparent_borderless_window', { windowId });
+      lastCreatedWindowLabel = windowId;
       manualResult = `Transparent + borderless window created (id: "${windowId}").\n\n` +
         `Expected: Window should appear WITHOUT title bar AND with transparent background.\n` +
         `You should see the desktop/apps behind the window through the transparent areas.\n` +
@@ -844,10 +985,75 @@ Expected behavior:
         `If transparent AND no title bar → PASS.\n` +
         `If opaque background → transparent=true not working.\n` +
         `If title bar visible → decorations=false not working.\n\n` +
+        `This window is now the BG color target — click a Set BG button below to change its background.\n\n` +
         `Close with Ctrl+W or Cmd+W.`;
       onMessage(manualResult);
     });
   }
+
+  async function manualCreateDecoratedWindow() {
+    await wrapManual('createDecoratedWindow', async () => {
+      const windowId = 'decorated-' + Date.now();
+      await invoke('create_decorated_window', { windowId });
+      const win = await WebviewWindow.getByLabel(windowId);
+      if (!win) throw new Error('decorated window not created');
+      lastCreatedWindowLabel = windowId;
+      // Set a title (setWindowTitle → LocalStorage 'title' → FloatPage title bar)
+      try { await win.setTitle('🪟 Decorated Test Window'); } catch (e) { /* may fail on main window, ignore */ }
+      manualResult = `Decorated window created (id: "${windowId}").\n\n` +
+        `Expected: Window WITH title bar + minimize/maximize/close buttons.\n` +
+        `Title bar should show "🪟 Decorated Test Window".\n\n` +
+        `Test decoration flags below:\n` +
+        `- Toggle Closable → close button appears/disappears\n` +
+        `- Toggle Maximizable → maximize button appears/disappears\n` +
+        `- Toggle Minimizable → minimize button appears/disappears\n` +
+        `- setFocusable(false) → window won't accept focus\n\n` +
+        `This window is now the decoration flags target.\n\n` +
+        `Close with the title bar close button or Ctrl+W.`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualCreateUIAbilityWindow() {
+    await wrapManual('createUIAbilityWindow', async () => {
+      const windowId = 'uiability-instance-' + Date.now();
+      await invoke('create_ui_ability_window', { windowId });
+      manualResult = `UIAbility instance window requested (label: "${windowId}").\n\n` +
+        `Expected: A new EntryAbility instance starts via context.startAbility,\n` +
+        `opening a separate main window with its own lifecycle + recent-task card.\n` +
+        `Requires launchType: "standard" in module.json5.\n\n` +
+        `If a new independent window appears (separate from the Float sub-windows) → PASS.\n` +
+        `If no new window or only onNewWant fires (singleton) → FAIL: launchType not standard.\n\n` +
+        `Note: the new instance loads the app default page (MainPage), not hello.html.\n` +
+        `The new window is system-managed: resize/move return 1300002 (no-op).`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualCreateTransparentUIAbility() {
+    await wrapManual('createTransparentUIAbility', async () => {
+      const windowId = 'transparent-' + Date.now();
+      await invoke('create_transparent_ui_ability_window', { windowId });
+      manualResult = `Transparent UIAbility instance requested (label: "test-transparent-${windowId}").\n\n` +
+        `Expected: A new EntryAbility instance opens with a TRANSPARENT main window,\n` +
+        `loading transparent-test.html with test buttons.\n` +
+        `You should see the desktop / windows behind it through the window.\n\n` +
+        `The test page has 3 groups of buttons (distinct concepts):\n` +
+        `  ① setBackgroundColor — system window layer (setWindowBackgroundColor)\n` +
+        `  ② CSS body background — ArkUI content layer (document.body.style.background)\n` +
+        `  ③ CSS opacity — whole content (document.body.style.opacity)\n\n` +
+        `How transparency flows:\n` +
+        `  builder.transparent(true) → tao → start_ui_ability(transparent=true)\n` +
+        `  → want.parameters['tauri_transparent'] → new instance onWindowStageCreate\n` +
+        `  → registerUIAbilityStage(transparent=true)\n` +
+        `  → setWindowContainerColor('#00000000','#FFFFFFFF') (active=transparent, inactive=white)\n\n` +
+        `If the new window is see-through (desktop visible) → PASS.\n` +
+        `If opaque → FAIL: container color not applied.\n` +
+        `Lose focus → window becomes opaque white (inactive, expected).`;
+      onMessage(manualResult);
+    });
+  }
+
 
   async function manualToggleDecorations() {
     await wrapManual('toggleDecorations', async () => {
@@ -866,20 +1072,34 @@ Expected behavior:
     });
   }
 
+  // Set the background color on the most-recently-created Float sub-window
+  // (click "Create Borderless Window" or "Create Transparent+Borderless" first).
+  //
+  // Why not win.setBackgroundColor(): @tauri-apps/api Window.setBackgroundColor
+  // (window.ts) does NOT pass `label` in the invoke payload (unlike setDecorations
+  // etc.), so the Rust command `get_window(window, label=None)` always resolves to
+  // the main window (windowId=0), whose background is masked by the XComponent
+  // content layer. We invoke the command directly with the sub-window's label so
+  // it targets the correct Float sub-window. Upstream bug — should be fixed in
+  // @tauri-apps/api. See ohos-window-test-mapping.md row "窗口背景色".
   async function manualSetBackgroundColor(color, label) {
     await wrapManual(`setBackgroundColor(${label})`, async () => {
-      const win = getCurrentWindow();
+      if (!lastCreatedWindowLabel) {
+        manualResult = `No sub-window target. Click "Create Borderless Window" or "Create Transparent+Borderless" first, then click a Set BG button.`;
+        onMessage(manualResult);
+        return;
+      }
       if (color === null) {
-        // Use webview-level API which supports null to truly reset to default
-        await webview.setBackgroundColor(null);
-        manualResult = `Background color reset to default (null via Webview API).\n\nExpected: Window background returns to its original default color.`;
+        // Reset: restore the sub-window background to default (opaque white)
+        await invoke('plugin:window|set_background_color', { label: lastCreatedWindowLabel, value: null });
+        manualResult = `Background color reset to default on sub-window "${lastCreatedWindowLabel}".`;
       } else {
-        await win.setBackgroundColor(color);
+        await invoke('plugin:window|set_background_color', { label: lastCreatedWindowLabel, value: color });
         const [r, g, b, a] = color;
-        manualResult = `Background color set to [${r},${g},${b},${a}] (${label}).\n\n` +
-          `Expected: Window background should change to ${label}.\n` +
-          `Alpha=${a} (${a === 255 ? 'fully opaque' : a === 0 ? 'fully transparent' : 'semi-transparent'}).\n\n` +
-          `If visual matches → PASS.`;
+        manualResult = `Background color set to [${r},${g},${b},${a}] (${label}) on sub-window "${lastCreatedWindowLabel}".\n\n` +
+          `Expected: The sub-window background should be ${label}.\n` +
+          `Alpha=${a} (${a === 255 ? 'fully opaque' : a === 0 ? 'fully transparent (invisible)' : 'semi-transparent'}).\n\n` +
+          `If visual matches → PASS.\nIf no change → FAIL.`;
       }
       onMessage(manualResult);
     });
@@ -914,11 +1134,6 @@ Expected behavior:
     await manualVibrancyEffect('Acrylic', Effect.Acrylic, { radius: 25, color: [0, 0, 0, 128] },
       'Window background BLURRY + semi-transparent DARK tint (blur + color overlay).');
   }
-  async function manualVibrancyTabbedDark() {
-    await manualVibrancyEffect('TabbedDark', Effect.TabbedDark, { radius: 20 },
-      'Window background BLURRY + DARK tint (OHOS approximates MicaDark via blur + dark tint).');
-  }
-
   async function manualVibrancyClearEffects() {
     await wrapManual('vibrancy:clearEffects', async () => {
       const windowId = 'manual-vibrancy-clear';
@@ -949,6 +1164,508 @@ Expected behavior:
         `(build-time effect via WindowBuilder::effects, not runtime setEffects).\n\n` +
         `If frosted on appear → PASS.\nIf clear on appear (needs runtime setEffects) → FAIL.\n\n` +
         `Close with Ctrl+W or Cmd+W.`;
+      onMessage(manualResult);
+    });
+  }
+
+  // ─── OHOS Window Operations Manual Tests ───
+  // 窗口位置/大小/最大化/最小化/全屏/可见性/聚焦/置顶/装饰按钮/光标
+  // 主窗口上 D 组 setDecorationFlags 为 no-op，但 is*() 状态仍翻转。
+  let ohosWinState = $state('');
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function manualSetOuterPosition() {
+    await wrapManual('setOuterPosition', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Decorated first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const orig = await win.outerPosition();
+      const tx = orig.x < 200 ? 400 : 100, ty = orig.y < 200 ? 400 : 100;
+      await win.setPosition(new PhysicalPosition(tx, ty));
+      await delay(600);
+      const after = await win.outerPosition();
+      ohosWinState = `outerPosition (${orig.x},${orig.y}) → (${after.x},${after.y}) target (${tx},${ty}) [on ${lastCreatedWindowLabel}]`;
+      manualResult = `setOuterPosition(${tx},${ty}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected: 子窗口左上角移动到 (${tx},${ty})。\n实际: (${after.x},${after.y})。\n若位置变化 → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetInnerSize() {
+    await wrapManual('setInnerSize', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Decorated first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const orig = await win.innerSize();
+      const tw = Math.max(400, Math.floor(orig.width / 2));
+      const th = Math.max(300, Math.floor(orig.height / 2));
+      await win.setSize(new PhysicalSize(tw, th));
+      await delay(700);
+      const after = await win.innerSize();
+      ohosWinState = `innerSize ${orig.width}×${orig.height} → ${after.width}×${after.height} target ${tw}×${th} [on ${lastCreatedWindowLabel}]`;
+      manualResult = `setInnerSize(${tw}×${th}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected: 子窗口内容区变为 ${tw}×${th}。\n实际: ${after.width}×${after.height}。\n若尺寸变化 → PASS。`;
+      onMessage(manualResult);
+      await win.setSize(new PhysicalSize(orig.width, orig.height)); // 还原
+      await delay(400);
+    });
+  }
+
+  async function manualMaximize() {
+    await wrapManual('maximize', async () => {
+      const win = getCurrentWindow();
+      const before = await win.isMaximized();
+      if (before) { await win.unmaximize(); } else { await win.maximize(); }
+      const after = await win.isMaximized();
+      ohosWinState = `isMaximized: ${before} → ${after}`;
+      manualResult = `maximize toggled: ${before} → ${after}.\n\nExpected: 窗口最大化填满屏幕 / 再次点击还原。\n若状态翻转且视觉变化 → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualMinimize() {
+    await wrapManual('minimize', async () => {
+      const win = getCurrentWindow();
+      await win.minimize();
+      ohosWinState = `minimize dispatched; 2s 后 unminimize`;
+      manualResult = `minimize() dispatched.\n\nExpected: 窗口最小化到任务栏。2 秒后自动恢复。\n若先消失再恢复 → PASS。`;
+      onMessage(manualResult);
+      setTimeout(() => getCurrentWindow().unminimize(), 2000);
+    });
+  }
+
+  async function manualFullscreen() {
+    await wrapManual('setFullscreen', async () => {
+      const win = getCurrentWindow();
+      const before = await win.isFullscreen();
+      await win.setFullscreen(!before);
+      const after = await win.isFullscreen();
+      ohosWinState = `isFullscreen: ${before} → ${after}`;
+      manualResult = `setFullscreen(${!before}) dispatched.\n\nExpected: 全屏时进入沉浸布局（隐藏状态栏/导航条），再次点击还原。\n若系统栏隐藏/恢复 → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 主窗口 Hide/Show — hide=hideAbility,show=startAbility(instanceKey='main' 复用)
+  async function manualShowHide() {
+    await wrapManual('showHide', async () => {
+      const win = getCurrentWindow();
+      await win.hide();
+      ohosWinState = `main hide dispatched; 2s 后 show(startAbility)`;
+      manualResult = `hide() on main window (hideAbility → app 后台)。\n2 秒后 show() (startAbility instanceKey='main' → onAcceptWant 复用实例)。\n若主窗口先消失再恢复 → PASS。`;
+      onMessage(manualResult);
+      setTimeout(() => getCurrentWindow().show(), 2000);
+    });
+  }
+
+  async function manualSetFocus() {
+    await wrapManual('setFocus', async () => {
+      const win = getCurrentWindow();
+      await win.setFocus();
+      const focused = await win.isFocused();
+      ohosWinState = `isFocused → ${focused}`;
+      manualResult = `setFocus() dispatched。\n\nExpected: 窗口置前获取焦点（子窗口 raiseToAppTop，主窗口系统管理）。\nisFocused() = ${focused}。\n若窗口来到最前 → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualAlwaysOnTop() {
+    await wrapManual('setAlwaysOnTop', async () => {
+      const win = getCurrentWindow();
+      const before = await win.isAlwaysOnTop();
+      await win.setAlwaysOnTop(!before);
+      const after = await win.isAlwaysOnTop();
+      ohosWinState = `isAlwaysOnTop: ${before} → ${after}`;
+      manualResult = `setAlwaysOnTop(${!before}) dispatched。\n\n已调用 OHOS setWindowTopmost(API 14+,需 WINDOW_TOPMOST 权限)。\nisAlwaysOnTop()=${after}。\n主窗口已置顶(跨应用常驻最前)。\n验证:切到其他 app,主窗口应仍可见(不被遮挡) → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 装饰按钮组:作用在最后创建的 Float 子窗口(主窗口 no-op)
+  async function manualSetClosable() {
+    await wrapManual('setClosable', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const before = await win.isClosable();
+      await win.setClosable(!before);
+      const after = await win.isClosable();
+      ohosWinState = `isClosable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
+      manualResult = `setClosable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected(decorations=true 时):关闭按钮 ${after ? '显示' : '隐藏'}。\nclosable 是唯一被 FloatPage 消费的 flag(line 155 控制关闭按钮显隐)。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetMaximizable() {
+    await wrapManual('setMaximizable', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const before = await win.isMaximizable();
+      await win.setMaximizable(!before);
+      const after = await win.isMaximizable();
+      ohosWinState = `isMaximizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
+      manualResult = `setMaximizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('maximizable') 但没消费(无最大化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetMinimizable() {
+    await wrapManual('setMinimizable', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const before = await win.isMinimizable();
+      await win.setMinimizable(!before);
+      const after = await win.isMinimizable();
+      ohosWinState = `isMinimizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
+      manualResult = `setMinimizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('minimizable') 但没消费(无最小化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetResizable() {
+    await wrapManual('setResizable', async () => {
+      if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      const before = await win.isResizable();
+      await win.setResizable(!before);
+      const after = await win.isResizable();
+      ohosWinState = `isResizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
+      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('resizable') 但没消费(无 resize 手柄)。\nflag 写入 LocalStorage 但无 UI 效果。要真正禁用 resize 需走 enableDrag(false) API。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetFocusable() {
+    await wrapManual('setFocusable', async () => {
+      if (!lastCreatedWindowLabel) {
+        manualResult = `No sub-window target. Click "Create Borderless Window" or "Create Transparent+Borderless" first.`;
+        onMessage(manualResult);
+        return;
+      }
+      const win = await WebviewWindow.getByLabel(lastCreatedWindowLabel);
+      if (!win) throw new Error(`sub-window "${lastCreatedWindowLabel}" not found`);
+      // Self-verifying (2026-08-27): setWindowFocusable has NO visual effect — the
+      // observable criterion is whether the sub-window steals keyboard focus from
+      // the main window when clicked. is_focused reads the app-level HAS_FOCUS flag
+      // (main-window focus); normal sub-window click → false, focusable=false click
+      // → stays true (device-verified A/B). Programmatic setFocus() can't be used
+      // (raiseToAppTop only raises z-order, never transfers focus).
+      const main = getCurrentWindow();
+      const baseline = await main.isFocused();
+      if (!baseline) {
+        manualResult = `主窗口当前未持有焦点(创建子窗口会抢走焦点)。\n请先点击主窗口任意空白区域,再点本按钮。`;
+        onMessage(manualResult);
+        return;
+      }
+      await win.setFocusable(false);
+      ohosWinState = `setFocusable(false) on "${lastCreatedWindowLabel}" → 3s 后恢复`;
+      manualResult = `setFocusable(false) dispatched on sub-window "${lastCreatedWindowLabel}"。\n\n👉 请在 3 秒内点击子窗口一次,等待自动判定...`;
+      onMessage(manualResult);
+      // Poll main-window focus during the 3s window; restore afterwards and judge.
+      let focusStolen = false;
+      const started = Date.now();
+      const poll = setInterval(async () => {
+        if (!(await main.isFocused())) focusStolen = true;
+      }, 250);
+      setTimeout(async () => {
+        clearInterval(poll);
+        try { await win.setFocusable(true); } catch { /* best-effort restore */ }
+        if (focusStolen) {
+          manualResult = `❌ FAIL: 3 秒内主窗口焦点丢失 — 子窗口仍抢走了焦点(setWindowFocusable 未生效)。`;
+        } else {
+          manualResult = `✅ PASS: 3 秒内主窗口焦点保持 — 子窗口拒绝了焦点点击(setWindowFocusable 生效,无视觉变化属正常语义)。\n（前提:期间确实点击过子窗口;点其他窗口/桌面也会导致 FAIL）`;
+        }
+        ohosWinState = `setFocusable(true) restored on "${lastCreatedWindowLabel}"`;
+        onMessage(manualResult);
+      }, 3000);
+    });
+  }
+
+  async function manualCursorVisible() {
+    await wrapManual('setCursorVisible', async () => {
+      const win = getCurrentWindow();
+      await win.setCursorVisible(false);
+      ohosWinState = `cursorVisible=false; 3s 后恢复`;
+      manualResult = `setCursorVisible(false) dispatched。\n\nExpected: 鼠标光标隐藏（pointer.setPointerVisible，全局）。\n移动鼠标验证光标隐藏。3 秒后自动恢复可见。`;
+      onMessage(manualResult);
+      setTimeout(() => getCurrentWindow().setCursorVisible(true), 3000);
+    });
+  }
+
+  const cursorIcons = ['default', 'hand', 'crosshair', 'text', 'wait', 'copy', 'not-allowed', 'grab', 'zoom-in'];
+  let cursorIconIdx = $state(0);
+  async function manualCursorIcon() {
+    await wrapManual('setCursorIcon', async () => {
+      const win = getCurrentWindow();
+      cursorIconIdx = (cursorIconIdx + 1) % cursorIcons.length;
+      const icon = cursorIcons[cursorIconIdx];
+      await win.setCursorIcon(icon);
+      ohosWinState = `cursorIcon = ${icon}`;
+      manualResult = `setCursorIcon("${icon}") dispatched。\n\nExpected: 鼠标光标变为 ${icon} 形状（pointer.setPointerStyleSync）。\n移动鼠标到窗口内查看光标样式。循环：${cursorIcons.join(' → ')}。`;
+      onMessage(manualResult);
+    });
+  }
+
+  let ignoreCursorState = $state(false);
+  async function manualIgnoreCursor() {
+    await wrapManual('setIgnoreCursorEvents', async () => {
+      const win = getCurrentWindow();
+      ignoreCursorState = !ignoreCursorState;
+      await win.setIgnoreCursorEvents(ignoreCursorState);
+      ohosWinState = `ignoreCursor = ${ignoreCursorState}`;
+      manualResult = `setIgnoreCursorEvents(${ignoreCursorState}) dispatched。\n\nExpected: ignore=true 时窗口点击穿透（setWindowTouchable=false），可点到后面窗口/桌面。3 秒后自动恢复可触摸。`;
+      onMessage(manualResult);
+      if (ignoreCursorState) {
+        setTimeout(() => { getCurrentWindow().setIgnoreCursorEvents(false); ignoreCursorState = false; }, 3000);
+      }
+    });
+  }
+
+  // ─── 补充手动测试:自动测试覆盖但无按钮的窗口能力 ───
+
+  // 1. 窗口 ID — getCurrentWindow().label
+  async function manualWindowId() {
+    await wrapManual('windowId', async () => {
+      const win = getCurrentWindow();
+      const label = win.label;
+      const ok = typeof label === 'string' && label.length > 0;
+      manualResult = `getCurrentWindow() → label="${label}"\n${ok ? '✓ 非空字符串 → PASS' : '✗ 空 → FAIL'}`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 2. 窗口销毁 — 建临时子窗口 → onCloseRequested → 关闭 → 看是否收到
+  async function manualCloseRequested() {
+    await wrapManual('closeRequested', async () => {
+      const id = 'close-test-' + Date.now();
+      await invoke('create_transparent_window', { windowId: id });
+      const win = await WebviewWindow.getByLabel(id);
+      if (!win) throw new Error('close-test sub-window not created');
+      let got = false;
+      const un = await win.onCloseRequested(() => { got = true; });
+      await new Promise((r) => setTimeout(r, 300));
+      try { await win.close(); } catch {}
+      await new Promise((r) => setTimeout(r, 600));
+      try { un?.(); } catch {}
+      manualResult = `onCloseRequested ${got ? 'fired ✓ → PASS' : 'NOT fired → FAIL'}\n(临时子窗口 "${id}" 已关闭)`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 3. 多窗口 — window.open (Allow 模式)
+  async function manualOnNewWindow() {
+    await wrapManual('on_new_window:Allow', async () => {
+      await invoke('set_deny_new_window', { deny: false });
+      await invoke('set_create_new_window', { create: true });
+      window.open('https://example.com/manual-newwin', '_blank');
+      await new Promise((r) => setTimeout(r, 1500));
+      manualResult = `window.open dispatched (Allow mode).\n若弹出子窗口 → PASS;若无 → FAIL\n(on_new_window: Allow 触发新建 OS 窗口)`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 4. Cursor grab — OH_WindowManager_LockCursor/UnlockCursor (NDK C API 22+,
+  //    ohos.permission.LOCK_WINDOW_CURSOR normal permission, declared in entry_desktop module.json5).
+  //    Confined mode (isCursorFollowMovement=true): cursor stays inside the window but keeps
+  //    moving; auto-released on focus loss.
+  async function manualCursorGrab() {
+    await wrapManual('setCursorGrab', async () => {
+      try {
+        await getCurrentWindow().setCursorGrab(true);
+        manualResult = `setCursorGrab(true) → no throw ✓ 已锁定(5 秒后自动解锁)\n\nExpected: 移动鼠标 — 光标被限制在窗口内无法移出(窗口内仍可移动)。\n锁定期间点击其他窗口可验证失焦自动解锁(光标立即恢复自由)。`;
+        onMessage(manualResult);
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          await getCurrentWindow().setCursorGrab(false);
+          manualResult = `setCursorGrab(false) → 已解锁\n\nExpected: 鼠标光标恢复自由移动,可移出窗口。`;
+        } catch (e) {
+          // unlock-after-auto-release (1300002) is idempotent on the Rust side and
+          // should not surface here; if another window was clicked during the lock,
+          // the cursor is already free via focus-loss auto-unlock.
+          manualResult = `setCursorGrab(false) threw: ${e}\n光标应已恢复自由(失焦自动解锁兜底)。若仍被锁定请上报。`;
+        }
+      } catch (e) {
+        manualResult = `setCursorGrab threw: ${e}\n预期:锁定/解锁成功不抛错(权限已声明)。抛错常见原因:权限缺失(hilog 201)/ API < 22 设备(NotSupported)`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  // 5. 窗口事件 — toggle 监听 Resized/Moved/FocusChanged
+  async function toggleWinEventWatch() {
+    if (winEventWatchActive) {
+      winEventUnlistens?.forEach((un) => { try { un?.(); } catch {} });
+      winEventUnlistens = null;
+      winEventWatchActive = false;
+      manualResult = `Stopped watching. Total events: ${winEventCount}\nTypes: ${winEventTypes.join(', ') || '(none)'}\n${winEventCount > 0 ? '✓ PASS' : '✗ FAIL (no events)'}`;
+      onMessage(manualResult);
+    } else {
+      winEventCount = 0;
+      winEventTypes = [];
+      const win = getCurrentWindow();
+      const unR = await win.onResized(() => { winEventCount++; winEventTypes = [...winEventTypes, 'Resized']; });
+      const unM = await win.onMoved(() => { winEventCount++; winEventTypes = [...winEventTypes, 'Moved']; });
+      const unF = await win.onFocusChanged(({ payload }) => { winEventCount++; winEventTypes = [...winEventTypes, `Focus=${payload}`]; });
+      winEventUnlistens = [unR, unM, unF];
+      winEventWatchActive = true;
+      manualResult = `Watching Resized/Moved/FocusChanged (n=${winEventCount}).\n切后台再回来触发 FocusChanged(推荐,不触发 sizeChange 风暴)。\n⚠️ 避免拖拽/缩放主窗口 — 会触发 OnSizeChange 风暴导致 appfreeze(OHOS 既有问题)。\n再点 "Stop Watch" 看事件数。`;
+      onMessage(manualResult);
+    }
+  }
+
+  // 6. 窗口状态持久化 — window-state save+restore
+  // NOTE: 不调 setSize 改尺寸 — 主窗口尺寸变化会触发 OnSizeChange 事件风暴导致
+  // appfreeze(THREAD_BLOCK_6S,OHOS 既有适配问题)。只验证 filename + save + restore
+  // 不报错(插件层功能),尺寸 round-trip 由自动测试(子进程/CI)覆盖。
+  async function manualWindowState() {
+    await wrapManual('window-state', async () => {
+      const fname = await windowStateFilename();
+      const win = getCurrentWindow();
+      const size = await win.innerSize();
+      // save 当前尺寸(不改尺寸)→ restore → 验证不报错
+      await saveWindowState(StateFlags.SIZE);
+      await restoreStateCurrent(StateFlags.SIZE);
+      await new Promise((r) => setTimeout(r, 200));
+      const ok = typeof fname === 'string' && fname.length > 0;
+      manualResult = `filename="${fname}"\n当前尺寸: ${size.width}×${size.height}\nsaveWindowState+restoreStateCurrent OK(未改尺寸,避免 sizeChange 风暴)\n${ok ? '✓ → PASS' : '✗ filename 空 → FAIL'}`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 7. set_bounds — webview 层 set position+size round-trip
+  async function manualSetBounds() {
+    await wrapManual('set_bounds', async () => {
+      const report = await invoke('set_bounds_test');
+      const ok = report?.set_ok === true;
+      manualResult = `set_bounds_test → set_ok=${report?.set_ok}\n${ok ? '✓ PASS' : '✗ FAIL'}\n(webview 层 set position+size round-trip)`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 8. 窗口标题 — 直接在主窗口设(主窗口标题栏可见,Float 子窗口 setDecorations 无效)
+  async function manualSetTitle() {
+    await wrapManual('setTitle', async () => {
+      const win = getCurrentWindow();
+      const titles = ['🪟 Tauri OHOS 测试标题', 'Hello 华为账号', 'Tauri OpenHarmony'];
+      const idx = (manualTitleIdx ?? -1) + 1;
+      manualTitleIdx = idx % titles.length;
+      const title = titles[manualTitleIdx];
+      await win.setTitle(title);
+      manualResult = `setTitle("${title}") dispatched on main window.\n\nExpected: 主窗口标题栏文字变为 "${title}"。\n(图标不可改;set_title 走 setWindowTitle API15+)\nIf title bar shows new text → PASS.`;
+      onMessage(manualResult);
+    });
+  }
+  let manualTitleIdx = $state(0);
+
+  // 9. 窗口大小限制 — 主窗口设最小 1600×1200
+  async function manualSetMinSize() {
+    await wrapManual('setMinSize', async () => {
+      const win = getCurrentWindow();
+      // setMinSize → tao set_min_inner_size → setWindowLimits(min, 0, 0, 0)
+      // ⚠️ LogicalSize 会乘 scale_factor 转 px;设备 scale≈2.0 → 1600×1200 logical = 3200×2400 px > 屏幕 3120×2080
+      // 超屏幕会触发 resize → sizeChange 风暴 → appfreeze。改用 PhysicalSize 直接传 px 避免转换。
+      await win.setMinSize(new LogicalSize(1600, 1200));
+      manualResult = `setMinSize(LogicalSize 1600×1200) dispatched on main window.\n\n⚠️ scale≈2.0 → 实际 px ≈ 3200×2400 > 屏幕 3120×2080,可能卡死。\n若未卡死:拖拽窗口不能小于 1600×1200 logical → PASS。\n卡死 → force-stop 重启,点 Reset Min Size 清除。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 取消最小尺寸限制 — setWindowLimits 传 0 = "不改变",不是清除(无 reset 接口)
+  // 要恢复自由缩放,设 min=1(让系统下限 760×570 接管)
+  async function manualResetMinSize() {
+    await wrapManual('resetMinSize', async () => {
+      const win = getCurrentWindow();
+      // setMinSize(1,1) → tao set_min_inner_size(Some(1,1)) → setWindowLimits(1,1,0,0)
+      // min=1 让系统下限接管(760×570),比 1600×1200 小,恢复自由缩放
+      await win.setMinSize(new LogicalSize(1, 1));
+      manualResult = `Reset: setMinSize(1×1) dispatched — min 设为 1×1 logical。\n系统下限 760×570 接管,窗口可缩到 760×570(比 1600×1200 小)。\n拖拽窗口边缘缩小验证 → 若能缩到 < 1600×1200 → PASS。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 同时设 min + max — 验证 tao set_min/max_inner_size "四值同下" 修复。
+  // 修复前: setMaxSize 会把之前 setMinSize 的 min 清零(max 那次写 min=0);修复后 min 保留。
+  async function manualSetMinAndMaxSize() {
+    await wrapManual('setMinAndMaxSize', async () => {
+      const win = getCurrentWindow();
+      // PhysicalSize 直接传 px,避免 LogicalSize × scale(≈2.0) 超屏幕卡死。
+      // 屏幕 3120×2080 px;min 1600×1200 < max 2400×1800 < 屏幕,安全。
+      await win.setMinSize(new PhysicalSize(1600, 1200));
+      // setMinSize → tao set_min_inner_size: 缓存 min, 读 max=0 → setWindowLimits(1600,1200,0,0)
+      await win.setMaxSize(new PhysicalSize(2400, 1800));
+      // setMaxSize → tao set_max_inner_size: 缓存 max, 读 min
+      //   修复前: setWindowLimits(0,0,2400,1800) ← min 丢!
+      //   修复后: setWindowLimits(1600,1200,2400,1800) ← min 保留 ✓
+      manualResult = `setMinSize(1600×1200 px) + setMaxSize(2400×1800 px) dispatched.\n\n验证(看 hilog tag WindowManager):\n  setWindowLimits ... OK: min=1600×1200 max=0×0      ← setMinSize\n  setWindowLimits ... OK: min=1600×1200 max=2400×1800 ← setMaxSize(min 保留=修复生效)\n修复前第二次会 min=0×0(min 丢)。\n\n拖拽验证:窗口不能缩到 < 1600×1200,不能放到 > 2400×1800。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 10. 窗口主题 — toggle Dark/Light/System
+  let themeState = $state(0); // 0=Light, 1=Dark, 2=System
+  async function manualSetTheme() {
+    await wrapManual('setTheme', async () => {
+      const win = getCurrentWindow();
+      const themes = ['light', 'dark', null]; // null = system follow
+      const labels = ['Light', 'Dark', 'System (follow)'];
+      const next = (themeState + 1) % 3;
+      themeState = next;
+      const t = themes[next];
+      await win.setTheme(t);
+      manualResult = `setTheme(${labels[next]}) dispatched.\n\nExpected: 窗口深浅色切换。\n- Light: 浅色背景\n- Dark: 深色背景\n- System: 跟随系统设置\n(底层 setColorMode: LIGHT/DARK/NOT_SET)\nIf visual matches → PASS.`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualRequestUserAttention() {
+    await wrapManual('requestUserAttention', async () => {
+      const win = getCurrentWindow();
+      // tauri 内置 window API → tao → openharmony-ability → notificationManager
+      // UserAttentionType.Critical=1, Informational=2(OHOS 不区分,统一发通知)
+      await win.requestUserAttention(UserAttentionType.Informational);
+      manualResult = 'requestUserAttention dispatched.\n\nExpected: 系统通知中心弹出 "Tauri App / 请查看应用窗口" 通知。\n首次点击会弹"是否允许发送通知"授权框,允许后再点一次。\n底层: tao → openharmony-ability → notificationManager.publish (1600004 时 requestEnableNotification)。\nIf notification appears → PASS.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualSetImePosition() {
+    await wrapManual('setImePosition', async () => {
+      // 聚焦 HTML input → updateCursor 上报光标位置 → 回读 ArkTS 侧真实结果
+      // 链路: invoke → tao set_ime_position → openharmony-ability →
+      //   inputMethod.getController().updateCursor(CursorInfo{left,top,width,height})
+      // 前置条件:窗口内有聚焦的编辑框(HTML input 即可,ArkWeb 走系统输入法框架)
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'IME test input (auto-focused)';
+      inp.style.cssText = 'position:fixed;bottom:60px;left:24px;width:320px;height:36px;font-size:16px;background:#fff;color:#111;border:1px solid #888;padding:0 8px;z-index:9999;';
+      document.body.appendChild(inp);
+      const startTs = Date.now();
+      try {
+        inp.focus();
+        await delay(600);
+        await invoke('set_ime_position_test', { x: 200, y: 400 });
+        await delay(800); // updateCursor promise 异步结算,等结果落盘再回读
+        const raw = await invoke('get_ime_position_result');
+        const r = JSON.parse(raw);
+        if (r.code === -1 && String(r.message).includes('not supported')) {
+          manualResult = '⏭️ 非 OHOS 平台(stub 返回 not supported)→ SKIP';
+        } else if (r.ts < startTs) {
+          // 回读到陈旧记录:本次 promise 未在等待窗口内结算(或同步抛出)
+          manualResult = `已聚焦输入框并上报光标位置 (200,400)。\n` +
+            `结果未就绪:回读到陈旧记录(ts=${r.ts} 早于本次按压,code=${r.code} ${r.message})→ 重试一次;持续出现则 FAIL`;
+        } else {
+          manualResult = `已聚焦输入框并上报光标位置 (200,400)。\n` +
+            `updateCursor 返回: ${r.ok ? 'OK ✅ → PASS' : `失败 code=${r.code} ${r.message} → FAIL`}\n` +
+            `上报 CursorInfo: left=${r.x} top=${r.y}(物理像素,tao 透传)`;
+        }
+      } catch (e) {
+        manualResult = `invoke/解析失败: ${e}\n(链路未走完,不能作为能力判定依据)`;
+      } finally {
+        // 无论成败都移除注入的输入框(否则聚焦 input 残留 DOM 影响后续 IME 行为)
+        inp.blur();
+        inp.remove();
+      }
       onMessage(manualResult);
     });
   }
@@ -1240,6 +1957,178 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
+  // ─── OHOS Adapter Manual Tests ───
+  async function manualOhosPrint() {
+    await wrapManual('webview.print', async () => {
+      // window.print() is injected by tauri's print.js init script (plugin:webview|print
+      // → wry OHOS print → createPdf → @ohos.print). Webview class has no print method;
+      // the global window.print shim is the correct entry point on macOS/iOS/OHOS.
+      try {
+        await window.print();
+        manualResult = 'window.print() called — check system print dialog (may take a few seconds for createPdf)';
+      } catch (e) {
+        manualResult = `print() error: ${e}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosMonitorFromPoint() {
+    await wrapManual('monitor_from_point', async () => {
+      const { currentMonitor, monitorFromPoint } = await import('@tauri-apps/api/window');
+      const m = await currentMonitor();
+      if (!m) { manualResult = 'No monitor'; onMessage(manualResult); return; }
+      const w = m.size.width, h = m.size.height;
+      // OHOS single-display boundary check (spec ohos-monitor-real-values):
+      // points inside the half-open rect [0,w) x [0,h) return Some(monitor), else null.
+      const cases = [
+        ['(100,200) 屏内', 100, 200, true],
+        [`(${w - 1},${h - 1}) 右下角内`, w - 1, h - 1, true],
+        [`(${w},${h}) 刚好越界`, w, h, false],
+        ['(-1,0) 负坐标', -1, 0, false],
+        ['(99999,0) 超远', 99999, 0, false]
+      ];
+      const lines = [`monitor size: ${w}x${h} (DisplayManager 物理像素)`, ''];
+      let allPass = true;
+      for (const [label, x, y, expectSome] of cases) {
+        let got = '', pass = false;
+        try {
+          const r = await monitorFromPoint(x, y);
+          got = r ? 'Some(monitor)' : 'null';
+          pass = expectSome ? !!r : !r;
+        } catch (e) {
+          got = `err: ${e}`;
+        }
+        if (!pass) allPass = false;
+        lines.push(`${pass ? '✅' : '❌'} ${label} → ${got}（预期 ${expectSome ? 'Some' : 'None'}）`);
+      }
+      lines.push('', allPass ? 'ALL PASS ✅' : 'SOME FAILED ❌');
+      manualResult = lines.join('\n');
+      onMessage(manualResult);
+    });
+  }
+
+  // OHOS: display refresh rate probe (Rust-only value; JS Monitor API has no
+  // refreshRate on any platform). Rust reads DisplayManager via NDK (same
+  // source as tao video_modes); rAF measurement is a webview-side cross-check.
+  async function manualOhosDisplayRefreshRate() {
+    await wrapManual('display.refresh_rate', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      let probe;
+      try {
+        probe = await invoke('probe_display_refresh_rate');
+      } catch (e) {
+        manualResult = `probe_display_refresh_rate error: ${e}`;
+        onMessage(manualResult);
+        return;
+      }
+      const frames = await new Promise((resolve) => {
+        let count = 0;
+        const start = performance.now();
+        const tick = () => {
+          count++;
+          if (performance.now() - start < 1000) requestAnimationFrame(tick);
+          else resolve(count);
+        };
+        requestAnimationFrame(tick);
+      });
+      manualResult = `${probe}\n` +
+        `webview rAF measured: ~${frames} fps (LTPO may throttle when idle)\n` +
+        `Note: refresh rate is Rust-only (tao video_modes source), not in JS Monitor API.`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosDialogError() {
+    await wrapManual('dialog.error degrade', async () => {
+      manualResult = 'dialog::error() is an internal runtime function.\n' +
+        'On OHOS it degrades to log::error! (no panic).\n' +
+        'The function is only called under cfg(windows) in practice.\n' +
+        'To verify: check hilog for "[dialog::error]" entries after\n' +
+        'triggering a runtime error path. App should NOT crash.';
+      onMessage(manualResult);
+    });
+  }
+
+  // OHOS adapter: create test webviews with specific flags
+  async function manualOhosTestClipboardOff() {
+    await wrapManual('clipboard=false', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-cb-off-' + Date.now(),
+        label: 'Clipboard OFF test',
+        clipboard: false,
+      });
+      manualResult = 'Test webview created with clipboard=false.\nSelect text + Ctrl+C → clipboard should NOT change.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosTestClipboardOn() {
+    await wrapManual('clipboard=true', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-cb-on-' + Date.now(),
+        label: 'Clipboard ON test',
+        clipboard: true,
+      });
+      manualResult = 'Test webview created with clipboard=true.\nSelect text + Ctrl+C → clipboard should change.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosTestZoomOff() {
+    await wrapManual('zoom_hotkeys=false', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-zoom-off-' + Date.now(),
+        label: 'Zoom OFF test',
+        zoomHotkeys: false,
+      });
+      manualResult = 'Test webview created with zoom_hotkeys=false.\nCtrl+= / Ctrl+- / Ctrl+0 → page zoom should NOT change.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosTestZoomOn() {
+    await wrapManual('zoom_hotkeys=true', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-zoom-on-' + Date.now(),
+        label: 'Zoom ON test',
+        zoomHotkeys: true,
+      });
+      manualResult = 'Test webview created with zoom_hotkeys=true.\nCtrl+= / Ctrl+- / Ctrl+0 → page zoom should change.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosTestHttpsScheme() {
+    await wrapManual('https_scheme=true', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-https-' + Date.now(),
+        label: 'HTTPS Scheme test',
+        httpsScheme: true,
+      });
+      manualResult = 'Test webview created with use_https_scheme=true.\nInit script logs isSecureContext / crypto.subtle / external+subresource fetch probes to hilog (ARKWEB-CONSOLE).\nJudge: window renders + [https-scheme] lines.';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOhosTestDragOverlay() {
+    await wrapManual('drag_drop_overlay=true', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('create_ohos_test_webview', {
+        windowId: 'test-drag-' + Date.now(),
+        label: 'Drag Overlay test',
+        dragDropOverlay: true,
+      });
+      manualResult = 'Test webview created with drag_drop_overlay=true.\n1. Drag a file from 文件管理器 into the window → hilog [DRAG-TEST] Enter/Over/Drop(paths)/Leave.\n2. Click / scroll / select text in the window → pointer must still work (passthrough).';
+      onMessage(manualResult);
+    });
+  }
+
   // ─── Autostart Manual Tests ───
   async function manualAutostartIsEnabled() {
     await wrapManual('autostart.isEnabled', async () => {
@@ -1302,6 +2191,18 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     const unlisten = await listen('ua-test-result', (event) => {
       const { windowId, userAgent } = event.payload;
       const msg = `[UA-TEST] ${windowId}: ${userAgent}`;
+      console.log(msg);
+      onMessage(msg);
+    });
+    return unlisten;
+  });
+
+  // Listen for OHOS print-job terminal states (succeed/fail/cancel/block) emitted
+  // from Rust (openharmony-ability print-state channel → "ohos-print-state" event).
+  onMount(async () => {
+    const unlisten = await listen('ohos-print-state', (event) => {
+      const { id, state, error } = event.payload;
+      const msg = `[PRINT-STATE] webview ${id}: ${state}${error ? ` — ${error}` : ''}`;
       console.log(msg);
       onMessage(msg);
     });
@@ -1399,7 +2300,9 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
         return;
       }
 
-      // Render snapshot to canvas for visual verification
+      // Render snapshot to canvas for visual verification.
+      // The backend returns a base64 PNG (not raw RGBA — web_page_snapshot omits
+      // the pixel buffer for NAPI efficiency), so decode via Image + drawImage.
       snapshotWidth = result.width;
       snapshotHeight = result.height;
       hasSnapshot = true;
@@ -1409,11 +2312,12 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
 
       if (canvasEl) {
         const ctx = canvasEl.getContext('2d');
-        const imageData = new ImageData(new Uint8ClampedArray(result.rgba), result.width, result.height);
-        ctx.putImageData(imageData, 0, 0);
+        const img = new Image();
+        img.onload = () => ctx.drawImage(img, 0, 0, result.width, result.height);
+        img.src = `data:image/png;base64,${result.png_base64}`;
       }
 
-      manualResult = `Snapshot captured: ${result.width}×${result.height}, rgba_len=${result.rgba_len}\n` +
+      manualResult = `Snapshot captured: ${result.width}×${result.height}, base64 ${result.png_base64?.length ?? 0} chars\n` +
         `Check: canvas below should match the current WebView content.\n` +
         `If visual matches → PASS.`;
       onMessage(manualResult);
@@ -1424,6 +2328,9 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
   async function manualNewWindowAllow() {
     await wrapManual('newWindowAllow', async () => {
       await invoke('set_deny_new_window', { deny: false });
+      // Explicitly reset create flag: a prior Create-button press sets it true,
+      // and Allow must open the in-page dialog (not a Float OS window).
+      await invoke('set_create_new_window', { create: false });
       window.open('https://example.com/manual-allow-test', '_blank');
       manualResult = 'Allow mode: dialog should appear with ✕ close button in title bar.\n' +
         'Verify:\n' +
@@ -1560,6 +2467,355 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
+  // Notification action button (onAction emit/Channel, manual_tests.md §三十二 ③④).
+  // One button covers warm-start (background → tap action) and cold-start
+  // (kill app → tap action relaunches it). The listener stays registered so
+  // the callback survives backgrounding.
+  let notificationActionListener = null;
+  let notificationActionCount = 0;
+  async function manualNotificationAction() {
+    await wrapManual('notificationAction', async () => {
+      const { onAction, registerActionTypes, sendNotification, isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) {
+        manualResult = '⚠️ 通知权限未授予。请先点击 "Request Permission" 按钮请求权限。';
+        onMessage(manualResult);
+        return;
+      }
+      await registerActionTypes([{
+        id: 'manual-action-type',
+        actions: [{ id: 'manual-action', title: 'Tap Me' }],
+      }]);
+      // Re-register: drop the previous listener and reset the counter.
+      notificationActionListener?.unregister();
+      notificationActionListener = null;
+      notificationActionCount = 0;
+      notificationActionListener = await onAction((n) => {
+        notificationActionCount += 1;
+        const payload = JSON.stringify(n);
+        onMessage(`[onAction] fired (${notificationActionCount}): ${payload}`);
+        const actionIdMatch = n.actionId === 'manual-action';
+        manualResult = `✅ onAction 回调触发（第 ${notificationActionCount} 次）：${payload}\n` +
+          `断言：id=${n.id}, actionId="${n.actionId}"` +
+          `${actionIdMatch ? ' === "manual-action" ✅' : ' ≠ "manual-action" ❌'}`;
+      });
+      sendNotification({
+        id: 9001,
+        title: 'Action 手动测试',
+        body: '展开通知点击 "Tap Me" 按钮',
+        actionTypeId: 'manual-action-type',
+      });
+      manualResult = '✅ 已发送带 actionTypeId 的通知（id=9001）。验证步骤：\n' +
+        '  热启动：切应用到后台 → 通知中心展开本通知 → 点 "Tap Me" → 应用回前台且回调触发（actionId=manual-action）\n' +
+        '  冷启动：任务管理器结束 com.tauri.api → 点通知 "Tap Me" → 应用被拉起（冷启动 emit 早于 webview 注册监听，回调预期不触发，以应用拉起+hilog 派发为准）';
+      onMessage('Action notification sent (id=9001, actionTypeId=manual-action-type)');
+    });
+  }
+
+  // Notification received callback (onNotificationReceived, manual_tests.md §三十).
+  // Registers a listener, sends a notification, waits up to 15s for the callback.
+  // OHOS PLATFORM LIMITATION (verified in source, NOT a timing issue): there is no
+  // three-party-accessible subscription API for "notification received" events —
+  // Plugin.ets:633 "no corresponding OHOS subscription API; registration succeeds
+  // but no events will be delivered". notificationManager.subscribe is @systemapi
+  // (needs NOTIFICATION_CONTROLLER, system_basic, three-party apps not eligible),
+  // so the implementation never subscribes and there is no event source driving
+  // the listener channel. fired=false is the EXPECTED terminal state, not a
+  // harness failure. Listener stays registered so the path can be re-tested if
+  // the platform ever exposes it.
+  let notificationReceivedListener = null;
+  async function manualNotificationReceived() {
+    await wrapManual('notificationReceived', async () => {
+      const { onNotificationReceived, sendNotification, isPermissionGranted } = await import('@tauri-apps/plugin-notification');
+      const granted = await isPermissionGranted();
+      if (!granted) {
+        manualResult = '⚠️ 通知权限未授予。请先点击 "Request Permission" 按钮请求权限。';
+        onMessage(manualResult);
+        return;
+      }
+      notificationReceivedListener?.unregister();
+      notificationReceivedListener = null;
+      let fired = false;
+      notificationReceivedListener = await onNotificationReceived((n) => {
+        fired = true;
+        const payload = JSON.stringify(n);
+        onMessage(`[onNotificationReceived] fired: ${payload}`);
+        manualResult = `✅ onNotificationReceived 回调触发：${payload}`;
+      });
+      sendNotification({
+        id: 9002,
+        title: 'onNotificationReceived 手动测试',
+        body: '回调应在通知投递后 15s 内触发',
+      });
+      for (let i = 0; i < 15 && !fired; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      if (!fired) {
+        manualResult = '⏳ 15s 内未触发 onNotificationReceived 回调（OHOS 平台限制：无三方可用的通知到达订阅 API，回调预期不投递——记录形态。见 Plugin.ets:633 & manual_tests.md §三十）';
+      }
+      onMessage(`onNotificationReceived manual: fired=${fired}`);
+    });
+  }
+
+  // ─── Accessibility Manual Tests ───
+  async function manualFontScale() {
+    await wrapManual('fontScale', async () => {
+      const { getFontScale } = await import('@tauri-apps/plugin-accessibility');
+      const scale = await getFontScale();
+      manualResult = `getFontScale() → ${scale}\n\n` +
+        '验证步骤：\n' +
+        '  1. 记录当前值（默认 1.0）\n' +
+        '  2. 系统设置 → 显示和亮度 → 字体大小与显示大小，调大字号\n' +
+        '  3. 返回应用重新点击本按钮\n' +
+        '  4. 断言：第二次返回值 > 第一次（fontSizeScale 跟随系统设置变化）';
+      onMessage(`fontScale = ${scale}`);
+    });
+  }
+
+  async function manualScreenReaderQueries() {
+    await wrapManual('screenReaderQueries', async () => {
+      const { isScreenReaderEnabled, isTouchExploreEnabled } = await import('@tauri-apps/plugin-accessibility');
+      const sr = await isScreenReaderEnabled();
+      const te = await isTouchExploreEnabled();
+      manualResult = `isScreenReaderEnabled() → ${sr}\nisTouchExploreEnabled() → ${te}\n\n` +
+        '验证步骤：\n' +
+        '  1. 设置 → 辅助功能（无障碍），记录屏幕阅读器开关状态\n' +
+        '  2. 对照上方查询值与系统开关是否一致\n' +
+        '  3. 切换系统开关后重新点击本按钮，断言查询值跟随变化\n' +
+        '（注：查询零权限拒绝——真机实测 ACCESSIBILITY 只读不设防）';
+      onMessage(`screenReader=${sr}, touchExplore=${te}`);
+    });
+  }
+
+  async function manualAccessibilityStateChange() {
+    await wrapManual('accessibilityStateChange', async () => {
+      const { onAccessibilityStateChange } = await import('@tauri-apps/plugin-accessibility');
+      let events = 0;
+      let last = '(none)';
+      const unlisten = await onAccessibilityStateChange((enabled) => {
+        events += 1;
+        last = String(enabled);
+      });
+      // Collect state-change events for up to 20s while the tester toggles the reader.
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        manualResult = `onAccessibilityStateChange 已注册，等待事件… (${i + 1}s/20s)\n\n` +
+          '验证步骤：设置 → 辅助功能，开关屏幕阅读器\n\n' +
+          `已收到 ${events} 次状态事件\n最近一次: ${last}`;
+      }
+      unlisten();
+      manualResult = (events > 0
+        ? `✅ 状态事件链路验证通过：共 ${events} 次事件，最近一次 enabled=${last}\n` +
+          '（bridge subscribe → Observer → Rust emit → JS listen 端到端）'
+        : '⚠️ 20s 内未收到状态事件。订阅注册本身已实锤（hilog Observer has subscribed）；\n' +
+          '请确认期间确实开关了系统屏幕阅读器');
+      onMessage(`accessibility state change: ${events} events, last=${last}`);
+    });
+  }
+
+  // ─── Geolocation Manual Tests ───
+  async function manualGeolocationPermission() {
+    await wrapManual('geolocationPermission', async () => {
+      const { requestPermissions } = await import('@tauri-apps/plugin-geolocation');
+      const { invoke } = await import('@tauri-apps/api/core');
+      // 1) App-level permission dialog (LOCATION + APPROXIMATELY_LOCATION).
+      const status = await requestPermissions();
+      // 2) Jump to system location settings for the master switch
+      //    (BusinessError 3301100 gate — app permission alone is not enough).
+      let settings = '未跳转';
+      try {
+        await invoke('plugin:geolocation|open_location_settings');
+        settings = '已请求跳转（设置页应已打开）';
+      } catch (e) {
+        settings = `跳转失败: ${String(e)}`;
+      }
+      manualResult = `requestPermissions() → ${JSON.stringify(status)}\n` +
+        `open_location_settings() → ${settings}\n` +
+        '验证步骤：\n' +
+        '  1. 如系统弹出权限对话框，选择"允许"（应用级位置权限）\n' +
+        '  2. 设置页打开后，开启"定位服务"总开关\n' +
+        '  3. 返回本应用，点击 "Watch Position (emit)" 按钮进行功能测试';
+      onMessage('geolocation permission + location settings opened');
+    });
+  }
+
+  async function manualGeolocationWatch() {
+    await wrapManual('geolocationWatch', async () => {
+      const { watchPosition, clearWatch } = await import('@tauri-apps/plugin-geolocation');
+      let count = 0;
+      let last = '(none)';
+      const channelId = await watchPosition(
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 },
+        (location, error) => {
+          if (error) {
+            last = `error: ${error}`;
+          } else if (location) {
+            count += 1;
+            last = `lat=${location.coords.latitude}, lng=${location.coords.longitude}, acc=${location.coords.accuracy}`;
+          }
+        }
+      );
+      // Collect Channel-emit events for up to 10s, updating the result live.
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        manualResult = `watchPosition() 已注册 (channelId=${channelId})，等待位置事件… (${i + 1}s/10s)\n` +
+          `已收到 ${count} 次位置更新\n最近一次: ${last}`;
+      }
+      await clearWatch(channelId);
+      manualResult = '✅ watchPosition/clearWatch 链路完成。\n' +
+        `共收到 ${count} 次位置更新（Channel emit 事件）\n最近一次: ${last}\n\n` +
+        (count > 0
+          ? '✅ emit 端到端链路验证通过：locationChange → Plugin.emit → NAPI → Channel → JS 回调'
+          : '⚠️ 未收到位置事件（设备未产生位置 fix）。注册/注销链路已验证；' +
+            '事件流验证需设备能产生位置 fix（Wi-Fi/网络定位）');
+      onMessage(`geolocation watch: ${count} events, last=${last}`);
+    });
+  }
+
+  async function manualGeolocationCurrent() {
+    await wrapManual('geolocationCurrent', async () => {
+      const { getCurrentPosition } = await import('@tauri-apps/plugin-geolocation');
+      try {
+        const pos = await getCurrentPosition({ enableHighAccuracy: false, timeout: 15000, maximumAge: 0 });
+        const c = pos.coords;
+        manualResult = '✅ getCurrentPosition() 返回：\n' +
+          `lat=${c.latitude}, lng=${c.longitude}, acc=${c.accuracy}, alt=${c.altitude}\n` +
+          `timestamp=${pos.timestamp}\n` +
+          '断言：latitude/longitude 为合理数值（Wi-Fi/网络定位）';
+        onMessage(`getCurrentPosition: ${c.latitude},${c.longitude}`);
+      } catch (e) {
+        manualResult = `❌ getCurrentPosition() reject：${e}\n` +
+          'PC 无 GPS 时可能超时 reject——记录形态即可（manual_tests §三十一 geolocation 备注）';
+        onMessage(manualResult);
+      }
+    });
+  }
+
+  // ─── Mobile Native Plugins Manual Tests (manual_tests.md §三十一) ───
+  // These five plugins have no JS package dependency in examples/api — raw
+  // invoke() against the plugin commands, same convention as
+  // ohos-mobile-plugins.ts autotests.
+  async function manualBarcodeScan() {
+    await wrapManual('barcodeScan', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const perm = await invoke('plugin:barcode-scanner|check_permissions');
+      let camera = perm?.camera;
+      if (camera !== 'granted') {
+        const r = await invoke('plugin:barcode-scanner|request_permissions');
+        camera = r?.camera;
+      }
+      if (camera !== 'granted') {
+        manualResult = `⚠️ 相机权限未授予（${camera}），scan 无法拉起相机。`;
+        onMessage(manualResult);
+        return;
+      }
+      try {
+        const result = await invoke('plugin:barcode-scanner|scan');
+        manualResult = '✅ scan() 返回：\n' +
+          `content=${result?.content}\nformat=${result?.format}\n` +
+          '断言：content 为二维码实际内容，相机扫码 UI 正常拉起与关闭';
+        onMessage(`barcode scan: ${result?.content} (${result?.format})`);
+      } catch (e) {
+        manualResult = `❌ scan() reject：${e}\n（无摄像头设备 reject 且报错清晰也属预期结果）`;
+        onMessage(manualResult);
+      }
+    });
+  }
+
+  async function manualBarcodeVibrate() {
+    await wrapManual('barcodeVibrate', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('plugin:barcode-scanner|vibrate');
+        manualResult = '✅ vibrate() resolve\n断言：设备振动 100ms（@ohos.vibrator.startVibration，同 haptics 路径）';
+        onMessage('barcode vibrate: 设备振动');
+      } catch (e) {
+        manualResult = `❌ vibrate() reject：${e}\n（无马达设备 reject 也属预期结果）`;
+        onMessage(manualResult);
+      }
+    });
+  }
+
+  async function manualBiometricAuth() {
+    await wrapManual('biometricAuth', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const status = await invoke('plugin:biometric|status');
+      const statusStr = JSON.stringify(status);
+      if (!status?.isAvailable) {
+        manualResult = `ℹ️ biometric status：${statusStr}\n设备无生物识别硬件/未录入指纹（isAvailable=false，PC 预期形态，认证 UI 不会拉起）。`;
+        onMessage(manualResult);
+        return;
+      }
+      try {
+        await invoke('plugin:biometric|authenticate', { reason: '手动测试认证' });
+        manualResult = `✅ authenticate() resolve（认证成功）。\nstatus=${statusStr}`;
+        onMessage('biometric authenticate: success');
+      } catch (e) {
+        manualResult = `❌ authenticate() reject（取消/失败）：${e}\nstatus=${statusStr}\n断言：errorCode 清晰，系统认证 UI 正常显示过`;
+        onMessage(manualResult);
+      }
+    });
+  }
+
+  async function manualNfc() {
+    await wrapManual('nfc', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const r = await invoke('plugin:nfc|is_available');
+      let scanResult = '';
+      try {
+        await invoke('plugin:nfc|scan');
+        scanResult = 'scan resolve（意外：当前设计应 reject）';
+      } catch (e) {
+        scanResult = `scan reject（预期）：${e}`;
+      }
+      manualResult = `is_available → ${JSON.stringify(r)}\n${scanResult}\n` +
+        '断言：is_available 返回布尔；scan 报错信息含能力说明（未实现，设计决策）';
+      onMessage(`nfc isAvailable=${JSON.stringify(r)}`);
+    });
+  }
+
+  async function manualHaptics() {
+    await wrapManual('haptics', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const attempts = [
+        ['vibrate(200)', () => invoke('plugin:haptics|vibrate', { duration: 200 })],
+        ['impactFeedback(Medium)', () => invoke('plugin:haptics|impact_feedback', { style: 'Medium' })],
+        ['notificationFeedback(Success)', () => invoke('plugin:haptics|notification_feedback', { type: 'Success' })],
+        ['selectionFeedback()', () => invoke('plugin:haptics|selection_feedback')],
+      ];
+      const results = [];
+      for (const [name, fn] of attempts) {
+        try { await fn(); results.push(`${name}: resolve ✅`); } catch (e) { results.push(`${name}: reject ${e}`); }
+      }
+      manualResult = results.join('\n') +
+        '\n断言：无马达设备各命令 BusinessError 801 → skip（路由链已验证）；有马达设备产生对应振动';
+      onMessage(results.join(' | '));
+    });
+  }
+
+  async function manualHuaweiAccount() {
+    await wrapManual('huaweiAccount', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      let loginResult;
+      try {
+        const r = await invoke('plugin:huawei-account|login');
+        loginResult = '✅ login() resolve: ' + JSON.stringify(r);
+      } catch (e) {
+        loginResult = `❌ login() reject：${e}\n（需 AppGallery Connect 配置 + 设备已登录华为账号；缺配置时记录报错形态）`;
+      }
+      let silentResult;
+      try {
+        silentResult = 'silent_login resolve: ' + JSON.stringify(await invoke('plugin:huawei-account|silent_login'));
+      } catch (e) {
+        silentResult = `silent_login reject：${e}`;
+      }
+      try { await invoke('plugin:huawei-account|logout'); } catch (e) { /* ignore */ }
+      manualResult = `${loginResult}\n${silentResult}\n(logout 已调用)`;
+      onMessage(manualResult);
+      onMessage('huawei-account flow attempted');
+    });
+  }
+
   // ─── Sentry Manual Tests ───
   async function manualSentryJsError() {
     await wrapManual('sentryJsError', async () => {
@@ -1595,8 +2851,8 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
       } catch (e) {
         const msg = String(e);
         if (msg.includes('not found') || msg.includes('command')) {
-          // Release build: sentry_test_panic is gated with #[cfg(debug_assertions)]
-          manualResult += '\n\n⚠️ sentry_test_panic not available — only compiled in debug builds.';
+          // Command not registered (shouldn't happen — sentry_test_panic has no cfg gate)
+          manualResult += '\n\n⚠️ sentry_test_panic command not found.';
         } else {
           // Expected: IPC will fail because the thread panicked
           manualResult += `\n\nPanic triggered. IPC error (expected): ${e}`;
@@ -1669,6 +2925,74 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     });
   }
 
+  // ─── Window Operations & Persisted-Scope Manual Tests ───
+  async function manualMinimizeThenIsMinimized() {
+    await wrapManual('minimize then is_minimized', async () => {
+      const win = getCurrentWindow();
+      await win.minimize();
+      await new Promise((r) => setTimeout(r, 500));
+      const minimized = await win.isMinimized();
+      manualResult = `minimize() -> isMinimized() = ${minimized}\n\n窗口已最小化到任务栏。\n如 isMinimized() = true -> PASS。\n\n请手动从任务栏点击恢复窗口。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualWindowStateSaveRestore() {
+    await wrapManual('window-state save/restore', async () => {
+      const win = getCurrentWindow();
+      // Save current state
+      await invoke('plugin:window-state|save_window_state', { label: win.label });
+      // Read back current window info
+      const pos = await win.outerPosition();
+      const size = await win.innerSize();
+      const maximized = await win.isMaximized();
+      // Restore from saved state
+      await invoke('plugin:window-state|restore_state', { label: win.label });
+      await new Promise((r) => setTimeout(r, 300));
+      const posAfter = await win.outerPosition();
+      const sizeAfter = await win.innerSize();
+      manualResult = `window-state save/restore 完成:\n\n保存时: pos=(${pos.x},${pos.y}) size=${size.width}×${size.height} maximized=${maximized}\n恢复后: pos=(${posAfter.x},${posAfter.y}) size=${sizeAfter.width}×${sizeAfter.height}\n\n如保存/恢复值一致 → PASS。\n命令执行无异常即说明插件 API 正常。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualWindowStateRestoreOnly() {
+    await wrapManual('window-state restore only', async () => {
+      const win = getCurrentWindow();
+      const posBefore = await win.outerPosition();
+      await invoke('plugin:window-state|restore_state', { label: win.label });
+      await new Promise((r) => setTimeout(r, 500));
+      const posAfter = await win.outerPosition();
+      manualResult = `window-state restore only:\n\n恢复前: pos=(${posBefore.x},${posBefore.y})\n恢复后: pos=(${posAfter.x},${posAfter.y})\n\n如位置变化 → restore 生效(set_position 工作)。`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualWindowStateClear() {
+    await wrapManual('window-state clear', async () => {
+      const result = await invoke('clear_window_state');
+      manualResult = `window-state 清理:\n\n文件删除: ${result.deleted ? '✅ 已删除' : '⚠️ 文件不存在'}\n路径: ${result.state_file}\n\n${result.note}`;
+      onMessage(manualResult);
+    });
+  }
+
+
+  async function manualPersistedScopeTest() {
+    await wrapManual('persisted-scope test', async () => {
+      const result = await invoke('test_persisted_scope');
+      manualResult = `persisted-scope 测试:\n\nallow_directory: ${result.allow_ok ? '✅ 成功' : '❌ 失败'}\n.persisted-scope 文件: ${result.state_file_exists ? '✅ 已生成 (' + result.state_file_size + ' bytes)' : '❌ 未生成'}\n路径: ${result.state_file}\n\n验证流程:\n1. 点 Clear → 重启 → 点 Test → 文件应不存在（Clear 生效）\n2. 点 Test → 文件生成（Save 生效）\n3. 重启 → 文件仍在（Restore 生效）`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualPersistedScopeClear() {
+    await wrapManual('persisted-scope clear', async () => {
+      const result = await invoke('clear_persisted_scope');
+      manualResult = `persisted-scope 清理:\n\n文件删除: ${result.deleted ? '✅ 已删除' : '⚠️ 文件不存在（无需删除）'}\n路径: ${result.state_file}\n内存中剩余 patterns: ${result.remaining_patterns_count} 个\n\n${result.note}`;
+      onMessage(manualResult);
+    });
+  }
+
   // ─── Mouse Event Manual Tests (OHOS desktop / 2in1) ───
   let mouseTracking = $state(false);
   let mouseEvents = $state([]);
@@ -1688,6 +3012,35 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       }
       onMessage(manualResult);
     });
+  }
+
+  // Deep-Link manual tests
+  let deepLinkUnlisten = null;
+  let deepLinkListening = $state(false);
+
+  async function manualDeepLinkOnOpenUrl() {
+    if (deepLinkListening) {
+      deepLinkUnlisten?.();
+      deepLinkListening = false;
+      onMessage('[deep-link] Stopped listening for onOpenUrl events');
+      return;
+    }
+    const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
+    deepLinkUnlisten = await onOpenUrl((urls) => {
+      onMessage(`[deep-link] onOpenUrl received: ${JSON.stringify(urls)}`);
+    });
+    deepLinkListening = true;
+    onMessage('[deep-link] Listening for onOpenUrl. Trigger: hdc shell "aa start -U taurideeplink://test"');
+  }
+
+  async function manualDeepLinkGetCurrent() {
+    const { getCurrent } = await import('@tauri-apps/plugin-deep-link');
+    const result = await getCurrent();
+    onMessage(`[deep-link] getCurrent → ${JSON.stringify(result)}`);
+  }
+
+  function manualDeepLinkExternalLaunch() {
+    onMessage('[deep-link] Click taurideeplink://path link from browser/other app. App should come to foreground.');
   }
 
   async function toggleMouseTracking() {
@@ -1749,6 +3102,132 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     } catch (e) {}
   }
 
+  // ─── Plugins Manual Tests (opener/store/upload/localhost) ───
+  // Autotest covers in-memory CRUD; these cover side-effects autotest can't
+  // assert: opener system intents, cross-restart persistence, upload progress,
+  // and localhost CORS headers.
+  async function manualOpenerOpenPath() {
+    await wrapManual('opener.openPath', async () => {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
+      const dir = await appCacheDir();
+      const filePath = await join(dir, `opener-${Date.now()}.txt`);
+      await writeFile(filePath, new TextEncoder().encode('opener manual test'));
+      await openPath(filePath);
+      manualResult = `openPath(${filePath}) called.\nCheck: system opens the file (text viewer/editor or file manager).\nFile left at: ${filePath}`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOpenerReveal() {
+    await wrapManual('opener.revealItemInDir', async () => {
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
+      const dir = await appCacheDir();
+      const filePath = await join(dir, `opener-reveal-${Date.now()}.txt`);
+      await writeFile(filePath, new TextEncoder().encode('opener reveal test'));
+      try {
+        await revealItemInDir(filePath);
+        manualResult = `revealItemInDir(${filePath}) → FM opened (UNEXPECTED for a sandbox path).\nFile left at: ${filePath}`;
+      } catch (e) {
+        manualResult = `revealItemInDir(${filePath}) → documented error (expected):\n${String(e)}\n→ PASS if the error mentions "app-sandbox paths" / platform limitation.\nFile left at: ${filePath}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOpenerRevealPublic() {
+    await wrapManual('opener.revealItemInDir (public dir)', async () => {
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+      const target = revealPublicPath.trim();
+      if (!target) {
+        manualResult = 'Enter a real filesystem path first (default points under Docs).';
+        onMessage(manualResult);
+        return;
+      }
+      // The path must EXIST on device (reveal_item_in_dir canonicalizes it).
+      // Default is the Docs/IDEProjects directory: its parent (Docs) is revealed
+      // → FM opens "我的电脑 > 文档". A file path under Docs works the same way
+      // (its parent dir is revealed). OHOS cannot highlight a specific file —
+      // only the parent directory is opened (platform limitation).
+      try {
+        await revealItemInDir(target);
+        manualResult = `revealItemInDir(${target}) called.\nCheck: FM opens the PARENT directory of the entered path (OHOS cannot highlight a specific file).\nNo error → PASS.`;
+      } catch (e) {
+        manualResult = `revealItemInDir(${target}) FAILED:\n${String(e)}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualOpenerOpenUrl() {
+    await wrapManual('opener.openUrl', async () => {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl('https://tauri.app');
+      manualResult = `openUrl('https://tauri.app') called.\nCheck: system browser opens the URL.`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualStorePersist() {
+    await wrapManual('store.persist', async () => {
+      const { load } = await import('@tauri-apps/plugin-store');
+      const store = await load('manual-store.json');
+      const sentinel = `persisted-${Date.now()}`;
+      await store.set('manual-sentinel', { value: sentinel });
+      await store.save();
+      await store.close();
+      manualResult = `store.save() done. key='manual-sentinel' value='${sentinel}' → manual-store.json.\nNext: force-stop app and restart, then click "Store Verify (after restart)".`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualStoreVerify() {
+    await wrapManual('store.verify', async () => {
+      const { load } = await import('@tauri-apps/plugin-store');
+      const store = await load('manual-store.json');
+      const got = await store.get('manual-sentinel');
+      await store.close();
+      const ok = !!got && typeof got.value === 'string' && got.value.startsWith('persisted-');
+      manualResult = `store.get('manual-sentinel') → ${JSON.stringify(got)}\n${ok ? 'PASS: value persisted across restart.' : 'FAIL: value missing — persistence not working.'}`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualUploadProgress() {
+    await wrapManual('upload.progress', async () => {
+      const { upload } = await import('@tauri-apps/plugin-upload');
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
+      const dir = await appCacheDir();
+      const filePath = await join(dir, `upload-${Date.now()}.txt`);
+      await writeFile(filePath, new TextEncoder().encode('x'.repeat(64 * 1024)));
+      const events = [];
+      const resp = await upload('http://localhost:3003/up', filePath, (p) => {
+        events.push(`progress=${p.progress} total=${p.progressTotal}`);
+      });
+      const respStr = typeof resp === 'string' ? resp : String(resp);
+      // Truncate the (potentially large) echo body so the progress/PASS verdict
+      // stays visible — the localhost echo server returns the full payload.
+      const respPreview = respStr.length > 50
+        ? respStr.slice(0, 50) + `... (${respStr.length} bytes)`
+        : respStr;
+      const uploadOk = respStr.length > 0;
+      manualResult = `upload response: ${respPreview}\nprogress events: ${events.length}\n${events.slice(-5).join('\n')}\n${uploadOk ? 'PASS: upload succeeded (response received).' : 'FAIL: empty response.'}${events.length > 0 ? '' : ' (note: progress may not fire for fast small uploads over localhost)'}`;
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualLocalhostFetch() {
+    await wrapManual('localhost.fetch', async () => {
+      const resp = await fetch('http://127.0.0.1:3005/index.html');
+      const body = await resp.text();
+      const cors = resp.headers.get('access-control-allow-origin');
+      const ok = resp.status === 200 && body.length > 0;
+      manualResult = `fetch 127.0.0.1:3005/index.html → status=${resp.status} bodyLen=${body.length} ACAO=${cors}\n${ok ? 'PASS: localhost serve OK.' : 'FAIL.'}${cors ? '' : ' (warning: no Access-Control-Allow-Origin header)'}`;
+      onMessage(manualResult);
+    });
+  }
+
 </script>
 
 <div class="flex flex-col gap-2">
@@ -1805,9 +3284,21 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         {focusWatchActive ? 'Stop watching focus' : 'Watch onFocusChanged'}
       </button>
       <button class="btn" onclick={manualMonitor}>currentMonitor</button>
+      <button class="btn" onclick={manualIgnoreCursorEvents}>setIgnoreCursorEvents (3s toggle)</button>
+      <button class="btn" onclick={manualOverlayIgnoreCursor}>Overlay Ignore Cursor (穿透, §二十八)</button>
       <button class="btn" onclick={manualAppCacheDir}>appCacheDir</button>
       <button class="btn" onclick={manualWindowDpi}>Window DPI (resize/drag to verify)</button>
       <button class="btn" onclick={manualOsInfo}>OS Info (platform/type/version)</button>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Deep-Link</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualDeepLinkOnOpenUrl}>
+          {deepLinkListening ? 'Stop onOpenUrl' : 'onOpenUrl (trigger with hdc)'}
+        </button>
+        <button class="btn" onclick={manualDeepLinkGetCurrent}>getCurrent</button>
+        <button class="btn" onclick={manualDeepLinkExternalLaunch}>External launch (browser)</button>
+      </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
       <h5 class="my-1 text-xs text-gray-500">Mouse Events (OHOS desktop / 2in1)</h5>
@@ -1841,8 +3332,17 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
       <h5 class="my-1 text-xs text-gray-500">Window Decorations & Transparency (Phase 1+2+3)</h5>
       <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualToggleDecorations}>Toggle Decorations (main window)</button>
         <button class="btn" onclick={manualCreateBorderlessWindow}>Create Borderless Window (decorations=false)</button>
         <button class="btn" onclick={manualCreateTransparentBorderlessWindow}>Create Transparent+Borderless</button>
+        <button class="btn" onclick={manualCreateDecoratedWindow}>Create Decorated Window (title bar)</button>
+      </div>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">Window Background Color (Phase 3) — first create a sub-window above, then click a BG button</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={() => manualSetBackgroundColor([255, 0, 0, 255], 'Red opaque')}>Set BG Red (opaque)</button>
+        <button class="btn" onclick={() => manualSetBackgroundColor([0, 0, 255, 128], 'Blue semi-transparent')}>Set BG Blue (alpha=128)</button>
+        <button class="btn" onclick={() => manualSetBackgroundColor([0, 255, 0, 0], 'Green fully transparent')}>Set BG Green (alpha=0)</button>
+        <button class="btn" onclick={() => manualSetBackgroundColor(null, 'reset')}>Reset BG (null)</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
@@ -1850,10 +3350,71 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualVibrancyBlur}>vibrancy: Blur effect visible</button>
         <button class="btn" onclick={manualVibrancyAcrylic}>vibrancy: Acrylic effect visible</button>
-        <button class="btn" onclick={manualVibrancyTabbedDark}>vibrancy: TabbedDark effect visible</button>
         <button class="btn" onclick={manualVibrancyClearEffects}>vibrancy: clearEffects removes blur</button>
         <button class="btn" onclick={manualVibrancyBuildTimeBlur}>vibrancy: build-time Blur (WindowBuilder::effects)</button>
       </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">OHOS Window Ops — 几何/状态</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualSetOuterPosition}>setOuterPosition (toggle 100/400)</button>
+        <button class="btn" onclick={manualSetInnerSize}>setInnerSize (half size, restore)</button>
+        <button class="btn" onclick={manualMaximize}>Toggle Maximize</button>
+        <button class="btn" onclick={manualMinimize}>Minimize (2s restore)</button>
+        <button class="btn" onclick={manualFullscreen}>Toggle Fullscreen</button>
+        <button class="btn" onclick={manualShowHide}>Hide/Show (2s restore)</button>
+        <button class="btn" onclick={manualSetFocus}>setFocus</button>
+        <button class="btn" onclick={manualAlwaysOnTop}>Toggle AlwaysOnTop (partial)</button>
+      </div>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 多 UIAbility 实例 (startAbility)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualCreateUIAbilityWindow}>Create UIAbility Instance Window</button>
+        <button class="btn" onclick={manualCreateTransparentUIAbility}>Create Transparent UIAbility (主窗口透明)</button>
+      </div>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 装饰按钮 (Float 子窗口生效)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualSetClosable}>Toggle Closable</button>
+        <button class="btn" onclick={manualSetMaximizable}>Toggle Maximizable</button>
+        <button class="btn" onclick={manualSetMinimizable}>Toggle Minimizable</button>
+        <button class="btn" onclick={manualSetResizable}>Toggle Resizable</button>
+        <button class="btn" onclick={manualSetFocusable}>setFocusable(false) (3s)</button>
+      </div>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 光标</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualCursorVisible}>setCursorVisible(false) (3s)</button>
+        <button class="btn" onclick={manualCursorIcon}>Cycle CursorIcon</button>
+        <button class="btn" onclick={manualIgnoreCursor}>Toggle IgnoreCursor (3s)</button>
+      </div>
+      {#if ohosWinState}
+        <div class="mt-1 text-xs font-mono text-gray-600 dark:text-gray-400">{ohosWinState}</div>
+      {/if}
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">OHOS Window Ops — 自动测试补充(无按钮能力)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualWindowId}>Window ID (getCurrentWindow)</button>
+        <button class="btn" onclick={manualCloseRequested}>CloseRequested (close sub-window)</button>
+        <button class="btn" onclick={manualOnNewWindow}>on_new_window: Allow (window.open)</button>
+        <button class="btn" onclick={manualCursorGrab}>setCursorGrab(true) 5s (Lock to window)</button>
+        <button class="btn" onclick={toggleWinEventWatch}>
+          {winEventWatchActive ? 'Stop Watch Window Events' : 'Watch Window Events'}
+        </button>
+        <button class="btn" onclick={manualWindowState}>window-state save+restore</button>
+        <button class="btn" onclick={manualSetBounds}>set_bounds round-trip (webview)</button>
+        <button class="btn" onclick={manualSetTitle}>Set Title (main window)</button>
+        <button class="btn" onclick={manualSetMinSize}>Set Min Size 1600×1200 (main window)</button>
+        <button class="btn" onclick={manualSetMinAndMaxSize}>Set Min+Max (1600×1200 / 2400×1800 px)</button>
+        <button class="btn" onclick={manualResetMinSize}>Reset Min Size (null)</button>
+        <button class="btn" onclick={manualSetTheme}>Set Theme (toggle Light/Dark/System)</button>
+        <button class="btn" onclick={manualRequestUserAttention}>Request User Attention (notification)</button>
+        <button class="btn" onclick={manualSetImePosition}>Set IME Position (200,400)</button>
+      </div>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">IME 测试输入框 — 点击聚焦(弹软键盘),保持焦点后点 Set IME Position</h5>
+      <input
+        type="text"
+        placeholder="点击此处聚焦输入框,然后点 Set IME Position..."
+        class="w-full p-2 border border-gray-300 rounded text-sm dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100"
+      />
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
       <h5 class="my-1 text-xs text-gray-500">Process & Updater Manual Tests</h5>
@@ -1956,6 +3517,26 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       <button class="btn" onclick={manualDialogMessageError}>Dialog.message (error)</button>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">OHOS Adapter Manual Tests</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualOhosPrint}>WebView Print</button>
+        <button class="btn" onclick={manualOhosMonitorFromPoint}>monitorFromPoint (边界测试)</button>
+        <button class="btn" onclick={manualOhosDisplayRefreshRate}>Display Refresh Rate</button>
+        <button class="btn" onclick={manualOhosDialogError}>Dialog Error (degrade)</button>
+        <button class="btn" onclick={manualEventResumed}>RunEvent::Resumed (background→foreground)</button>
+      </div>
+      <div class="flex gap-2 flex-wrap mt-2">
+        <button class="btn" onclick={manualOhosTestClipboardOff}>Clipboard OFF</button>
+        <button class="btn" onclick={manualOhosTestClipboardOn}>Clipboard ON</button>
+      </div>
+      <div class="flex gap-2 flex-wrap mt-2">
+        <button class="btn" onclick={manualOhosTestZoomOff}>Zoom OFF</button>
+        <button class="btn" onclick={manualOhosTestZoomOn}>Zoom ON</button>
+        <button class="btn" onclick={manualOhosTestHttpsScheme}>HTTPS Scheme</button>
+        <button class="btn" onclick={manualOhosTestDragOverlay}>Drag Overlay (§二十六)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
       <h5 class="my-1 text-xs text-gray-500">Autostart Manual Tests</h5>
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualAutostartIsEnabled}>isEnabled()</button>
@@ -2013,6 +3594,35 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualNotificationSend}>Send Notification</button>
         <button class="btn" onclick={manualNotificationChannel}>Send With Channel</button>
         <button class="btn" onclick={manualNotificationPermission}>Request Permission</button>
+        <button class="btn" onclick={manualNotificationAction}>Send With Action Button (onAction)</button>
+        <button class="btn" onclick={manualNotificationReceived}>Send & Listen (onNotificationReceived)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Accessibility Manual Tests (fontScale/屏幕阅读器)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualFontScale}>Font Scale 查询</button>
+        <button class="btn" onclick={manualScreenReaderQueries}>Screen Reader 查询对照</button>
+        <button class="btn" onclick={manualAccessibilityStateChange}>State Change Watch (20s)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Geolocation Manual Tests (emit/Channel 验证)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualGeolocationPermission}>请求权限 + 打开定位设置</button>
+        <button class="btn" onclick={manualGeolocationCurrent}>Get Current Position</button>
+        <button class="btn" onclick={manualGeolocationWatch}>Watch Position (emit)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Mobile Native Plugins Manual Tests (barcode/biometric/nfc/haptics/huawei-account)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualBarcodeScan}>Barcode Scan (camera)</button>
+        <button class="btn" onclick={manualBarcodeVibrate}>Barcode Vibrate (扫码振动反馈)</button>
+        <button class="btn" onclick={manualBiometricAuth}>Biometric Authenticate</button>
+        <button class="btn" onclick={manualNfc}>NFC isAvailable + scan</button>
+        <button class="btn" onclick={manualHaptics}>Haptics (vibrate/impact/notification/selection)</button>
+        <button class="btn" onclick={manualHuaweiAccount}>Huawei Account (login/silent/logout)</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
@@ -2028,6 +3638,35 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualReparentError}>reparent returns error (no deadlock)</button>
         <button class="btn" onclick={manualReparentCascade}>reparent cascade check</button>
         <button class="btn" onclick={manualCreateChildWebview}>create_webview (multi-webview)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Window Operations & Persisted-Scope Manual Tests</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualMinimizeThenIsMinimized}>Minimize then is_minimized</button>
+        <button class="btn" onclick={manualWindowStateSaveRestore}>Window-State Save</button>
+        <button class="btn" onclick={manualWindowStateRestoreOnly}>Window-State Restore</button>
+        <button class="btn" onclick={manualWindowStateClear}>Window-State Clear</button>
+        <button class="btn" onclick={manualPersistedScopeTest}>Persisted-Scope Test</button>
+        <button class="btn" onclick={manualPersistedScopeClear}>Persisted-Scope Clear</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Plugins Manual Tests (opener/store/upload/localhost)</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualOpenerOpenPath}>Opener openPath (open file)</button>
+        <button class="btn" onclick={manualOpenerReveal}>Opener revealItemInDir (sandbox→err)</button>
+        <div class="flex items-center gap-2">
+          <input class="btn text-left font-mono text-xs" style="min-width:24rem"
+                 bind:value={revealPublicPath}
+                 placeholder="/storage/media/100/local/files/Docs/..." />
+          <button class="btn" onclick={manualOpenerRevealPublic}>Opener revealItemInDir (public dir→FM)</button>
+        </div>
+        <button class="btn" onclick={manualOpenerOpenUrl}>Opener openUrl (open browser)</button>
+        <button class="btn" onclick={manualStorePersist}>Store Persist (set+save)</button>
+        <button class="btn" onclick={manualStoreVerify}>Store Verify (after restart)</button>
+        <button class="btn" onclick={manualUploadProgress}>Upload (echo+progress)</button>
+        <button class="btn" onclick={manualLocalhostFetch}>Localhost fetch (CORS)</button>
       </div>
     </div>
     {#if manualResult}

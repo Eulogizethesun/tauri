@@ -1,8 +1,8 @@
 # Tauri OHOS onWindowNew 新窗口请求拦截设计文档
 
 > 创建时间: 2026-06-10
-> 状态: 📝 设计阶段
-> 功能: 拦截 Web 组件的 `window.open()` / `target="_blank"` 等新窗口请求，允许开发者通过 `on_new_window` 回调决定 Allow / Deny
+> 状态: ✅ 已实现 — Phase 2「Create→Float OS 窗口」（见 §十一 实现落地记录）
+> 功能: 拦截 Web 组件的 `window.open()` / `target="_blank"` 等新窗口请求，允许开发者通过 `on_new_window` 回调决定 Allow / Deny / Create
 
 ---
 
@@ -859,3 +859,101 @@ async function testWindowOpenAllowed(): Promise<TestResult> {
 | `OnWindowNewEvent.targetUrl` 在 API < 12 为空 | 无法获取目标 URL | 低 | ArkTS fallback `event.targetUrl ?? ''` |
 | wry `NewWindowOpener` 在 OHOS 上编译失败 | 编译错误 | 中 | 为 OHOS 添加空 struct 定义 |
 | HAR 包重建后签名变更 | 安装失败 | 高 | 先卸载旧版再安装 |
+
+---
+
+## 十一、实现落地记录 (2026-08-14, #85)
+
+> 本节记录**实际实现**，并标注其与 §二/§四 Phase 1 设计的偏差。Phase 1 的
+> `@CustomDialog`/`NewWindowDialogManager` dialog 方案**未采用**——调研子agent
+> 指出 `@CustomDialog` 在 `@Builder` 上下文不 sound（§5.6 风险成立），改为直接
+> 走 §8.2 所述「Phase 2: Create 变体 + OS 级窗口」目标路径，一步到位。
+
+### 11.1 核心决策：Allow→Create 折叠
+
+`on_new_window` 闭包的 OHOS 分支把 **Allow 折叠为 Create**：除非显式 Deny，
+否则每次 `window.open()` 都构建一个真实的 `WebviewWindow`（`OHOSWindowKind::Float`
+OS 子窗口）并加载 target URL——而非 §四所述的在主 webview 上叠 dialog。
+
+- **文件**: `examples/api/src-tauri/src/lib.rs`（`on_new_window` OHOS cfg 分支）
+- **行为**: `WebviewWindowBuilder::new(&app, "new-{n}", WebviewUrl::External(url))`
+  `.inner_size(900,700).position(120,90).ohos_window_kind(Float).build()`
+  → 成功返回 `NewWindowResponse::Create { window }`，失败回退 `Allow`。
+- **`set_create_new_window` 标志已移除**：Create 现在是默认行为，不再需要前置开关。
+
+### 11.2 非阻塞性（关键前提）
+
+ArkWeb `onWindowNew` 是主线程同步回调。在该回调里同步触发 `window.open`→`Create`
+→`build()` 安全，因为 **`WebviewWindowBuilder::build()` 在 OHOS 主线程非阻塞**
+（全链路确认，详见 memory `ohos-webviewwindow-build-nonblocking`）：
+
+`build()` → `with_webview` → `build_internal` → `runtime.create_window`（无
+`recv()`）→ 主线程 `send_user_message` inline 跑 `handle_user_message`（无
+channel）→ `Window::new` → `create_os_window` → 同步 NAPI `func.call(config)` 调
+ArkTS `async createOSWindow`，**Rust 丢弃返回的 Promise**（NAPI 只跑到第一个
+await）→ 真正 `createSubWindow`/`loadContentByName`/`resize`/`show` 全异步在
+`onWindowNew` 返回后跑。webview create 是 `runtime.spawn(async { create().await })`
+fire-and-forget。**全 create 路径无 `block_on`、无 `recv()`、无 await-result NAPI。**
+
+> 对比：`ohos_window_spawn`（lib.rs:182-197）的 window **operations**
+> （focus/resize/destroy/...）才用 `futures_executor::block_on`——那是
+> tray-icon/muda 死锁路径，与 create 路径无关。
+
+### 11.3 wry 侧：`Create => false`（ArkWeb 取消自己的 popup）
+
+- **文件**: `wry/src/ohos/mod.rs` `new_window_req_handler` 闭包
+- **修正**: 原 `Create { .. } => true` 改为 `=> false`（仅非 android/ios）。
+- **理由**: Tauri 已经自己建了 Float OS 窗口并会加载 target URL，返回 `true` 会让
+  ArkWeb **也**开一个 popup（重复 + 该 popup controller 无同步 Web host，有主线程
+  阻塞风险）。返回 `false` 让 ArkWeb 走非阻塞 Deny 路径
+  （`setWebController(null)`）取消自己的 popup，真正的 popup 是 Rust 建的 Float 窗口。
+- Allow/Deny 维持 `true`/`false` 不变。
+
+### 11.4 tao 侧：Float 窗口尺寸/位置生效
+
+- **文件**: `tao/src/platform_impl/ohos/mod.rs` `Window::new` Float 分支（原 line ~1001）
+- **修正**: 原代码用 `..WindowCreateParams::default()`（width=800/height=600/x=100/
+  y=100），**忽略** `window_attrs.inner_size`/`position`，导致 builder 的
+  `.inner_size()/.position()` 对 Float 窗口无效。改为读
+  `window_attrs.inner_size`/`position`，经 `el.app.scale()` 转 physical px，填入
+  `WindowCreateParams.width/height/x/y`。
+- **下游**: `create_os_window` → ArkTS `createSubWindow` → `await win.resize(w,h)` +
+  `await win.moveWindowTo(x,y)` 应用尺寸；`FloatPage.aboutToAppear` 用
+  `getGlobalRect()` 读回（不覆盖为全屏）。
+- **铁律遵守**: tao 经 openharmony-ability 的 `create_os_window` 桥接（Rule #1），
+  改动仅在 OHOS Float 分支（Rule #2 cfg 隔离）。
+
+### 11.5 URL 传播
+
+`WebviewUrl::External(url)` → wry `pending.url`(manager/webview.rs:501) →
+`initial_url`(mod.rs:300) → `create_req.url(url)`(mod.rs:638)。target URL 进
+create_req，由 `client.create(create_req)` 异步加载到 Float 窗口的 webview。
+
+### 11.6 运行验证 (2026-08-14)
+
+18:03 折叠构建部署后 hilog：
+- Allow 测试（**未设** `set_create_new_window`）→ `new window requested: /allow-test`
+  → `[WRY OHOS] build` + `CreateWindow callback: inner=true` → `TEST pass
+  on_new_window: Allow triggers event with correct URL (2057ms)`（无死锁/无冻结）。
+- `AceSubWindow: Create Subwindow` + `ARK_APP_SUBWINDOW_api00, id:1269,
+  parentId:1267, type:1001` + `Show: Window show success` + 可拖拽子窗口。
+
+独立 Float 子窗口已创建、可见、可拖拽、非阻塞。**结论**：Phase 2 Create→Float
+路径功能正确。
+
+### 11.7 待确认 gap（视觉）
+
+`wry/src/ohos/mod.rs:307` `let _window_id = pl_attrs.window_id` 丢弃 window_id，
+`WebviewCreateRequest` 无 window 绑定字段——Float 子窗口 webview 的
+`pluginContext.getUIContext()` 是否解析到 Float 子窗口 UIContext（而非主窗口）需
+**设备视觉**确认（hilog 只证窗口创建，不证像素内容）。关联 memory
+`ohos-window-plugin-registry-gap`、`ohos-attach-component-windowstage-regression`。
+
+### 11.8 与 §九 桌面对比表的更新
+
+| 行为 | OHOS（Phase 2 实现） |
+|------|------|
+| `Allow` | 折叠为 Create→建 Float OS 子窗口加载 target URL |
+| `Create` | **支持** — `WebviewWindowBuilder` + `OHOSWindowKind::Float` |
+| `Deny` | `setWebController(null)` |
+| `NewWindowFeatures.size/position` | builder 的 `.inner_size()/.position()` 经 tao 转 physical 生效 |

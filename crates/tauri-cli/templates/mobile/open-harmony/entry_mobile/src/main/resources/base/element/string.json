@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "{{app.stylized-name}}"
+    },
+    {
+      "name": "reason_print",
+      "value": "Print documents"
     }
   ]
 }

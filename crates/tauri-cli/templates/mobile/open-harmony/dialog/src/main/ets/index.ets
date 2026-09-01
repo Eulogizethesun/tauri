@@ -1,1 +1,0 @@
-export { DialogPlugin as default } from './Plugin';

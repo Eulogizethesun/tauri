@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>窗口透明测试 (UIAbility)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: rgba(20,20,35,0.6);
+      color: #fff;
+      padding: 20px;
+      overflow: auto;
+    }
+    h1 { font-size: 18px; margin-bottom: 8px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+    h2 { font-size: 13px; margin: 16px 0 6px; color: #9ad; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+    p.desc { font-size: 11px; color: #ccc; margin-bottom: 12px; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    button {
+      padding: 7px 11px; border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(255,255,255,0.15); color: #fff;
+      border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+    button:hover { background: rgba(255,255,255,0.28); }
+    .log {
+      margin-top: 14px; padding: 8px; background: rgba(0,0,0,0.7);
+      border-radius: 6px; font-family: monospace; font-size: 11px;
+      white-space: pre-wrap; max-height: 220px; overflow: auto; color: #9f9;
+    }
+    .hint { font-size: 10px; color: #aaa; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>🪟 窗口透明测试 (自驱)</h1>
+  <p class="desc">此 UIAbility 实例主窗口已通过 builder.transparent(true) 创建。
+  页面加载后<strong>自行运行</strong>测试序列，每步 invoke 底层 API 并在下方日志区展示。
+  操作语义由 hilog 验证（START 锚点 + 底层模块日志），不回传主窗口。</p>
+
+  <h2>① 窗口背景色 (setBackgroundColor) — 系统窗口层</h2>
+  <div class="row">
+    <button data-action="setBg" data-arg="255,0,0,255">红 不透明</button>
+    <button data-action="setBg" data-arg="0,0,255,128">蓝 半透明</button>
+    <button data-action="setBg" data-arg="0,0,0,0">透明 α=0</button>
+    <button data-action="setBg" data-arg="null">重置 null</button>
+  </div>
+  <div class="hint">调 setWindowBackgroundColor。透明时能看到窗口容器层(已透明)→ 看到桌面。</div>
+
+  <h2>② CSS body 透明度 — ArkUI 内容层</h2>
+  <div class="row">
+    <button data-action="setCssBg" data-arg="transparent">body bg 透明</button>
+    <button data-action="setCssBg" data-arg="rgba(0,0,0,0.5)">body bg 半透明黑</button>
+    <button data-action="setCssBg" data-arg="rgba(255,255,255,0.8)">body bg 半透明白</button>
+    <button data-action="setCssBg" data-arg="#1a1a2e">body bg 不透明深色</button>
+  </div>
+
+  <h2>③ CSS opacity — 整个内容透明度</h2>
+  <div class="row">
+    <button data-action="setOpacity" data-arg="1">opacity 1</button>
+    <button data-action="setOpacity" data-arg="0.5">opacity 0.5</button>
+    <button data-action="setOpacity" data-arg="0.2">opacity 0.2</button>
+    <button data-action="setOpacity" data-arg="0">opacity 0</button>
+  </div>
+
+  <h2>④ 装饰/全屏</h2>
+  <div class="row">
+    <button data-action="toggleDecor">Toggle 标题栏</button>
+    <button data-action="toggleFullscreen">Toggle 全屏</button>
+    <button data-action="queryState">查询状态</button>
+  </div>
+
+  <div class="log" id="log">等待自驱序列开始...</div>
+
+  <script>
+    // 纯内联 JS — 函数声明自动挂 window，onclick 可直接调
+    function inv(cmd, args) {
+      var i = window.__TAURI_INTERNALS__;
+      if (i && typeof i.invoke === 'function') return i.invoke(cmd, args || {});
+      return Promise.reject('invoke not available');
+    }
+    function invWindow(cmd, args) {
+      return inv('plugin:window|' + cmd, args || {});
+    }
+
+    // onMessage：新窗口内部展示（仿 autotest 结构化输出）
+    // 控件：<div class="log" id="log">（页面底部日志区）
+    // 追加模式，每行带时间戳，自动滚到底
+    function onMessage(msg) {
+      var el = document.getElementById('log');
+      if (!el) return;
+      var ts = new Date().toLocaleTimeString();
+      var line = '[' + ts + '] ' + msg;
+      if (el.textContent.indexOf('等待自驱序列开始') === 0) {
+        el.textContent = line;
+      } else {
+        el.textContent = el.textContent + '\n' + line;
+      }
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function getLabel() {
+      try {
+        var m = window.__TAURI_INTERNALS__.metadata;
+        return (m && m.currentWindow && m.currentWindow.label) || '';
+      } catch (e) { return ''; }
+    }
+
+    // ① 窗口背景色
+    function setBg(colorStr) {
+      var args;
+      if (colorStr === 'null') {
+        args = { value: null };
+      } else {
+        var parts = colorStr.split(',').map(Number);
+        args = { value: parts };
+      }
+      return invWindow('set_background_color', args).then(function () {
+        onMessage('setBackgroundColor(' + colorStr + ') OK');
+      }).catch(function (e) {
+        onMessage('setBackgroundColor failed: ' + e);
+      });
+    }
+
+    // ② CSS body 背景
+    function setCssBg(bg) {
+      document.body.style.background = bg;
+      onMessage('body.style.background = ' + bg + ' (localOnly, no hilog)');
+    }
+
+    // ③ CSS opacity
+    function setOpacity(op) {
+      document.body.style.opacity = op;
+      onMessage('body.style.opacity = ' + op + ' (localOnly, no hilog)');
+    }
+
+    // ④ 装饰/全屏
+    function toggleDecor() {
+      return invWindow('is_decorated', {}).then(function (before) {
+        return invWindow('set_decorations', { decorations: !before }).then(function () {
+          onMessage('setDecorations: ' + before + ' → ' + !before);
+        });
+      }).catch(function (e) { onMessage('toggleDecor failed: ' + e); });
+    }
+
+    function toggleFullscreen() {
+      return invWindow('is_fullscreen', {}).then(function (before) {
+        return invWindow('set_fullscreen', { fullscreen: !before }).then(function () {
+          onMessage('setFullscreen: ' + before + ' → ' + !before);
+        });
+      }).catch(function (e) { onMessage('toggleFullscreen failed: ' + e); });
+    }
+
+    function queryState() {
+      return Promise.all([
+        invWindow('is_decorated', {}),
+        invWindow('is_fullscreen', {}),
+        invWindow('inner_size', {})
+      ]).then(function (r) {
+        onMessage('queryState: isDecorated=' + r[0] + ' isFullscreen=' + r[1] + ' innerSize=' + r[2].width + 'x' + r[2].height);
+      }).catch(function (e) { onMessage('queryState failed: ' + e); });
+    }
+
+    // ─── 事件绑定（addEventListener，绕开 CSP 对内联 onclick 的拦截）───
+    var handlers = {
+      setBg: function (arg) { setBg(arg); },
+      setCssBg: function (arg) { setCssBg(arg); },
+      setOpacity: function (arg) { setOpacity(arg); },
+      toggleDecor: function () { toggleDecor(); },
+      toggleFullscreen: function () { toggleFullscreen(); },
+      queryState: function () { queryState(); }
+    };
+    document.querySelectorAll('button[data-action]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var action = btn.getAttribute('data-action');
+        var arg = btn.getAttribute('data-arg');
+        var fn = handlers[action];
+        if (fn) { fn(arg); }
+      });
+    });
+
+    // Page loaded — manual testing only. Click buttons below to exercise each operation.
+    var label = getLabel();
+    onMessage('page loaded. label=' + label + ' invoke=' + (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke));
+  </script>
+</body>
+</html>

@@ -81,27 +81,49 @@ pub fn find_plugin_har(plugin_name: &str, project_dir: &Path) -> Result<PathBuf>
     .canonicalize()
     .context("failed to canonicalize project directory")?;
 
-  let search_paths: Vec<PathBuf> = vec![
+  // Build the candidate search paths. Order matters: the first existing path
+  // wins, so more-specific (in-tree) candidates come first.
+  let mut search_paths: Vec<PathBuf> = Vec::new();
+
+  // 1. App in-tree plugins: `<app>/plugins/<name>/openharmony`.
+  search_paths.push(
     canonical_project
       .join("plugins")
       .join(plugin_name)
       .join("openharmony"),
-    canonical_project
-      .parent()
-      .and_then(|p| p.parent())
-      .map(|p| {
-        p.join("plugins-workspace")
-          .join("plugins")
-          .join(plugin_name)
-          .join("openharmony")
-      })
-      .unwrap_or_default(),
-    get_tauri_workspace_root()
-      .join("plugins-workspace")
-      .join("plugins")
-      .join(plugin_name)
-      .join("openharmony"),
-  ];
+  );
+
+  // 2. Walk up from the app's src-tauri dir to find a `plugins-workspace`
+  //    sibling (or the app living inside one). Covers both the monorepo
+  //    sibling layout (`<root>/<app>/src-tauri`) and the demo layout
+  //    (`plugins-workspace/examples/<app>/src-tauri`, arbitrary depth) without
+  //    hard-coding a fixed number of `parent()` hops.
+  if let Some(root) = find_ancestor_with_plugins_workspace(&canonical_project) {
+    search_paths.push(
+      root
+        .join("plugins-workspace")
+        .join("plugins")
+        .join(plugin_name)
+        .join("openharmony"),
+    );
+  }
+
+  // 3. Workspace root resolved from CARGO_MANIFEST_DIR (source dev run) or
+  //    TAURI_WORKSPACE_ROOT env (installed binary). Same ancestor walk as #2
+  //    but anchored at the cli crate dir, so the two are independent: when
+  //    running from source, #2 (anchored at the app) usually wins; for an
+  //    installed binary whose CARGO_MANIFEST_DIR points at the build machine,
+  //    only the env override yields a real path.
+  let workspace_root = get_tauri_workspace_root();
+  if !workspace_root.as_os_str().is_empty() {
+    search_paths.push(
+      workspace_root
+        .join("plugins-workspace")
+        .join("plugins")
+        .join(plugin_name)
+        .join("openharmony"),
+    );
+  }
 
   for path in &search_paths {
     if path.exists() {
@@ -126,19 +148,24 @@ pub fn find_plugin_har(plugin_name: &str, project_dir: &Path) -> Result<PathBuf>
   )
 }
 
-const BUILTIN_PLUGINS: &[(&str, &str, &str)] = &[
-  ("dialog", "@tauri/plugin-dialog", "DialogPlugin"),
-  (
-    "notification",
-    "@tauri/plugin-notification",
-    "NotificationPlugin",
-  ),
-  (
-    "global-shortcut",
-    "@tauri/plugin-global-shortcut",
-    "GlobalShortcutPlugin",
-  ),
-];
+/// Walk up from `start` to the nearest ancestor directory that contains a
+/// `plugins-workspace` child (or is itself named `plugins-workspace`), and
+/// return that ancestor's parent (the monorepo root). Returns `None` if no
+/// such ancestor exists. This makes plugin HAR discovery robust to the app
+/// sitting at arbitrary depth inside a monorepo, instead of assuming a fixed
+/// `parent().parent()` depth.
+fn find_ancestor_with_plugins_workspace(start: &Path) -> Option<PathBuf> {
+  let mut current = start;
+  loop {
+    if current.join("plugins-workspace").is_dir() {
+      return Some(current.to_path_buf());
+    }
+    match current.parent() {
+      Some(parent) => current = parent,
+      None => return None,
+    }
+  }
+}
 
 pub fn detect_all_plugins(project_dir: &Path) -> Result<Vec<DetectedPlugin>> {
   let cargo_manifest = project_dir.join("Cargo.toml");
@@ -152,22 +179,6 @@ pub fn detect_all_plugins(project_dir: &Path) -> Result<Vec<DetectedPlugin>> {
   let mut detected: Vec<DetectedPlugin> = Vec::new();
 
   for name in &plugin_names {
-    let builtin = BUILTIN_PLUGINS.iter().find(|(n, _, _)| *n == name.as_str());
-
-    if let Some((_, identifier, class_name)) = builtin {
-      log::info!(
-        "Plugin '{}' uses built-in template (identifier={}, className={})",
-        name,
-        identifier,
-        class_name
-      );
-      detected.push(DetectedPlugin {
-        name: name.clone(),
-        har_path: PathBuf::from(format!("__builtin__{}", name)),
-      });
-      continue;
-    }
-
     match find_plugin_har(name, project_dir) {
       Ok(har_path) => {
         detected.push(DetectedPlugin {
@@ -187,19 +198,21 @@ pub fn detect_all_plugins(project_dir: &Path) -> Result<Vec<DetectedPlugin>> {
 }
 
 fn get_tauri_workspace_root() -> PathBuf {
+  // Explicit override wins: used by an installed tauri-cli binary whose
+  // CARGO_MANIFEST_DIR points at the build machine and thus cannot locate the
+  // workspace by walking ancestors.
   if let Ok(root) = std::env::var("TAURI_WORKSPACE_ROOT") {
     return PathBuf::from(root);
   }
 
+  // Running from source: CARGO_MANIFEST_DIR points at the dev machine's
+  // `tauri/crates/tauri-cli`. Walk up to the nearest ancestor containing a
+  // `plugins-workspace` sibling (the monorepo root).
   let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
     .map(PathBuf::from)
     .unwrap_or_default();
 
-  manifest_dir
-    .parent()
-    .and_then(|p| p.parent())
-    .map(|p| p.to_path_buf())
-    .unwrap_or_default()
+  find_ancestor_with_plugins_workspace(&manifest_dir).unwrap_or_default()
 }
 
 pub fn parse_oh_package(har_path: &Path) -> Result<OhPackage> {
@@ -243,17 +256,6 @@ pub fn infer_class_name(plugin_name: &str) -> String {
 }
 
 pub fn parse_plugin_meta(har_path: &Path, plugin_name: &str) -> Result<PluginMeta> {
-  let builtin = BUILTIN_PLUGINS.iter().find(|(n, _, _)| *n == plugin_name);
-
-  if let Some((_, identifier, class_name)) = builtin {
-    return Ok(PluginMeta {
-      name: plugin_name.to_string(),
-      identifier: identifier.to_string(),
-      class_name: class_name.to_string(),
-      har_path: har_path.to_path_buf(),
-    });
-  }
-
   let oh_package = parse_oh_package(har_path)?;
 
   let identifier = oh_package.name;
@@ -284,8 +286,15 @@ fn try_parse_class_name_from_index(har_path: &Path) -> Option<String> {
     }
   };
 
+  // Patterns cover the export forms plugins use to surface their ArkTS class:
+  //  - `export { default as <Class>Plugin }`   (default-as-Class re-export)
+  //  - `export { <Class>Plugin as default }`   (Class-as-default, used by the
+  //    dialog/notification/global-shortcut built-ins after relocation)
+  //  - `export default class <Class>Plugin`
+  //  - `export class <Class>Plugin extends Plugin`
   let patterns = [
     r"export\s+\{\s*\w+\s+as\s+(\w+Plugin)\s*\}",
+    r"export\s+\{\s*(\w+Plugin)\s+as\s+\w+\s*\}",
     r"export\s+default\s+class\s+(\w+Plugin)",
     r"export\s+class\s+(\w+Plugin)\s+extends\s+Plugin",
   ];
@@ -377,14 +386,6 @@ pub fn validate_plugin_meta(meta: &PluginMeta) -> Result<()> {
 pub fn copy_plugin_har(meta: &PluginMeta, dest_dir: &Path) -> Result<PathBuf> {
   validate_plugin_name(&meta.name)?;
 
-  if meta.har_path.to_string_lossy().starts_with("__builtin__") {
-    log::info!(
-      "Plugin '{}' uses built-in template, skipping HAR copy (rendered by populate_template)",
-      meta.name
-    );
-    return Ok(dest_dir.join(&meta.name));
-  }
-
   let canonical_dest = dest_dir
     .canonicalize()
     .context("failed to canonicalize destination directory")?;
@@ -427,6 +428,14 @@ pub fn copy_plugin_har(meta: &PluginMeta, dest_dir: &Path) -> Result<PathBuf> {
     let relative = src_path
       .strip_prefix(&canonical_har)
       .context("failed to strip prefix from source path")?;
+
+    // Skip build artifacts: `.tauri/` is the generated `@tauri/app` runtime HAR
+    // (produced by `tauri_plugin::Builder::ohos_path`), `target/` is Rust build
+    // output. Copying either into the generated project would duplicate the
+    // runtime already provided by the `tauri/` module and pollute `oh-package`.
+    if relative.starts_with(".tauri") || relative.starts_with("target") {
+      continue;
+    }
 
     verify_relative_path_safe(relative)?;
 
@@ -676,6 +685,60 @@ pub fn write_entry_device_types(
   Ok(())
 }
 
+/// Rewrite `entry_{form}/src/main/module.json5`'s `continuable`/`continueType`
+/// (app continuation gating) per the conf's `bundle.openHarmony` settings, so
+/// conf changes take effect on rebuild without re-running `ohos init` (same
+/// injection point as [`write_entry_device_types`]).
+///
+/// `continuable == Some(true)` writes `continuable: true` plus `continueType`
+/// (`continue_type` when provided, else falling back to `[identifier]` — the
+/// same app installed on both devices then matches automatically). Any other
+/// `continuable` value **removes** both keys, so toggling back to disabled also
+/// takes effect on rebuild.
+pub fn write_entry_continuation(
+  project_dir: &Path,
+  form: &str,
+  continuable: Option<bool>,
+  continue_type: Option<&[String]>,
+  identifier: &str,
+) -> Result<()> {
+  let module = format!("entry_{form}");
+  let module_json = project_dir.join(format!("{module}/src/main/module.json5"));
+  let content = fs::read_to_string(&module_json)
+    .with_context(|| format!("failed to read {module}/src/main/module.json5"))?;
+  let mut doc: Value =
+    parse_json5(&content).with_context(|| format!("failed to parse {module} module.json5"))?;
+  let ability = doc
+    .get_mut("module")
+    .and_then(|m| m.get_mut("abilities"))
+    .and_then(|a| a.as_array_mut())
+    .and_then(|a| a.get_mut(0))
+    .and_then(|a| a.as_object_mut())
+    .with_context(|| format!("{module}/src/main/module.json5 has no abilities[0] object"))?;
+
+  if continuable == Some(true) {
+    let types: Vec<String> = match continue_type {
+      Some(types) if !types.is_empty() => types.to_vec(),
+      // Same app on both devices matches automatically via the shared identifier.
+      _ => vec![identifier.to_string()],
+    };
+    ability.insert("continuable".to_string(), Value::Bool(true));
+    ability.insert(
+      "continueType".to_string(),
+      Value::Array(types.into_iter().map(Value::String).collect()),
+    );
+  } else {
+    // Removing a missing key is a no-op — safe toggle-back to disabled.
+    ability.remove("continuable");
+    ability.remove("continueType");
+  }
+
+  let updated = serialize_json5(&doc)?;
+  fs::write(&module_json, updated)
+    .with_context(|| format!("failed to write {module}/src/main/module.json5"))?;
+  Ok(())
+}
+
 pub fn update_entry_package(project_dir: &Path, plugins: &[PluginMeta]) -> Result<()> {
   let entry_module = super::active_entry_module();
   let oh_package_path = project_dir.join(format!("{entry_module}/oh-package.json5"));
@@ -718,6 +781,110 @@ pub fn update_entry_package(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
     .with_context(|| format!("failed to write {entry_module}/oh-package.json5"))?;
 
   log::info!("Successfully updated {entry_module}/oh-package.json5");
+
+  update_entry_ability(project_dir, &entry_module, plugins)?;
+
+  Ok(())
+}
+
+/// Idempotently sync the plugin imports and `STATIC_PLUGINS` registrations in
+/// an entry module's `EntryAbility.ets` with the detected plugin set.
+///
+/// That file is generated once at `ohos init` from the handlebars template
+/// (`{{#each plugins}}` loops) and, like the rest of `gen/`, is never
+/// regenerated on subsequent builds — so plugins added to the app's
+/// `Cargo.toml` after init would get their HAR copied and wired into
+/// build-profile/oh-package, but never reach the ArkTS plugin registry and
+/// fail at runtime with "Plugin not found: <name>". This backfills the two
+/// generated blocks the same way the template would have.
+///
+/// Additive-only: existing lines (including hand edits) are never rewritten or
+/// removed; entries for plugins that are no longer detected are left in place.
+pub fn update_entry_ability(
+  project_dir: &Path,
+  entry_module: &str,
+  plugins: &[PluginMeta],
+) -> Result<()> {
+  let ability_path = project_dir
+    .join(entry_module)
+    .join("src/main/ets/entryability/EntryAbility.ets");
+
+  let content =
+    fs::read_to_string(&ability_path).with_context(|| format!("failed to read {}", ability_path.display()))?;
+
+  let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+  // Anchors: the `@tauri/app` import for new plugin imports, and the
+  // STATIC_PLUGINS declaration (or its last `.set(` line) for new
+  // registrations. If the file was not generated from the standard template
+  // (no import anchor), skip — nothing to backfill into.
+  let Some(import_anchor) = lines
+    .iter()
+    .position(|l| l.trim_start().starts_with("import") && l.contains("from '@tauri/app'"))
+  else {
+    log::warn!(
+      "{entry_module}/EntryAbility.ets has no '@tauri/app' import anchor; skipping plugin registry sync"
+    );
+    return Ok(());
+  };
+
+  let mut reg_anchor = lines
+    .iter()
+    .rposition(|l| l.contains("STATIC_PLUGINS.set("))
+    .or_else(|| lines.iter().position(|l| l.contains("const STATIC_PLUGINS")));
+
+  for plugin in plugins {
+    let import_line = format!("import {} from '{}';", plugin.class_name, plugin.identifier);
+    let reg_line = format!(
+      "STATIC_PLUGINS.set('{}', new {}());",
+      plugin.name, plugin.class_name
+    );
+
+    if !lines
+      .iter()
+      .any(|l| l.contains(&format!("from '{}'", plugin.identifier)))
+    {
+      log::info!(
+        "Adding EntryAbility import for plugin '{}': {}",
+        plugin.name, import_line
+      );
+      lines.insert(import_anchor + 1, import_line);
+      // The registration anchor shifted by one line.
+      if let Some(anchor) = reg_anchor.as_mut() {
+        *anchor += 1;
+      }
+    }
+
+    let has_reg = lines
+      .iter()
+      .any(|l| l.contains(&format!("STATIC_PLUGINS.set('{}'", plugin.name)));
+    if !has_reg {
+      if let Some(anchor) = reg_anchor {
+        log::info!(
+          "Adding STATIC_PLUGINS entry for plugin '{}': {}",
+          plugin.name, reg_line
+        );
+        lines.insert(anchor + 1, reg_line);
+        // Anchor still points at a valid `.set(` line for the next plugin.
+        if let Some(a) = reg_anchor.as_mut() {
+          *a += 1;
+        }
+      } else {
+        log::warn!(
+          "{entry_module}/EntryAbility.ets has no STATIC_PLUGINS anchor; cannot register plugin '{}'",
+          plugin.name
+        );
+      }
+    }
+  }
+
+  let mut updated = lines.join("\n");
+  if !updated.ends_with('\n') {
+    updated.push('\n');
+  }
+  fs::write(&ability_path, updated)
+    .with_context(|| format!("failed to write {}", ability_path.display()))?;
+
   Ok(())
 }
 
@@ -752,14 +919,6 @@ fn serialize_json5(value: &Value) -> Result<String> {
 }
 
 pub fn verify_plugin_before_update(plugin: &PluginMeta, project_dir: &Path) -> Result<()> {
-  if plugin.har_path.to_string_lossy().starts_with("__builtin__") {
-    log::info!(
-      "Plugin '{}' is built-in, skipping verification",
-      plugin.name
-    );
-    return Ok(());
-  }
-
   let plugin_dir = project_dir.join(&plugin.name);
 
   if !plugin_dir.exists() {

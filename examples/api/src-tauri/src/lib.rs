@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 mod cmd;
+mod probe_apis;
 #[cfg(desktop)]
 mod menu_plugin;
 #[cfg(desktop)]
@@ -101,7 +102,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       .plugin(tauri_plugin_autostart::init(
         tauri_plugin_autostart::MacosLauncher::LaunchAgent,
         None,
-      ));
+      ))
+      .plugin(tauri_plugin_deep_link::init())
+      .plugin(tauri_plugin_persisted_scope::init())
+      .plugin(tauri_plugin_window_state::Builder::default().build());
     if let Some(ref client) = sentry_client {
       builder = builder.plugin(tauri_plugin_sentry::init(client));
     }
@@ -120,6 +124,14 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         let _ = window.set_focus();
       }
     }));
+  }
+
+  // deep-link: line 105 registers it for non-OHOS; OHOS registers it in its own
+  // block below. The two are in complementary cfg blocks (not(OHOS) vs OHOS) — NOT
+  // duplicates; only one runs per platform.
+  #[cfg(target_env = "ohos")]
+  {
+    builder = builder.plugin(tauri_plugin_deep_link::init());
   }
 
   #[cfg(target_env = "ohos")]
@@ -149,7 +161,31 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         tauri_plugin_autostart::MacosLauncher::LaunchAgent,
         None,
       ))
-      .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+      .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+      .plugin(tauri_plugin_persisted_scope::init())
+      .plugin(tauri_plugin_window_state::Builder::default().build())
+      .plugin(tauri_plugin_store::Builder::new().build())
+      .plugin(tauri_plugin_sql::Builder::new().build())
+      .plugin(tauri_plugin_websocket::init())
+      .plugin(tauri_plugin_cli::init())
+      .plugin(tauri_plugin_upload::init())
+      .plugin(tauri_plugin_localhost::Builder::new(3005).build())
+      .plugin(tauri_plugin_opener::init())
+      .plugin(tauri_plugin_positioner::init())
+      // mobile-native plugins adapted to OHOS (mobile.rs run_mobile_plugin bridge)
+      .plugin(tauri_plugin_haptics::init())
+      .plugin(tauri_plugin_geolocation::init())
+      .plugin(tauri_plugin_biometric::init())
+      .plugin(tauri_plugin_nfc::init())
+      .plugin(tauri_plugin_barcode_scanner::init())
+      // OHOS-only: Huawei one-tap account login
+      .plugin(tauri_plugin_huawei_account::init())
+      // OHOS-only: minimal accessibility API (font scale / screen reader state + event)
+      .plugin(tauri_plugin_accessibility::init())
+      // OHOS-only: in-app webview screenshot + color picking
+      .plugin(tauri_plugin_screenshot::init())
+      // OHOS-only: passive app-continuation restore queries
+      .plugin(tauri_plugin_continuation::init());
   }
 
   #[cfg(target_env = "ohos")]
@@ -162,6 +198,54 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
     ohos_log::init();
     log::info!("OHOS log initialized via hilog + tauri_plugin_log(skip_logger)");
   };
+
+  // LLVM coverage: set profraw output path early (before any coverage data
+  // flush). Only active when built with `-Cinstrument-coverage` + cov-dump
+  // feature. The app process is spawned by the Ability Manager and does not
+  // inherit hdc shell env vars, so LLVM_PROFILE_FILE must be set in-process.
+  #[cfg(all(target_env = "ohos", feature = "cov-dump"))]
+  {
+    // IMMEDIATE marker + log to verify this cfg block is reached.
+    log::info!("[cov-dump] cfg block entered");
+    let _ = std::fs::write("/data/storage/el2/base/cache/cov-immediate.txt", "reached\n");
+
+    extern "C" {
+      fn __llvm_profile_set_filename(path: *const std::os::raw::c_char);
+      fn __llvm_profile_write_file() -> std::os::raw::c_int;
+      fn __llvm_profile_initialize(instrumented: std::os::raw::c_int, sync: std::os::raw::c_int);
+    }
+    // Spawn a delayed thread to avoid hilog congestion during startup.
+    // Also tries marker writes at increasing delays to ensure the cache
+    // directory exists.
+    std::thread::spawn(|| {
+      // Wait 3s for hilog to settle and cache dir to be created.
+      std::thread::sleep(std::time::Duration::from_secs(3));
+
+      // Write marker files to verify this code path is reached.
+      let r1 = std::fs::write("/data/storage/el2/base/cache/cov-marker.txt", "cov-dump reached\n");
+      log::info!("[cov-dump] marker write r1={:?}", r1);
+
+      let r2 = std::fs::write("/data/app/el2/100/base/com.tauri.api/cache/cov-marker.txt", "cov-dump reached\n");
+      log::info!("[cov-dump] marker write r2={:?}", r2);
+
+      let path = b"/data/storage/el2/base/cache/cov-app-%m-%p.profraw\0";
+      unsafe {
+        __llvm_profile_initialize(1, 0);
+        __llvm_profile_set_filename(path.as_ptr() as *const std::os::raw::c_char);
+        let rc = __llvm_profile_write_file();
+        log::info!("[cov-dump] initial flush rc={}", rc);
+      }
+
+      // Periodic flush every 20s.
+      loop {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        unsafe {
+          let rc = __llvm_profile_write_file();
+          log::info!("[cov-dump] periodic flush rc={}", rc);
+        }
+      }
+    });
+  }
 
   builder = builder
     // Test append_invoke_initialization_script
@@ -236,8 +320,32 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(all(desktop, not(test)))]
       {
         let handle = app.handle();
+        log::info!("[setup] before create_tray");
         tray::create_tray(handle)?;
+        log::info!("[setup] after create_tray, before menu_plugin::init");
         handle.plugin(menu_plugin::init())?;
+        log::info!("[setup] after menu_plugin::init");
+      }
+
+      // OHOS: forward print-job terminal states (succeed/fail/cancel/block) from the
+      // openharmony-ability crossbeam channel to the frontend as "ohos-print-state"
+      // events. The channel is fed by the bridge "print-state" main-thread event
+      // (WebviewPlugin.ets PrintTask handlers). recv runs on this worker thread only —
+      // never on the NAPI main thread (deadlock precedent).
+      #[cfg(target_env = "ohos")]
+      {
+        let app_handle = app.handle().clone();
+        std::thread::spawn(move || {
+          let receiver = openharmony_ability_plugin_webview::print_state_receiver();
+          while let Ok(event) = receiver.recv() {
+            let payload = serde_json::json!({
+              "id": event.id,
+              "state": event.state,
+              "error": event.error,
+            });
+            let _ = app_handle.emit("ohos-print-state", payload);
+          }
+        });
       }
 
       #[cfg(target_os = "macos")]
@@ -455,7 +563,6 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
               let deny_state = app_.state::<cmd::NewWindowDenyState>();
               *deny_state.last_url.lock().unwrap() = Some(url.to_string());
               let should_deny = deny_state.deny.load(std::sync::atomic::Ordering::SeqCst);
-              let should_create = deny_state.create.load(std::sync::atomic::Ordering::SeqCst);
 
               // Emit event for frontend test verification
               let _ = app_.emit("new-window-requested", url.to_string());
@@ -463,24 +570,51 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
               if should_deny {
                 log::debug!("[OHOS] on_new_window: DENY for URL: {}", url);
                 tauri::webview::NewWindowResponse::Deny
-              } else if should_create {
-                log::debug!("[OHOS] on_new_window: CREATE real OS window for URL: {}", url);
-                let builder = WebviewWindowBuilder::new(
-                  &app_,
-                  format!("new-{number}"),
-                  tauri::WebviewUrl::External(url.clone()),
-                )
-                .title(url.as_str());
-                match builder.build() {
-                  Ok(window) => tauri::webview::NewWindowResponse::Create { window },
-                  Err(e) => {
-                    log::error!("[OHOS] on_new_window: CREATE failed, falling back to Allow: {}", e);
-                    tauri::webview::NewWindowResponse::Allow(std::marker::PhantomData)
-                  }
-                }
               } else {
-                log::debug!("[OHOS] on_new_window: ALLOW dialog for URL: {}", url);
-                tauri::webview::NewWindowResponse::Allow(std::marker::PhantomData)
+                let should_create = deny_state.create.load(std::sync::atomic::Ordering::SeqCst);
+                if should_create {
+                  // Create mode: build a SEPARATE Float OS sub-window that loads
+                  // the target URL. wry maps Create => false, so the bridge calls
+                  // setWebController(null) (non-blocking cancel of ArkWeb's own
+                  // popup) while the Float window is the actual popup. build() is
+                  // non-blocking on the UI thread (createOSWindow discards its
+                  // returned Promise; webview create is runtime.spawn'd), so this
+                  // ArkWeb onWindowNew callback returns synchronously — no deadlock.
+                  log::info!("[OHOS DBG] on_new_window: CREATE real OS window for URL: {}", url);
+                  let builder = WebviewWindowBuilder::new(
+                    &app_,
+                    format!("new-{number}"),
+                    tauri::WebviewUrl::External(url.clone()),
+                  )
+                  .title(url.as_str())
+                  // Size + offset the Float sub-window so it appears as a distinct
+                  // floating popup, not a full-screen window covering the main
+                  // window (createOSWindow defaults to the display size when no
+                  // inner_size is set). Logical px; at DPR=2 this yields ~900x700
+                  // physical pixels — a medium popup. Position offset so the main
+                  // window stays visible.
+                  .inner_size(450.0, 350.0)
+                  .position(60.0, 45.0)
+                  .ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+                  log::info!("[OHOS DBG] builder configured, calling build()...");
+                  match builder.build() {
+                    Ok(window) => {
+                      log::info!("[OHOS DBG] build() succeeded, window created");
+                      tauri::webview::NewWindowResponse::Create { window }
+                    }
+                    Err(e) => {
+                      log::error!("[OHOS DBG] on_new_window: CREATE failed, falling back to Allow: {}", e);
+                      tauri::webview::NewWindowResponse::Allow
+                    }
+                  }
+                } else {
+                  // Allow mode: do NOT build a Float window. Return Allow so the
+                  // bridge layer (DefaultWebview.ets:handleWindowNew) opens an in-page
+                  // dialog (NewWindowDialog.ets) with the target URL, a ✕ close
+                  // button, and an embedded Web component. wry maps Allow => true.
+                  log::info!("[OHOS DBG] on_new_window: ALLOW (in-page dialog) for URL: {}", url);
+                  tauri::webview::NewWindowResponse::Allow
+                }
               }
             }
           });
@@ -508,12 +642,6 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       webview.eval_with_callback("document.title", |title| {
         log::info!("Window title from JS: {}", title);
       })?;
-      webview.eval(r#"
-        const div = document.createElement('div');
-        div.style.cssText = 'position:fixed;top:20px;left:20px;background:green;color:white;padding:20px;font-size:24px;z-index:9999;';
-        div.textContent = '✅ Rust eval is working!';
-        document.body.appendChild(div);
-      "#)?;
 
       #[cfg(not(target_env = "ohos"))]
       {
@@ -572,6 +700,46 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
       });
 
+      // WebSocket echo fixture for plugin-websocket tests (port 3004).
+      // Echoes Text/Binary frames back to the sender. tungstenite 0.24 builds
+      // on OHOS-desktop (no TLS deps in default features); same pattern as the
+      // HTTP echo server above (port 3003) which already works under cfg(desktop).
+      #[cfg(desktop)]
+      std::thread::spawn(|| {
+        let listener = match std::net::TcpListener::bind("localhost:3004") {
+          Ok(l) => l,
+          Err(e) => {
+            log::error!("Failed to bind ws echo server on port 3004: {e}");
+            return;
+          }
+        };
+        for stream in listener.incoming() {
+          if let Ok(stream) = stream {
+            std::thread::spawn(move || {
+              let mut ws_stream = match tungstenite::accept(stream) {
+                Ok(ws) => ws,
+                Err(e) => {
+                  log::error!("ws echo handshake failed: {e}");
+                  return;
+                }
+              };
+              while let Ok(msg) = ws_stream.read() {
+                use tungstenite::Message;
+                match msg {
+                  Message::Text(_) | Message::Binary(_) => {
+                    if ws_stream.send(msg).is_err() {
+                      break;
+                    }
+                  }
+                  Message::Close(_) => break,
+                  _ => {}
+                }
+              }
+            });
+          }
+        }
+      });
+
       setup(app);
 
       Ok(())
@@ -611,10 +779,17 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::perform_request,
       cmd::echo,
       cmd::spam,
-      cmd::write_test_report,
       cmd::clear_test_report,
       cmd::append_test_result,
       cmd::console_log,
+      probe_apis::probe_app_monitors,
+      #[cfg(target_env = "ohos")]
+      probe_apis::probe_display_refresh_rate,
+      #[cfg(desktop)]
+      probe_apis::probe_app_menu_set_remove,
+      #[cfg(desktop)]
+      probe_apis::probe_window_menu_set_remove,
+      probe_apis::probe_webview_reparent,
       cmd::flush_console_log,
       cmd::clear_console_log,
       cmd::test_eval,
@@ -630,7 +805,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::devtools_open_only,
       #[cfg(any(debug_assertions, feature = "devtools"))]
       cmd::devtools_close_only,
+      #[cfg(desktop)]
       cmd::set_bounds_test,
+      cmd::test_persisted_scope,
+      cmd::clear_persisted_scope,
+      cmd::clear_window_state,
+      cmd::create_ohos_test_webview,
       cmd::create_isolated_window,
       cmd::dummy_command,
       cmd::create_window_with_custom_ua,
@@ -639,8 +819,21 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(desktop)]
       cmd::create_borderless_window,
       #[cfg(desktop)]
+      cmd::create_decorated_window,
+      cmd::set_ime_position_test,
+      cmd::get_ime_position_result,
+      #[cfg(desktop)]
       cmd::create_transparent_borderless_window,
-      cmd::close_test_window,
+      #[cfg(target_env = "ohos")]
+      cmd::create_ui_ability_window,
+      #[cfg(target_env = "ohos")]
+      cmd::create_ui_ability_windows_x3,
+      #[cfg(target_env = "ohos")]
+      cmd::create_transparent_ui_ability_window,
+      #[cfg(target_env = "ohos")]
+      cmd::transparent_test_start,
+      cmd::close_all_test_windows,
+      cmd::count_webview_windows,
       cmd::create_counter,
       cmd::increment_counter,
       cmd::get_counter_value,
@@ -662,6 +855,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(target_env = "ohos")]
       cmd::get_ohos_version_info,
       cmd::test_web_page_snapshot,
+      #[cfg(target_env = "ohos")]
       cmd::test_create_pdf,
       cmd::set_download_test_mode,
       #[cfg(desktop)]
@@ -669,6 +863,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(debug_assertions)]
       cmd::sentry_test_panic,
       cmd::sentry_test_breadcrumb,
+      #[cfg(all(target_env = "ohos", feature = "cov-dump"))]
+      cmd::dump_coverage,
+      #[cfg(all(target_env = "ohos", feature = "fault-injection"))]
+      cmd::fault_injection_set_rule,
+      #[cfg(all(target_env = "ohos", feature = "fault-injection"))]
+      cmd::fault_injection_clear,
     ])
     .build(tauri::tauri_build_context!())
     .expect("error while building tauri application");
@@ -766,16 +966,11 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             log::info!("[OHOS] calling prevent_close() for test window: {}", label);
             api.prevent_close();
             // Do not call destroy() - this is a test window, keep it open
-          } else {
-            // Other windows: prevent default close behavior, then explicitly destroy
-            log::info!("[OHOS] closing window: {}", label);
-            api.prevent_close();
-            _app_handle
-              .get_webview_window(label)
-              .unwrap()
-              .destroy()
-              .unwrap();
           }
+          // Other windows: let the default close path run. on_close_requested
+          // (wry) will call on_window_close, whose OHOS branch calls
+          // destroy_window to actually destroy the OS window. No prevent_close,
+          // no manual destroy_window here — the framework handles it uniformly.
         }
         #[cfg(not(target_env = "ohos"))]
         {

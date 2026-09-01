@@ -126,11 +126,15 @@
           "minimumSystemVersion": "10.13"
         },
         "openHarmony": {
-          "deviceTypes": [
-            "phone",
-            "tablet",
-            "2in1"
-          ]
+          "deviceTypes": {
+            "desktop": [
+              "2in1"
+            ],
+            "mobile": [
+              "phone",
+              "tablet"
+            ]
+          }
         },
         "targets": "all",
         "useLocalToolsDir": false,
@@ -2337,11 +2341,15 @@
         "openHarmony": {
           "description": "OpenHarmony configuration.",
           "default": {
-            "deviceTypes": [
-              "phone",
-              "tablet",
-              "2in1"
-            ]
+            "deviceTypes": {
+              "desktop": [
+                "2in1"
+              ],
+              "mobile": [
+                "phone",
+                "tablet"
+              ]
+            }
           },
           "allOf": [
             {
@@ -3966,36 +3974,65 @@
           "minimum": 0.0
         },
         "deviceTypes": {
-          "description": "Per-form device types. `mobile` feeds `cfg(mobile)` (defaults to `[\"phone\", \"tablet\"]`), `desktop` feeds `cfg(desktop)` (defaults to `[\"2in1\"]`).",
+          "description": "The device types supported by the application, split per device form. `mobile` feeds `cfg(mobile)` (defaults to `[\"phone\", \"tablet\"]`), `desktop` feeds `cfg(desktop)` (defaults to `[\"2in1\"]`).",
           "default": {
-            "mobile": ["phone", "tablet"],
-            "desktop": ["2in1"]
+            "desktop": [
+              "2in1"
+            ],
+            "mobile": [
+              "phone",
+              "tablet"
+            ]
           },
-          "$ref": "#/definitions/OpenHarmonyDeviceTypes"
+          "allOf": [
+            {
+              "$ref": "#/definitions/OpenHarmonyDeviceTypes"
+            }
+          ]
+        },
+        "continuable": {
+          "description": "Marks the app's ability as continuable (app continuation / task handoff).\n\nWhen `Some(true)`, the CLI writes `continuable: true` into each entry module.json5's abilities entry at build time (same injection point as `deviceTypes`). Requires `continueType` matching between devices. `None`/`Some(false)` keeps module.json5 unchanged.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "continueType": {
+          "description": "The continuation type identifiers used to match source/target devices for app continuation (module.json5 `continueType`). Only written when `continuable` is `Some(true)`; defaults to `[identifier]` when omitted.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
     },
     "OpenHarmonyDeviceTypes": {
-      "description": "Per-form OHOS device types. When `bundle.openHarmony.deviceTypes` is omitted, both default (`mobile=[\"phone\",\"tablet\"]`, `desktop=[\"2in1\"]`). When present, both `mobile` and `desktop` are required and must be non-empty.",
+      "description": "Per-form OHOS device types. Each list drives one Entry HAP's `module.json5` `deviceTypes` and the `cfg(mobile)`/`cfg(desktop)` compile of its `.so`.\n\nWhen `bundle.openHarmony.deviceTypes` is **omitted**, both lists default (`mobile = [\"phone\",\"tablet\"]`, `desktop = [\"2in1\"]`). When **present**, both `mobile` and `desktop` are required and must be non-empty — you cannot configure only one form.",
       "type": "object",
+      "required": [
+        "desktop",
+        "mobile"
+      ],
       "properties": {
         "mobile": {
           "description": "Devices for the mobile form (e.g. `[\"phone\", \"tablet\"]`).",
-          "default": ["phone", "tablet"],
           "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1
+          "items": {
+            "type": "string"
+          }
         },
         "desktop": {
           "description": "Devices for the desktop form (e.g. `[\"2in1\"]`).",
-          "default": ["2in1"],
           "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1
+          "items": {
+            "type": "string"
+          }
         }
       },
-      "required": ["mobile", "desktop"],
       "additionalProperties": false
     },
     "PluginConfig": {

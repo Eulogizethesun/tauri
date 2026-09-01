@@ -84,7 +84,7 @@ pub fn simulate_menu_click<R: tauri::Runtime>(
   _app: tauri::AppHandle<R>,
   item_id: String,
 ) -> Result<(), String> {
-  tauri::ohos::openharmony_ability::menu::send_menu_event(item_id);
+  muda::send_menu_event(item_id);
   Ok(())
 }
 

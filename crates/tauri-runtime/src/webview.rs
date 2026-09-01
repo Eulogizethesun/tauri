@@ -350,6 +350,21 @@ pub struct WebviewAttributes {
   pub initialization_scripts: Vec<InitializationScript>,
   pub data_directory: Option<PathBuf>,
   pub drag_drop_handler_enabled: bool,
+  /// Whether to render a transparent overlay Stack that receives ArkUI drag events
+  /// and forwards them to drag_drop_handler. OHOS-only (ArkWeb may not bubble OS file
+  /// drags to Web-level handlers; the overlay is the fallback). See ohos-webview-drag-drop-overlay.
+  #[cfg(target_env = "ohos")]
+  pub drag_drop_overlay: bool,
+  /// Whether clipboard access is enabled for the page.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **Linux / Windows**: gates the page's JS clipboard access only; keyboard
+  ///   Ctrl+C/X/V are engine-native and always work. Default `false`.
+  /// - **macOS**: always enabled (no toggle).
+  /// - **OHOS**: default `true` (ArkWeb native clipboard shortcuts, matching
+  ///   macOS/Windows keyboard behavior); `false` intercepts keyboard
+  ///   Ctrl+C/X/V/A/Z/Y via onKeyPreIme. See ohos-webview-flag-clipboard spec.
   pub clipboard: bool,
   pub accept_first_mouse: bool,
   pub additional_browser_args: Option<String>,
@@ -519,7 +534,13 @@ impl WebviewAttributes {
       initialization_scripts: Vec::new(),
       data_directory: None,
       drag_drop_handler_enabled: true,
-      clipboard: false,
+      #[cfg(target_env = "ohos")]
+      drag_drop_overlay: false,
+      // OHOS defaults to enabled (ArkWeb native clipboard shortcuts) so that
+      // default-configured windows keep working Ctrl+C like Windows/macOS.
+      // Other platforms keep the historical `false` default. See
+      // ohos-webview-flag-clipboard spec.
+      clipboard: cfg!(target_env = "ohos"),
       accept_first_mouse: false,
       additional_browser_args: None,
       window_effects: None,
@@ -639,9 +660,25 @@ impl WebviewAttributes {
   ///
   /// **macOS** doesn't provide such method and is always enabled by default,
   /// but you still need to add menu item accelerators to use shortcuts.
+  ///
+  /// **OHOS** is enabled by default (ArkWeb native clipboard shortcuts);
+  /// use [`Self::disable_clipboard_access`] to intercept keyboard
+  /// Ctrl+C/X/V/A/Z/Y.
   #[must_use]
   pub fn enable_clipboard_access(mut self) -> Self {
     self.clipboard = true;
+    self
+  }
+
+  /// Disables clipboard access for the page.
+  ///
+  /// This is the default on **Linux** and **Windows**. On **OHOS** the default
+  /// is enabled (ArkWeb native clipboard shortcuts); calling this intercepts
+  /// keyboard Ctrl+C/X/V/A/Z/Y via onKeyPreIme so they never reach ArkWeb.
+  /// See the ohos-webview-flag-clipboard spec.
+  #[must_use]
+  pub fn disable_clipboard_access(mut self) -> Self {
+    self.clipboard = false;
     self
   }
 
@@ -741,6 +778,18 @@ impl WebviewAttributes {
   #[must_use]
   pub fn use_https_scheme(mut self, enabled: bool) -> Self {
     self.use_https_scheme = enabled;
+    self
+  }
+
+  /// Sets whether to render a transparent drag-drop overlay (OHOS-only).
+  ///
+  /// When enabled, a transparent Stack with `HitTestMode.Transparent` is rendered
+  /// above the Web component to receive ArkUI drag events (ArkWeb may not bubble
+  /// OS file drags to Web-level handlers). Pointer events pass through to the Web.
+  #[cfg(target_env = "ohos")]
+  #[must_use]
+  pub fn drag_drop_overlay(mut self, enabled: bool) -> Self {
+    self.drag_drop_overlay = enabled;
     self
   }
 

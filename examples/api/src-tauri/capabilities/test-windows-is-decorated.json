@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "test-windows-is-decorated",
+  "description": "Allow the read-only is_decorated query from any test popup window (e.g. borderless/transparent child windows) so the STATUS_SCRIPT badge can display the child window's decoration state. These windows are created with arbitrary labels that do not all match the run-app capability's window targeting.",
+  "windows": ["*"],
+  "permissions": [
+    "core:window:allow-is-decorated"
+  ]
+}

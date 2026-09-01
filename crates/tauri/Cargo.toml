@@ -61,7 +61,6 @@ tauri-utils = { version = "2.8.3", features = [
   "resources",
 ], path = "../tauri-utils" }
 tauri-runtime-wry = { version = "2.10.1", path = "../tauri-runtime-wry", default-features = false, optional = true }
-window-vibrancy = "0.7"
 getrandom = "0.3"
 serde_repr = "0.1"
 http = "1"
@@ -128,10 +127,12 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
   "WKWebViewConfiguration",
   "WKUserContentController",
 ] }
+window-vibrancy = "0.6"
 
 # windows
 [target."cfg(windows)".dependencies]
 webview2-com = { version = "0.38", optional = true }
+window-vibrancy = "0.6"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI",
@@ -150,16 +151,22 @@ rustls = { version = "0.23", default-features = false, features = [
 ], optional = true }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
+# OHOS needs the fork (bridge-based vibrancy); resolved via the workspace
+# [patch.crates-io] to ../window-vibrancy. Registry-style requirement so the
+# dep source stays canonical across targets (macos/windows keep upstream "0.6").
+window-vibrancy = "0.7"
 muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git", default-features = false, features = [
   "serde",
 ] }
 tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git", default-features = false, features = [
   "serde",
 ], optional = true }
-openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git", features = ["webview", "menu"] }
+openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git", features = ["menu"] }
 openharmony-ability-derive = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+openharmony-ability-plugin-menu = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 napi-ohos = "1"
 napi-derive-ohos = "1"
+futures-executor = "0.3"
 
 # android
 [target.'cfg(target_os = "android")'.dependencies]

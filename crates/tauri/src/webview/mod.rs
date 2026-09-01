@@ -246,7 +246,6 @@ impl PlatformWebview {
 }
 
 /// Response for the new window request handler.
-#[cfg(not(target_env = "ohos"))]
 pub enum NewWindowResponse<R: Runtime> {
   /// Allow the window to be opened with the default implementation.
   Allow,
@@ -257,28 +256,6 @@ pub enum NewWindowResponse<R: Runtime> {
   /// **Linux**: The webview must be related to the caller webview. See [`WebviewBuilder::related_view`].
   /// **Windows**: The webview must use the same environment as the caller webview. See [`WebviewBuilder::environment`].
   /// **macOS**: The webview must use the same webview configuration as the caller webview. See [`WebviewBuilder::with_webview_configuration`] and [`NewWindowFeatures::webview_configuration`].
-  Create {
-    /// Window that was created.
-    window: crate::WebviewWindow<R>,
-  },
-  /// Deny the window from being opened.
-  Deny,
-}
-
-/// Response for the new window request handler.
-///
-/// On OHOS, `Create` creates a real OS sub-window via `WindowManager.createSubWindow`
-/// (not a webview injection like desktop). The `window` field carries the
-/// `WebviewWindow` created by the handler, but OHOS cannot inject it into the
-/// ArkWeb new-window pipeline — `setWebController(null)` is called instead.
-#[cfg(target_env = "ohos")]
-pub enum NewWindowResponse<R: Runtime> {
-  /// Allow the window to be opened with the default implementation.
-  Allow(std::marker::PhantomData<R>),
-  /// Allow the window to be opened, with the given window.
-  ///
-  /// On OHOS, this creates a real OS sub-window via `WindowManager.createSubWindow`,
-  /// distinct from `Allow` which opens an in-page dialog.
   Create {
     /// Window that was created.
     window: crate::WebviewWindow<R>,
@@ -736,21 +713,12 @@ tauri::Builder::default()
     pending.new_window_handler = self.new_window_handler.take().map(|handler| {
       Box::new(
         move |url, features: NewWindowFeatures| match handler(url, features) {
-          #[cfg(not(target_env = "ohos"))]
           NewWindowResponse::Allow => tauri_runtime::webview::NewWindowResponse::Allow,
-          #[cfg(target_env = "ohos")]
-          NewWindowResponse::Allow(_) => tauri_runtime::webview::NewWindowResponse::Allow,
           #[cfg(all(mobile, not(target_env = "ohos")))]
           NewWindowResponse::Create { window: _ } => {
             tauri_runtime::webview::NewWindowResponse::Allow
           }
-          #[cfg(all(desktop, not(target_env = "ohos")))]
-          NewWindowResponse::Create { window } => {
-            tauri_runtime::webview::NewWindowResponse::Create {
-              window_id: window.window.window.id,
-            }
-          }
-          #[cfg(target_env = "ohos")]
+          #[cfg(any(desktop, target_env = "ohos"))]
           NewWindowResponse::Create { window } => {
             tauri_runtime::webview::NewWindowResponse::Create {
               window_id: window.window.window.id,
@@ -1021,9 +989,25 @@ fn main() {
   ///
   /// **macOS** doesn't provide such method and is always enabled by default,
   /// but you still need to add menu item accelerators to use shortcuts.
+  ///
+  /// **OHOS** is enabled by default (ArkWeb native clipboard shortcuts);
+  /// use [`Self::disable_clipboard_access`] to intercept keyboard
+  /// Ctrl+C/X/V/A/Z/Y.
   #[must_use]
   pub fn enable_clipboard_access(mut self) -> Self {
     self.webview_attributes.clipboard = true;
+    self
+  }
+
+  /// Disables clipboard access for the page.
+  ///
+  /// This is the default on **Linux** and **Windows**. On **OHOS** the default
+  /// is enabled (ArkWeb native clipboard shortcuts); calling this intercepts
+  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview. See the
+  /// ohos-webview-flag-clipboard spec.
+  #[must_use]
+  pub fn disable_clipboard_access(mut self) -> Self {
+    self.webview_attributes.clipboard = false;
     self
   }
 
@@ -1144,6 +1128,18 @@ fn main() {
   #[must_use]
   pub fn use_https_scheme(mut self, enabled: bool) -> Self {
     self.webview_attributes.use_https_scheme = enabled;
+    self
+  }
+
+  /// Sets whether to render a transparent drag-drop overlay (OHOS-only).
+  ///
+  /// When enabled, a transparent Stack with `HitTestMode.Transparent` is rendered
+  /// above the Web component to receive ArkUI drag events (ArkWeb may not bubble
+  /// OS file drags to Web-level handlers). Pointer events pass through to the Web.
+  #[cfg(target_env = "ohos")]
+  #[must_use]
+  pub fn drag_drop_overlay(mut self, enabled: bool) -> Self {
+    self.webview_attributes.drag_drop_overlay = enabled;
     self
   }
 
@@ -1816,7 +1812,7 @@ tauri::Builder::default()
       request.error,
     );
 
-    #[cfg(mobile)]
+    #[cfg(any(mobile, target_env = "ohos"))]
     let app_handle = self.app_handle.clone();
 
     let message = InvokeMessage::new(
@@ -1896,13 +1892,13 @@ tauri::Builder::default()
 
       let command = invoke.message.command.clone();
 
-      #[cfg(mobile)]
+      #[cfg(any(mobile, target_env = "ohos"))]
       let message = invoke.message.clone();
 
       #[allow(unused_mut)]
       let mut handled = manager.extend_api(plugin, invoke);
 
-      #[cfg(mobile)]
+      #[cfg(any(mobile, target_env = "ohos"))]
       {
         if !handled {
           handled = true;

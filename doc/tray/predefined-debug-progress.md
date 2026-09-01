@@ -22,8 +22,8 @@ Tray 右键菜单的 predefined action（Minimize/Maximize/Fullscreen/Quit/Close
 | 错误 | 说明 | 影响 |
 |------|------|------|
 | `AppClientNotifier: Register client pid fail: out of range` | OHOS sceneboard 无法为应用注册 PID | rightMenuClick emitter 无法投递 |
-| `Multi-instance is not supported` (16000078) | 重复 addToStatusBar 被拒绝 | 需先 removeFromStatusBar |
-| `The size of the pixelmap exceeds the limit` (1010710001) | PixelMap 尺寸超限 | 即 24×24 也触发此错误，疑似 OHOS bug |
+| `Multi-instance is not supported` (16000078) | statusBarManager 内部 `getCurrentInstanceKey` 对 singleton 调用方按设计抛出并内部 catch/日志 | **无需处理**——非致命、不导致 401。tray 成功注册时仍出现 |
+| `The size of the pixelmap exceeds the limit` (1010710001) | PixelMap 为固定物理像素，未按 24vp × density 校正 | **已修复**——`scaleSync` 做 density 校正（见 spec §7.4） |
 
 ## 根因分析
 

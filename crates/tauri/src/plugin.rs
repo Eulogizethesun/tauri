@@ -892,16 +892,6 @@ impl<R: Runtime> PluginStore<R> {
     len != self.store.len()
   }
 
-  /// Initializes the given plugin.
-  pub(crate) fn initialize(
-    &self,
-    plugin: &mut Box<dyn Plugin<R>>,
-    app: &AppHandle<R>,
-    config: &PluginConfig,
-  ) -> crate::Result<()> {
-    initialize(plugin, app, config)
-  }
-
   /// Initializes all plugins in the store.
   pub(crate) fn initialize_all(
     &mut self,
@@ -996,7 +986,7 @@ impl<R: Runtime> PluginStore<R> {
 }
 
 #[cfg_attr(feature = "tracing", tracing::instrument(name = "plugin::hooks::initialize", skip(plugin, app), fields(name = plugin.name())))]
-fn initialize<R: Runtime>(
+pub(crate) fn initialize<R: Runtime>(
   plugin: &mut Box<dyn Plugin<R>>,
   app: &AppHandle<R>,
   config: &PluginConfig,

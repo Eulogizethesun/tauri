@@ -213,6 +213,7 @@ pub use tauri_runtime_wry::webview_version;
 #[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
 pub use runtime::ActivationPolicy;
 
+#[cfg(target_env = "ohos")]
 pub use tauri_runtime::PdfConfig;
 
 pub use self::utils::TitleBarStyle;
@@ -1092,6 +1093,23 @@ impl<T> UnsafeSend<T> {
   }
 }
 
+// On OHOS, `run_on_main_thread` + `rx.recv()` deadlocks: the closure is scheduled
+// onto Chrome_IOThread, but the ArkTS main-thread event loop that resolves those
+// tasks is the very thread the caller is waiting on (ohos-constraints §1.2). The
+// OHOS muda/tray backends are safe to call from any non-main thread (muda OHOS
+// setters are pure Rust / AtomicBool; tray uses TSFN NonBlocking internally), so
+// the closure is executed inline on the calling thread and its result wrapped in
+// `Ok`. Non-OHOS behavior is byte-for-byte unchanged.
+#[cfg(target_env = "ohos")]
+#[allow(unused)]
+macro_rules! run_main_thread {
+  ($handle:ident, $ex:expr) => {{
+    let f = $ex;
+    Ok::<_, crate::Error>(f())
+  }};
+}
+
+#[cfg(not(target_env = "ohos"))]
 #[allow(unused)]
 macro_rules! run_main_thread {
   ($handle:ident, $ex:expr) => {{
@@ -1266,4 +1284,17 @@ pub(crate) fn generate_invoke_key() -> Result<String> {
   let mut bytes = [0u8; 16];
   getrandom::fill(&mut bytes)?;
   Ok(z85::encode(&bytes))
+}
+
+#[cfg(test)]
+mod debug_app_icon_tests {
+  use super::*;
+
+  #[test]
+  fn debug_app_icon_none_and_some() {
+    let none: Option<Vec<u8>> = None;
+    assert_eq!(format!("{:?}", DebugAppIcon(&none)), "None");
+    let some: Option<Vec<u8>> = Some(vec![1u8; 493]);
+    assert_eq!(format!("{:?}", DebugAppIcon(&some)), "Some([u8; 493])");
+  }
 }

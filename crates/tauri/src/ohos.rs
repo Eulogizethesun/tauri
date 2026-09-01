@@ -1,9 +1,19 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-pub use openharmony_ability;
 pub use openharmony_ability_derive;
 pub use tauri_runtime::OHOSWindowKind;
+
+/// Explicit re-export of the `openharmony-ability` types used by tauri and its macros.
+///
+/// Converged from a blanket `pub use openharmony_ability;` to an explicit list
+/// so the coupling surface is visible and auditable.
+pub mod openharmony_ability {
+  pub use ::openharmony_ability::OpenHarmonyApp;
+  pub use ::openharmony_ability::get_main_thread_env;
+  pub use ::openharmony_ability::version;
+  pub use ::openharmony_ability::menu;
+}
 
 pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(None);
 

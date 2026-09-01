@@ -114,8 +114,13 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
 
   let bundle_name = config.app().identifier().to_string();
 
-  // Find the signed HAP (the build command already produced it).
-  // Prefer signed, fall back to first available.
+  // Find a signed HAP that actually exists on disk.
+  // `haps_paths` returns *computed* paths (signed + unsigned) — the signed HAP
+  // only exists on disk when signing was configured for this build. An unsigned
+  // HAP cannot be installed on a device, so we require the signed one AND verify
+  // it exists. Without the existence check we would pass a non-existent path to
+  // `hdc install`, and hdc returns exit 0 on "file not found" (see
+  // `hdc_install_failed`), producing a false "installed successfully".
   let hap_paths = hap::haps_paths(&config);
   let hap_to_install = hap_paths
     .iter()
@@ -125,9 +130,16 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
         .to_string_lossy()
         .contains("-signed")
     })
+    .filter(|p| p.exists())
     .map(|p| p.clone())
-    .or_else(|| hap_paths.first().cloned())
-    .context("no HAP file available to install — run `tauri ohos build` first")?;
+    .context(
+      "no signed HAP found at the expected output path. Signing is not configured, \
+       and an unsigned HAP cannot be installed on a device. Set the OHOS signing \
+       environment variables (OHOS_KEYSTORE_FILE, OHOS_KEYSTORE_PASSWORD, \
+       OHOS_KEY_ALIAS, OHOS_KEY_PASSWORD, OHOS_APP_CERT_FILE, OHOS_PROFILE_FILE) \
+       or configure signingConfigs in build-profile.json5 (DevEco: File → Project \
+       Structure → Signing Configs), then rebuild.",
+    )?;
 
   log::info!(
     "Installing {} to device {}",
@@ -152,9 +164,14 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
   .run()
   .context("failed to run hdc install")?;
 
-  if !install_result.status.success() {
+  let install_stdout = String::from_utf8_lossy(&install_result.stdout);
+  let install_stderr = String::from_utf8_lossy(&install_result.stderr);
+  if !install_result.status.success() || hdc_install_failed(&install_stdout, &install_stderr) {
     // Fallback: uninstall + reinstall
     log::warn!("Install failed, trying uninstall first...");
+    if !install_stdout.is_empty() {
+      log::warn!("hdc stdout:\n{install_stdout}");
+    }
     let _ = hdc::hdc(
       &env,
       [
@@ -186,14 +203,14 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
     .run()
     .context("failed to run hdc install (retry)")?;
 
-    if !retry_result.status.success() {
-      let stdout = String::from_utf8_lossy(&retry_result.stdout);
-      let stderr = String::from_utf8_lossy(&retry_result.stderr);
-      if !stdout.is_empty() {
-        log::error!("hdc stdout:\n{stdout}");
+    let retry_stdout = String::from_utf8_lossy(&retry_result.stdout);
+    let retry_stderr = String::from_utf8_lossy(&retry_result.stderr);
+    if !retry_result.status.success() || hdc_install_failed(&retry_stdout, &retry_stderr) {
+      if !retry_stdout.is_empty() {
+        log::error!("hdc stdout:\n{retry_stdout}");
       }
-      if !stderr.is_empty() {
-        log::error!("hdc stderr:\n{stderr}");
+      if !retry_stderr.is_empty() {
+        log::error!("hdc stderr:\n{retry_stderr}");
       }
       crate::error::bail!("Failed to install HAP to device");
     }
@@ -239,4 +256,27 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
   log::info!("App launched successfully");
 
   Ok(())
+}
+
+/// Detects whether an `hdc install` actually failed.
+///
+/// `hdc` returns exit code 0 even on failure (e.g. `[Fail]Error opening file:
+/// no such file or directory`, `signature verification failed`), placing the
+/// error text in stdout/stderr. Relying on `status.success()` alone therefore
+/// produces false "installed successfully" reports. This parses the output for
+/// markers that only appear on failure — note `signature verification` is
+/// intentionally NOT a marker because success output contains
+/// `signature verification succeed`.
+fn hdc_install_failed(stdout: &str, stderr: &str) -> bool {
+  let out = stdout.to_lowercase();
+  let err = stderr.to_lowercase();
+  const MARKERS: &[&str] = &[
+    "[fail]",
+    "failure",
+    "failed",
+    "error opening file",
+  ];
+  MARKERS
+    .iter()
+    .any(|m| out.contains(m) || err.contains(m))
 }
