@@ -1,26 +1,6 @@
 import {
   NativeAbility,
-  LazyPlugin,
-  AccessibilityPlugin,
-  AccountPlugin,
-  AppControlPlugin,
-  AutostartPlugin,
-  ClipboardPlugin,
-  DeepLinkPlugin,
-  FilesPlugin,
-  // Alias to avoid name collision with the JS-layer GlobalShortcutPlugin from
-  // '@tauri/plugin-global-shortcut' (a Tauri Plugin), which is imported below by the
-  // plugins loop and used in STATIC_PLUGINS. The bridge plugin id is declared in
-  // Rust (ApplicationLifecycle.bridgePlugins), so renaming the ArkTS import is safe.
-  GlobalShortcutPlugin as GlobalShortcutBridgePlugin,
-  MenuPlugin,
-  PermissionPlugin,
-  ResourcePlugin,
-  StatusbarPlugin,
-  UpdaterPlugin,
-  UrlPlugin,
-  WebviewPlugin,
-  WindowPlugin,
+  allBridgePlugins,
 } from '@ohos-rs/ability'
 import Want from '@ohos.app.ability.Want'
 import { AbilityConstant } from '@kit.AbilityKit';
@@ -65,24 +45,12 @@ export default class EntryAbility extends NativeAbility {
   // native module's ApplicationLifecycle.bridgePlugins; BridgeHostRegistry.prepare installs
   // them into every module host for this Ability session. Separate from the Tauri JS-layer
   // plugins below (PluginManager), which are a different transport (Rust<->JS).
-  public bridgePlugins = [
-    new LazyPlugin(() => new AccessibilityPlugin()),
-    new LazyPlugin(() => new PermissionPlugin()),
-    new LazyPlugin(() => new AppControlPlugin()),
-    new LazyPlugin(() => new FilesPlugin()),
-    new LazyPlugin(() => new ResourcePlugin()),
-    new LazyPlugin(() => new WindowPlugin()),
-    new LazyPlugin(() => new WebviewPlugin()),
-    new LazyPlugin(() => new UrlPlugin()),
-    new LazyPlugin(() => new ClipboardPlugin()),
-    new LazyPlugin(() => new GlobalShortcutBridgePlugin()),
-    new LazyPlugin(() => new DeepLinkPlugin()),
-    new LazyPlugin(() => new AutostartPlugin()),
-    new LazyPlugin(() => new MenuPlugin()),
-    new LazyPlugin(() => new StatusbarPlugin()),
-    new LazyPlugin(() => new AccountPlugin()),
-    new LazyPlugin(() => new UpdaterPlugin()),
-  ]
+  // `allBridgePlugins` is exported by `@ohos-rs/ability` and covers every bridge
+  // plugin it ships — new bridge plugins flow in with the package, without
+  // regenerating this file. The factories are stateless, so sharing the array
+  // across Ability instances is safe (each host calls create() for its own
+  // plugin instances).
+  public bridgePlugins = allBridgePlugins
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
     console.info('[Tauri] ===== EntryAbility onCreate =====');
