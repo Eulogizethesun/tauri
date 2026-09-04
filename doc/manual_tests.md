@@ -692,7 +692,15 @@
 
 ---
 
-## 三十五、手动用例统计汇总
+## 三十五、Logging（统一日志）手动用例
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| plugin | log | hilog 统一日志 | Unified Logging — JS/Rust 日志统一经 plugin-log 输出 hilog | **T0** | 应用已安装启动（Tests 页可用）；PC 连接设备可执行 hdc | 1. 在 Tests 页运行任一 plugin-log 测试（或直接运行自动套件） 2. `hdc shell "hilog \| grep 'tauritest: \[webview'"` 3. `hdc shell "hilog \| grep tauritest" \| tail -5` | ① JS 日志行形如 `[webview:Object.fn@tauri://localhost/assets/index.js:14:74755][ERROR] test error message`（target 含调用位置） ② Rust 日志行形如 `[api_lib][INFO] [RunEvent] ...`，tag 均为 `tauritest` ③ hilog 行自带 `MM-DD HH:MM:SS.mmm` 时间戳前缀（app 侧 format 不再重复时间戳） | **2026-09-04 PASS**（MateBook Pro 3QC0124C03000579，同轮套件 291/292）：JS info/warn/error 与 Rust 日志均实测到达 hilog。⚠️ JS API `log()` 无条件携带调用位置 → target 为 `webview:{fn}@{file}:{line}:{col}`，grep 必须用 `webview:`（带冒号），`\[webview\]`（闭括号）结构性匹配不到；release 签名下 hilog 系统丢弃 DEBUG 级（trace/debug 测试记录不出现属平台预期）；套件日志风暴（>1000 行/s）时 hilogd 每进程流控会丢行（可 `hilog -Q pidoff` 临时关闭排查，验完 `pidon` 恢复） |
+
+---
+
+## 三十六、手动用例统计汇总
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -748,7 +756,8 @@
 | OHOS — Screenshot 插件（截图预览/色块取色/canvas snapshot） | 2 | 1 | **3** |
 | OHOS — Continuation 插件（接续边界/源端保存/双设备往返） | 0 | 3 | **3** |
 | Key Repeat Detection（key-synthesis 长按/点按） | 2 | 2 | **4** |
-| **合计** | **94** | **80** | **174** |
+| Logging（统一日志 hilog 投递验证） | 1 | 0 | **1** |
+| **合计** | **95** | **80** | **175** |
 
-> **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。
+> **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。2026-09-04 新增 §三十五 Logging T0 一例（hilog 投递验证为自动套件外人工判据），合计 95 T0 / 80 T1 / 175。
 

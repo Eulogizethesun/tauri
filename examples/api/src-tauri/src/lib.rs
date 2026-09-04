@@ -12,17 +12,6 @@ mod tray;
 use cmd::EventTracker;
 use cmd::{DownloadTestMode, DownloadTestState};
 
-#[cfg(target_env = "ohos")]
-mod ohos_log {
-  pub fn init() {
-    // Initialize hilog crate for OHOS logging
-    hilog::Builder::new()
-      .set_tag("tauritest")
-      .filter_level(log::LevelFilter::Trace)
-      .init();
-  }
-}
-
 use serde::Serialize;
 #[cfg(not(target_env = "ohos"))]
 use tauri::ipc::Channel;
@@ -142,9 +131,20 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
           .level(log::LevelFilter::Trace)
           .clear_targets()
           .target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::Stdout,
+            tauri_plugin_log::TargetKind::Hilog { tag: "tauritest".into() },
           ))
-          .skip_logger()
+          // OHOS: hilog prepends its own `MM-DD HH:MM:SS.mmm` timestamp to every
+          // line, so the default desktop formatter (which adds a second
+          // timestamp via time crate) would duplicate it — use a time-free
+          // formatter instead.
+          .format(|out, message, record| {
+            out.finish(format_args!(
+              "[{}][{}] {}",
+              record.target(),
+              record.level(),
+              message
+            ))
+          })
           .build(),
       )
       .plugin(tauri_plugin_fs::init())
@@ -192,12 +192,6 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   if let Some(ref client) = sentry_client {
     builder = builder.plugin(tauri_plugin_sentry::init(client));
   }
-
-  #[cfg(target_env = "ohos")]
-  {
-    ohos_log::init();
-    log::info!("OHOS log initialized via hilog + tauri_plugin_log(skip_logger)");
-  };
 
   // LLVM coverage: set profraw output path early (before any coverage data
   // flush). Only active when built with `-Cinstrument-coverage` + cov-dump
