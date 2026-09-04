@@ -159,26 +159,64 @@ pub fn command(options: Options) -> Result<()> {
   .map_err(|e| Error::GenericError(e.to_string()))?
 }
 
+/// `#[tauri::mobile_entry_point]` generates an `openharmony_ability_mod`
+/// module registering this app's NAPI entry points (`init`, `render`, ...)
+/// — the ArkTS runtime's only way into the Rust library. Without it the app
+/// fails at runtime with an opaque module-load error, so fail the build
+/// early instead, mirroring the Android check for the
+/// `Java_app_tauri_plugin_PluginManager_handlePluginResponse` symbol.
+///
+/// The registration symbols are Rust-mangled locals, so the static symbol
+/// table is searched for the module-name fragment instead of an exact
+/// symbol. A stripped library (release profile with `strip = true`, which
+/// the tauri workspace itself uses) has no symbol table left to inspect —
+/// in that case fall back to checking that the NAPI module registration
+/// export is present and log that the entry-point check was skipped.
+const REQUIRED_SYMBOL_FRAGMENT: &str = "openharmony_ability_mod";
+
 fn validate_lib(path: &Path) -> Result<()> {
   let so_bytes = std::fs::read(path).fs_context("failed to read library", path.to_path_buf())?;
   let elf = elf::ElfBytes::<elf::endian::AnyEndian>::minimal_parse(&so_bytes)
     .context("failed to parse ELF")?;
-  let (symbol_table, string_table) = elf
-    .dynamic_symbol_table()
-    .context("failed to read dynsym section")?
-    .context("missing dynsym tables")?;
 
-  let mut symbols = Vec::new();
-  for s in symbol_table.iter() {
-    if let Ok(symbol) = string_table.get(s.st_name as usize) {
-      symbols.push(symbol);
+  if let Some((symbol_table, string_table)) =
+    elf.symbol_table().context("failed to read symbol table")?
+  {
+    let has_entry_point = symbol_table
+      .iter()
+      .filter_map(|s| string_table.get(s.st_name as usize).ok())
+      .any(|symbol| symbol.contains(REQUIRED_SYMBOL_FRAGMENT));
+
+    if !has_entry_point {
+      crate::error::bail!(
+        "Library from {} does not include the required OpenHarmony runtime symbols (missing `{REQUIRED_SYMBOL_FRAGMENT}`). This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        path.display()
+      );
     }
-  }
+  } else {
+    // Stripped library: the local registration symbols are gone. The NAPI
+    // module registration export is the best remaining evidence that a
+    // native module is linked in at all.
+    let has_napi_module = elf
+      .dynamic_symbol_table()
+      .context("failed to read dynsym section")?
+      .map(|(symbol_table, string_table)| {
+        symbol_table
+          .iter()
+          .filter_map(|s| string_table.get(s.st_name as usize).ok())
+          .any(|symbol| symbol == "napi_register_module_v1")
+      })
+      .unwrap_or(false);
 
-  // TODO: implement check
-  if false {
-    crate::error::bail!(
-      "Library from {} does not include required runtime symbols. This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+    if !has_napi_module {
+      crate::error::bail!(
+        "Library from {} does not export `napi_register_module_v1`; no NAPI module is registered at all. This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        path.display()
+      );
+    }
+
+    log::warn!(
+      "{} is stripped, skipping the mobile_entry_point symbol check",
       path.display()
     );
   }

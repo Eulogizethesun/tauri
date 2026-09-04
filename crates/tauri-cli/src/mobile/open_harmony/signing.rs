@@ -6,11 +6,22 @@
 //!
 //! This module mirrors the iOS `signing_from_env()` pattern: signing materials
 //! are injected via environment variables, keeping them out of project config files.
+//!
+//! Passwords are never passed as `java` command line arguments (the process
+//! list would show them in clear text) and hap-sign-tool itself offers no
+//! environment-variable form for them — only `-keyPwd`/`-keystorePwd` CLI
+//! params and an interactive console mode we cannot drive. Instead the whole
+//! argument vector goes through a [java launcher argument file] (`java
+//! @file`): the launcher expands the file itself, so external observers only
+//! ever see `java @<tempfile>`.
+//!
+//! [java launcher argument file]: https://docs.oracle.com/en/java/javase/21/tools/java.html
 
 use crate::error::Context;
 use crate::Result;
 use cargo_mobile2::open_harmony::env::Env;
 use std::env::{var, var_os};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,7 +38,10 @@ use std::process::Command;
 /// | `OHOS_APP_CERT_FILE` | Yes | Path to .cer application certificate |
 /// | `OHOS_PROFILE_FILE` | Yes | Path to .p7b provisioning profile |
 /// | `OHOS_SIGN_ALG` | No | Signing algorithm (default: SHA256withECDSA) |
-#[derive(Debug, Clone)]
+///
+/// The `Debug` implementation redacts both passwords so an accidental log of
+/// the config cannot leak them.
+#[derive(Clone)]
 pub struct OhosSigningConfig {
   pub keystore_file: PathBuf,
   pub keystore_password: String,
@@ -36,6 +50,20 @@ pub struct OhosSigningConfig {
   pub app_cert_file: PathBuf,
   pub profile_file: PathBuf,
   pub sign_alg: String,
+}
+
+impl std::fmt::Debug for OhosSigningConfig {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("OhosSigningConfig")
+      .field("keystore_file", &self.keystore_file)
+      .field("keystore_password", &"<redacted>")
+      .field("key_alias", &self.key_alias)
+      .field("key_password", &"<redacted>")
+      .field("app_cert_file", &self.app_cert_file)
+      .field("profile_file", &self.profile_file)
+      .field("sign_alg", &self.sign_alg)
+      .finish()
+  }
 }
 
 const ENV_KEYSTORE_FILE: &str = "OHOS_KEYSTORE_FILE";
@@ -84,25 +112,16 @@ impl OhosSigningConfig {
       return Ok(None);
     }
 
-    let keystore_file = PathBuf::from(
-      var_os(ENV_KEYSTORE_FILE)
-        .context("OHOS_KEYSTORE_FILE not set")?,
-    );
-    let keystore_password =
-      var(ENV_KEYSTORE_PASSWORD).context("OHOS_KEYSTORE_PASSWORD not set")?;
+    let keystore_file =
+      PathBuf::from(var_os(ENV_KEYSTORE_FILE).context("OHOS_KEYSTORE_FILE not set")?);
+    let keystore_password = var(ENV_KEYSTORE_PASSWORD).context("OHOS_KEYSTORE_PASSWORD not set")?;
     let key_alias = var(ENV_KEY_ALIAS).context("OHOS_KEY_ALIAS not set")?;
-    let key_password =
-      var(ENV_KEY_PASSWORD).context("OHOS_KEY_PASSWORD not set")?;
-    let app_cert_file = PathBuf::from(
-      var_os(ENV_APP_CERT_FILE)
-        .context("OHOS_APP_CERT_FILE not set")?,
-    );
-    let profile_file = PathBuf::from(
-      var_os(ENV_PROFILE_FILE)
-        .context("OHOS_PROFILE_FILE not set")?,
-    );
-    let sign_alg =
-      var(ENV_SIGN_ALG).unwrap_or_else(|_| DEFAULT_SIGN_ALG.to_string());
+    let key_password = var(ENV_KEY_PASSWORD).context("OHOS_KEY_PASSWORD not set")?;
+    let app_cert_file =
+      PathBuf::from(var_os(ENV_APP_CERT_FILE).context("OHOS_APP_CERT_FILE not set")?);
+    let profile_file =
+      PathBuf::from(var_os(ENV_PROFILE_FILE).context("OHOS_PROFILE_FILE not set")?);
+    let sign_alg = var(ENV_SIGN_ALG).unwrap_or_else(|_| DEFAULT_SIGN_ALG.to_string());
 
     // Validate that referenced files exist
     for (name, path) in [
@@ -139,12 +158,7 @@ impl OhosSigningConfig {
   /// Sign an unsigned HAP using hap-sign-tool.jar.
   ///
   /// The signed HAP is written to `signed_hap_path`.
-  pub fn sign_hap(
-    &self,
-    unsigned_hap: &Path,
-    signed_hap: &Path,
-    env: &Env,
-  ) -> Result<()> {
+  pub fn sign_hap(&self, unsigned_hap: &Path, signed_hap: &Path, env: &Env) -> Result<()> {
     let tool_path = Self::find_sign_tool(env)?;
 
     log::info!(
@@ -153,36 +167,62 @@ impl OhosSigningConfig {
       signed_hap.display()
     );
 
+    // hap-sign-tool only accepts the keystore/key passwords as command line
+    // parameters (there is no `*PwdEnv` form and the interactive
+    // `pwdInputMode` needs a console). Feeding the whole argument vector
+    // through a java launcher argument file keeps them out of the process
+    // list — see the module docs for the escaping rules, which are verified
+    // against the launcher's parser.
+    let args = [
+      "-jar".to_string(),
+      tool_path.to_string_lossy().into_owned(),
+      "sign-app".to_string(),
+      "-keyAlias".to_string(),
+      self.key_alias.clone(),
+      "-signAlg".to_string(),
+      self.sign_alg.clone(),
+      "-mode".to_string(),
+      "localSign".to_string(),
+      "-appCertFile".to_string(),
+      self.app_cert_file.to_string_lossy().into_owned(),
+      "-profileFile".to_string(),
+      self.profile_file.to_string_lossy().into_owned(),
+      "-inFile".to_string(),
+      unsigned_hap.to_string_lossy().into_owned(),
+      "-keystoreFile".to_string(),
+      self.keystore_file.to_string_lossy().into_owned(),
+      "-outFile".to_string(),
+      signed_hap.to_string_lossy().into_owned(),
+      "-keyPwd".to_string(),
+      self.key_password.clone(),
+      "-keystorePwd".to_string(),
+      self.keystore_password.clone(),
+    ];
+
+    let mut arg_file = tempfile::Builder::new()
+      .prefix("tauri-ohos-sign-")
+      .tempfile()
+      .context("failed to create signing argument file")?;
+    arg_file
+      .write_all(
+        args
+          .iter()
+          .map(|arg| format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\"")))
+          .collect::<Vec<_>>()
+          .join("\n")
+          .as_bytes(),
+      )
+      .context("failed to write signing argument file")?;
+
+    // `arg_file` (and the password-bearing file behind it) is deleted when
+    // this binding goes out of scope, on success and error paths alike.
     let output = Command::new("java")
-      .args([
-        "-jar",
-        &tool_path.to_string_lossy(),
-        "sign-app",
-        "-keyAlias",
-        &self.key_alias,
-        "-signAlg",
-        &self.sign_alg,
-        "-mode",
-        "localSign",
-        "-appCertFile",
-        &self.app_cert_file.to_string_lossy(),
-        "-profileFile",
-        &self.profile_file.to_string_lossy(),
-        "-inFile",
-        &unsigned_hap.to_string_lossy(),
-        "-keystoreFile",
-        &self.keystore_file.to_string_lossy(),
-        "-outFile",
-        &signed_hap.to_string_lossy(),
-        "-keyPwd",
-        &self.key_password,
-        "-keystorePwd",
-        &self.keystore_password,
-      ])
+      .arg(format!("@{}", arg_file.path().display()))
       .output()
       .with_context(|| {
         "failed to run java for hap-sign-tool.jar (is Java installed and available in PATH?)"
       })?;
+    drop(arg_file);
 
     if !output.status.success() {
       let stdout = String::from_utf8_lossy(&output.stdout);

@@ -345,12 +345,40 @@ pub fn validate_plugin_name(name: &str) -> Result<()> {
   Ok(())
 }
 
+/// Validates an ohpm package name — the `name` field of a plugin HAR's
+/// oh-package.json5. Accepts both plain (`plugin-dialog`) and scoped
+/// (`@tauri/plugin-dialog`) names: each part may only contain ASCII letters,
+/// digits, `-`, `_` and `.`, and must neither be empty nor start/end with `.`
+/// or `_` (the directory and import path constraints ohpm itself enforces).
+///
+/// Deliberately not restricted to the official `@tauri/plugin-` prefix: the
+/// app-local plugin layout (`<src-tauri>/plugins/<name>/openharmony`, see
+/// [`find_plugin_har`]) ships HARs under their own package names.
 fn validate_identifier(identifier: &str) -> Result<()> {
-  if !identifier.starts_with("@tauri/plugin-") {
-    bail!("Identifier must start with @tauri/plugin-")
+  let parts: Vec<&str> = if let Some(scoped) = identifier.strip_prefix('@') {
+    let Some((scope, name)) = scoped.split_once('/') else {
+      bail!("Scoped ohpm package name '{identifier}' is missing a '/' after the scope");
+    };
+    vec![scope, name]
+  } else {
+    vec![identifier]
+  };
+
+  for part in parts {
+    if part.is_empty() {
+      bail!("ohpm package name '{identifier}' has an empty part");
+    }
+    if !part
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+      bail!("ohpm package name '{identifier}' may only contain letters, digits, '-', '_' and '.'");
+    }
+    if part.starts_with(['.', '_']) || part.ends_with(['.', '_']) {
+      bail!("ohpm package name '{identifier}' has a part starting or ending with '.' or '_'");
+    }
   }
-  let name_part = identifier.trim_start_matches("@tauri/plugin-");
-  validate_plugin_name(name_part)?;
+
   Ok(())
 }
 
@@ -595,10 +623,7 @@ pub fn update_build_profile(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
 /// (e.g. an added `buildOption`) would be dropped — the template-generated
 /// entries don't carry any, so this is acceptable. Non-entry modules are
 /// preserved verbatim.
-pub fn write_build_profile_modules(
-  project_dir: &Path,
-  active_entries: &[&str],
-) -> Result<()> {
+pub fn write_build_profile_modules(project_dir: &Path, active_entries: &[&str]) -> Result<()> {
   let build_profile_path = project_dir.join("build-profile.json5");
   let content = fs::read_to_string(&build_profile_path)
     .with_context(|| "failed to read build-profile.json5")?;
@@ -646,8 +671,7 @@ pub fn write_build_profile_modules(
   }
 
   let updated = serialize_json5(&profile)?;
-  fs::write(&build_profile_path, updated)
-    .with_context(|| "failed to write build-profile.json5")?;
+  fs::write(&build_profile_path, updated).with_context(|| "failed to write build-profile.json5")?;
   log::info!("Activated entry modules: {:?}", active_entries);
   Ok(())
 }
@@ -816,8 +840,8 @@ pub fn update_entry_ability(
     .join(entry_module)
     .join("src/main/ets/entryability/EntryAbility.ets");
 
-  let content =
-    fs::read_to_string(&ability_path).with_context(|| format!("failed to read {}", ability_path.display()))?;
+  let content = fs::read_to_string(&ability_path)
+    .with_context(|| format!("failed to read {}", ability_path.display()))?;
 
   let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
@@ -838,7 +862,11 @@ pub fn update_entry_ability(
   let mut reg_anchor = lines
     .iter()
     .rposition(|l| l.contains("STATIC_PLUGINS.set("))
-    .or_else(|| lines.iter().position(|l| l.contains("const STATIC_PLUGINS")));
+    .or_else(|| {
+      lines
+        .iter()
+        .position(|l| l.contains("const STATIC_PLUGINS"))
+    });
 
   for plugin in plugins {
     let import_line = format!("import {} from '{}';", plugin.class_name, plugin.identifier);
@@ -853,7 +881,8 @@ pub fn update_entry_ability(
     {
       log::info!(
         "Adding EntryAbility import for plugin '{}': {}",
-        plugin.name, import_line
+        plugin.name,
+        import_line
       );
       lines.insert(import_anchor + 1, import_line);
       // The registration anchor shifted by one line.
@@ -869,7 +898,8 @@ pub fn update_entry_ability(
       if let Some(anchor) = reg_anchor {
         log::info!(
           "Adding STATIC_PLUGINS entry for plugin '{}': {}",
-          plugin.name, reg_line
+          plugin.name,
+          reg_line
         );
         lines.insert(anchor + 1, reg_line);
         // Anchor still points at a valid `.set(` line for the next plugin.
@@ -1004,6 +1034,31 @@ fn sync_bridge_plugin_factories(lines: &mut Vec<String>, entry_module: &str) {
 mod tests {
   use super::*;
 
+  #[test]
+  fn validate_identifier_accepts_official_and_local_ohpm_names() {
+    assert!(validate_identifier("@tauri/plugin-dialog").is_ok());
+    assert!(validate_identifier("my-local-plugin").is_ok());
+    assert!(validate_identifier("@my-scope/plugin").is_ok());
+    assert!(validate_identifier("plugin.name.2").is_ok());
+  }
+
+  #[test]
+  fn validate_identifier_rejects_malformed_names() {
+    // empty / empty parts
+    assert!(validate_identifier("").is_err());
+    assert!(validate_identifier("@scope").is_err());
+    assert!(validate_identifier("@scope/").is_err());
+    // characters that cannot appear in a package name or import path
+    assert!(validate_identifier("has space").is_err());
+    assert!(validate_identifier("../escape").is_err());
+    assert!(validate_identifier("a'b").is_err());
+    // ohpm forbids parts starting/ending with '.' or '_'
+    assert!(validate_identifier(".leading").is_err());
+    assert!(validate_identifier("trailing.").is_err());
+    assert!(validate_identifier("_under").is_err());
+    assert!(validate_identifier("under_").is_err());
+  }
+
   /// Bridge-era EntryAbility.ets skeleton around the two anchors
   /// [`sync_bridge_plugin_factories`] patches: the multi-line
   /// `@ohos-rs/ability` import block and the `bridgePlugins` array.
@@ -1083,6 +1138,12 @@ mod tests {
   }
 }
 
+/// Serializes `value` into JSON5-ish text.
+///
+/// Lossy round-trip: this pretty-prints with serde_json and re-adds trailing
+/// commas line by line — any comments in the original file are already gone
+/// (the file was parsed into a `serde_json::Value` beforehand), and key order
+/// follows serde_json's map ordering, not the source file's.
 fn serialize_json5(value: &Value) -> Result<String> {
   let json = serde_json::to_string_pretty(value).context("failed to serialize JSON5")?;
 
@@ -1180,7 +1241,8 @@ pub fn validate_plugin_configs(project_dir: &Path, plugins: &[PluginMeta]) -> Re
     }
   }
 
-  let oh_package_path = project_dir.join(format!("{}/oh-package.json5", super::active_entry_module()));
+  let oh_package_path =
+    project_dir.join(format!("{}/oh-package.json5", super::active_entry_module()));
   let content = fs::read_to_string(&oh_package_path)
     .with_context(|| "failed to read entry oh-package.json5 for validation")?;
   for plugin in plugins {
@@ -1209,5 +1271,54 @@ pub fn get_all_plugin_metadata(project_dir: &Path) -> Result<Vec<PluginMeta>> {
     metadata.iter().map(|m| &m.name).collect::<Vec<_>>()
   );
 
+  Ok(metadata)
+}
+
+/// Full plugin injection pipeline shared by `ohos build` and `ohos dev`:
+/// detect the app's Tauri plugins, parse and validate their HAR metadata,
+/// copy each HAR into the generated project, and wire the build-profile /
+/// oh-package / EntryAbility registrations.
+///
+/// Returns the plugin metadata so callers can re-run the per-rebuild steps
+/// (`copy_plugin_har` + `update_plugin_configs`) in dev's watch loop.
+pub fn inject_plugins(tauri_dir: &Path, project_dir: &Path) -> Result<Vec<PluginMeta>> {
+  log::info!("Starting OpenHarmony dynamic plugin injection");
+
+  let detected_plugins = detect_all_plugins(tauri_dir).context("Plugin detection failed")?;
+
+  if detected_plugins.is_empty() {
+    log::info!("No OpenHarmony-compatible plugins detected, continuing");
+    return Ok(vec![]);
+  }
+
+  log::info!(
+    "Detected {} OpenHarmony plugins: {:?}",
+    detected_plugins.len(),
+    detected_plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
+  );
+
+  let metadata: Vec<PluginMeta> = detected_plugins
+    .iter()
+    .map(|d| parse_plugin_meta(&d.har_path, &d.name))
+    .collect::<Result<Vec<_>>>()
+    .context("Plugin metadata parsing failed")?;
+
+  for plugin in &metadata {
+    validate_plugin_meta(plugin)
+      .context(format!("Invalid metadata for plugin '{}'", plugin.name))?;
+  }
+
+  for plugin in &metadata {
+    copy_plugin_har(plugin, project_dir)
+      .context(format!("Failed to copy plugin '{}' HAR", plugin.name))?;
+  }
+
+  update_plugin_configs(project_dir, &metadata)
+    .context("Failed to update plugin configurations")?;
+
+  validate_plugin_configs(project_dir, &metadata)
+    .context("Plugin configuration validation failed")?;
+
+  log::info!("Plugin injection completed with {} plugins", metadata.len());
   Ok(metadata)
 }

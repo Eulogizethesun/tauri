@@ -67,20 +67,25 @@ pub fn gen(
   // `hvigorfile.ts` / `module.json5` carry `{{form}}` / `{{{form-device-types}}}`
   // that differ between entry_mobile and entry_desktop), so skip those subtrees
   // here to write every file exactly once.
-  let mut skip_entries =
-    |file_path: std::path::PathBuf| -> std::io::Result<Option<std::fs::File>> {
-      let s = file_path.to_string_lossy();
-      if s.starts_with("entry_mobile/") || s.starts_with("entry_desktop/") {
-        return Ok(None);
-      }
-      let path = dest.join(&file_path);
-      if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-      }
-      std::fs::File::create(path).map(Some)
-    };
-  template::render_with_generator(&handlebars, map.inner(), &TEMPLATE_DIR, &dest, &mut skip_entries)
-    .with_context(|| "failed to process template")?;
+  let mut skip_entries = |file_path: std::path::PathBuf| -> std::io::Result<Option<std::fs::File>> {
+    let s = file_path.to_string_lossy();
+    if s.starts_with("entry_mobile/") || s.starts_with("entry_desktop/") {
+      return Ok(None);
+    }
+    let path = dest.join(&file_path);
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create(path).map(Some)
+  };
+  template::render_with_generator(
+    &handlebars,
+    map.inner(),
+    &TEMPLATE_DIR,
+    &dest,
+    &mut skip_entries,
+  )
+  .with_context(|| "failed to process template")?;
 
   // Render each entry module subtree with its form-specific data so hvigorfile.ts
   // bakes the right `OHOS_DEVICE_TYPE` and module.json5 gets the right deviceTypes
