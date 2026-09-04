@@ -1,28 +1,17 @@
 {
   "apiType": "stageMode",
   "buildOption": {
-    "externalNativeOptions": {
-      "path": "./src/main/cpp",
-      "arguments": "",
-      "cppFlags": ""
-    }
-  },
-  "buildOptionSet": [
-    {
-      "name": "release",
-      "arkOptions": {
-        "obfuscation": {
-          "ruleOptions": {
-            "enable": false
-          }
+    "arkOptions": {
+      "obfuscation": {
+        "ruleOptions": {
+          "enable": false
         }
       }
     }
-  ],
+  },
   "targets": [
     {
-      "name": "default",
-      "runtimeOS": "HarmonyOS"
+      "name": "default"
     }
   ]
 }

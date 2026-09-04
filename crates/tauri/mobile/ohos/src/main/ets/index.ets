@@ -1,3 +1,3 @@
-export { PluginManager, TauriGlobal } from './PluginManager';
-export { Plugin } from './Plugin';
+export { PluginManager } from './PluginManager';
+export { Plugin, CommandHandler } from './Plugin';
 export { Invoke } from './Plugin';
