@@ -533,7 +533,6 @@ pub fn get_ohos_version_info() -> serde_json::Value {
   serde_json::json!({
     "sdkApiVersion": version::sdk_api_version(),
     "distributionApiVersion": version::distribution_api_version(),
-    "canIUseWindowManager": version::can_i_use("SystemCapability.Window.SessionManager"),
   })
 }
 

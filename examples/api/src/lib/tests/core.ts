@@ -48,12 +48,10 @@ export const coreTests: TestCase[] = [
         const info = await invoke<{
           sdkApiVersion: number;
           distributionApiVersion: number;
-          canIUseWindowManager: boolean;
         }>('get_ohos_version_info');
-        console.log(`[OHOS Version] sdk_api=${info.sdkApiVersion}, distribution_api=${info.distributionApiVersion}, canIUse(WindowManager)=${info.canIUseWindowManager}`);
+        console.log(`[OHOS Version] sdk_api=${info.sdkApiVersion}, distribution_api=${info.distributionApiVersion}`);
         assert(info.sdkApiVersion >= 12, `sdkApiVersion should be >= 12, got ${info.sdkApiVersion}`);
         assert(info.distributionApiVersion > 0, `distributionApiVersion should be > 0, got ${info.distributionApiVersion}`);
-        assert(typeof info.canIUseWindowManager === 'boolean', 'canIUse should return boolean');
       } catch {
         // Not on OHOS — command doesn't exist, skip silently
       }
