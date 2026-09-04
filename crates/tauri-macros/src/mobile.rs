@@ -91,9 +91,6 @@ pub fn entry_point(_attributes: TokenStream, item: TokenStream) -> TokenStream {
       }
 
       #[cfg(target_env = "ohos")]
-      use ::tauri::ohos::*;
-
-      #[cfg(target_env = "ohos")]
       #[::tauri::ohos::openharmony_ability_derive::ability]
       pub fn openharmony(app: ::tauri::ohos::openharmony_ability::OpenHarmonyApp) {
         ::tauri::ohos::APP.lock().unwrap().replace(app);
