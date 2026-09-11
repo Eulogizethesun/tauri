@@ -172,6 +172,13 @@ pub fn set_ohos_app(app: &openharmony_ability::OpenHarmonyApp) {
   if let Err(e) = app.register_plugin(openharmony_ability_plugin_url::UrlBridgePlugin) {
     log::error!("[WRY] failed to register UrlBridgePlugin: {}", e);
   }
+  // Set up the synchronous webview-cookie bridge (ohos.webview-cookie): main-
+  // thread cookies_for_url calls (setup closures, sync command handlers) fetch
+  // through ArkTS fetchCookieSync instead of silently returning empty. The
+  // ArkTS counterpart (WebviewCookiePlugin) must be in the host Ability's
+  // bridgePlugins list — apps using the allBridgePlugins array get it
+  // automatically; hand-written lists (e.g. the API example) need the entry.
+  wry::set_ohos_app(app.clone());
 }
 
 use std::{
@@ -4476,6 +4483,36 @@ fn handle_event_loop<T: UserEvent>(
       callback(RunEvent::Exit);
     }
 
+    // PC/2in1 pre-close probe (UIAbility.onPrepareToTerminateAsync → tao
+    // Event::PrepareToTerminate, issue Eulogizethesun/tauri#103): the only
+    // point where a system-initiated close is still cancellable. Run the
+    // ExitRequested dispatch BEFORE any teardown — prevent_exit() here
+    // genuinely keeps the app alive (the ArkTS caller cancels the
+    // termination), unlike the LoopDestroyed path above where teardown is
+    // already unstoppable. When not prevented, mark ExitRequested as sent so
+    // the teardown paths (window-close / LoopDestroyed) dedup against this
+    // probe and only RunEvent::Exit still fires from them.
+    #[cfg(target_env = "ohos")]
+    Event::PrepareToTerminate { answer } => {
+      if !exit_state.0.load(Ordering::SeqCst) {
+        let (tx, rx) = channel();
+        callback(RunEvent::ExitRequested { code: None, tx });
+        let should_prevent = matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent));
+        log::info!(
+          "[wry] ExitRequested (prepare-to-terminate probe) should_prevent: {}",
+          should_prevent
+        );
+        if should_prevent {
+          answer.prevent();
+        } else {
+          // Termination will proceed — dedup the later teardown ExitRequested.
+          exit_state.0.store(true, Ordering::SeqCst);
+        }
+      }
+      // Exit already in flight (explicit app.exit() / restart): allow the
+      // termination — answer stays unprevented.
+    }
+
     #[cfg(windows)]
     Event::RedrawRequested(id) => {
       if let Some(window_id) = window_id_map.get(&id) {
@@ -4675,12 +4712,13 @@ fn handle_event_loop<T: UserEvent>(
         exit_state.0.store(true, Ordering::SeqCst);
 
         if !should_prevent {
-          // OHOS: loop teardown is system-driven (LoopDestroyed); ControlFlow::Exit
-          // must not be set from here.
-          #[cfg(not(target_env = "ohos"))]
-          {
-            *control_flow = ControlFlow::Exit;
-          }
+          // OHOS: unlike the old comment claimed, ControlFlow::Exit IS consumed
+          // here — the tao OHOS backend maps it (after each MainEvent dispatch)
+          // to its pending-exit flag, which dispatches LoopDestroyed and then
+          // terminates the process via the app-control bridge
+          // (ProcessManager.exit). Skipping it left app.exit() a no-op with the
+          // loop — and the process — alive (issue Eulogizethesun/tauri#100).
+          *control_flow = ControlFlow::Exit;
         }
       }
       Message::Window(id, WindowMessage::Close) => {
