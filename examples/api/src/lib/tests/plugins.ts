@@ -198,8 +198,11 @@ export const pluginTests: TestCase[] = [
     name: '@tauri-apps/plugin-http.fetch (JSON parse)',
     category: 'auto',
     async fn() {
-      // Use jsonplaceholder — fast, reliable, no rate limiting
-      const resp = await retryFetch('https://jsonplaceholder.typicode.com/todos/1', { method: 'GET' })
+      // Local echo-server /json fixture (deterministic — the external
+      // jsonplaceholder route was flaky from the test network: 50% packet
+      // loss blew the 5s test cap). External HTTPS stays covered by the
+      // rustls-tls test below.
+      const resp = await retryFetch('http://localhost:3003/json', { method: 'GET' })
       assert(resp.status === 200, `expected status 200, got ${resp.status}`)
       const data = await resp.json()
       assert(typeof data === 'object', 'expected JSON object')
@@ -343,10 +346,12 @@ export const pluginTests: TestCase[] = [
       await writeImage(img);
     },
   },
-  // writeImage with larger RGBA — verifies non-trivial data size through TSFN
+  // writeImage with larger RGBA — verifies non-trivial data size through TSFN.
+  // readImage readback included since issue Eulogizethesun/tauri#113 (OHOS
+  // bridge read-image); previously category 'manual' with an isMissing skip.
   {
-    name: '@tauri-apps/plugin-clipboard-manager.writeImage(4x4)',
-    category: 'manual',
+    name: '@tauri-apps/plugin-clipboard-manager.writeImage(4x4)+readImage',
+    category: 'side-effect',
     async fn() {
       const { writeImage, readImage } = await import('@tauri-apps/plugin-clipboard-manager');
       const rgba = new Uint8Array([
@@ -534,6 +539,14 @@ export const pluginTests: TestCase[] = [
     async fn() {},
   },
   {
+    // OHOS (issue Eulogizethesun/tauri#99): 2in1 uses MIXED selectMode,
+    // Phone uses FOLDER (API 26+). Verify the picker opens and a folder path
+    // comes back (previously: "Folder picker is not implemented on mobile").
+    name: '@tauri-apps/plugin-dialog.open (directory, OHOS)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
     name: '@tauri-apps/plugin-dialog.save',
     category: 'manual',
     async fn() {},
@@ -645,6 +658,56 @@ export const pluginTests: TestCase[] = [
         if (isMissing(e)) skip(`notification command not available: ${e}`);
         throw e;
       }
+    },
+  },
+  // Scheduled notification — OHOS routes through reminderAgentManager
+  // (issue Eulogizethesun/tauri#114) with a foreground-timer fallback when the
+  // AGC agent-reminder entitlement is missing. Both paths must register the
+  // notification in pending(); the fired popup is verified visually.
+  {
+    name: '@tauri-apps/plugin-notification.notify(schedule at)',
+    category: 'side-effect',
+    // 60s: on devices without the AGC agent-reminder entitlement the
+    // publishReminder 1700002 rejection is SLOW — observed 15s (run 1) and
+    // >30s (run 2) on the reference PC before the foreground-timer fallback
+    // resolves the invoke. Breadcrumbs below pinpoint any future hang.
+    timeout: 60000,
+    async fn() {
+      const { isPermissionGranted, sendNotification, pending, cancel } =
+        await import('@tauri-apps/plugin-notification');
+      console.log('[schedule-test] checking permission');
+      const granted = await isPermissionGranted();
+      console.log(`[schedule-test] isPermissionGranted=${granted}`);
+      // NO requestPermission() here: it pops the interactive enable-notification
+      // system dialog, which nothing answers during an automated run — the
+      // await hangs until the test timeout (root cause of the 2026-09-11
+      // 15s/30s/60s timeout chain; run-tests.sh reinstalls the HAP each run,
+      // resetting the grant). Enable notifications for the app manually to
+      // exercise the full schedule path.
+      if (!granted) skip('notification permission disabled — enable notifications for this app to run this test');
+      const id = Math.floor(Math.random() * 2_000_000_000) + 1;
+      console.log(`[schedule-test] sending id=${id}`);
+      await sendNotification({
+        id,
+        title: 'OHOS scheduled notification',
+        body: 'fires ~3s after scheduling (reminderAgentManager, #114)',
+        schedule: {
+          at: { date: new Date(Date.now() + 3000), repeating: false, allowWhileIdle: false },
+        },
+      });
+      console.log('[schedule-test] sendNotification resolved');
+      const pendingList = await pending();
+      console.log(`[schedule-test] pending=${JSON.stringify(pendingList.map((p) => p.id))}`);
+      assert(
+        pendingList.some((p) => p.id === id),
+        `scheduled notification ${id} should appear in pending(): ${JSON.stringify(pendingList.map((p) => p.id))}`
+      );
+      // Brief wait so the reminder fires during the test — an error on fire
+      // would surface in the device logs.
+      await new Promise((r) => setTimeout(r, 2000));
+      console.log('[schedule-test] canceling');
+      await cancel(id).catch(() => {});
+      console.log('[schedule-test] done');
     },
   },
 

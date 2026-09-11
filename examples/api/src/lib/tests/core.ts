@@ -1436,6 +1436,30 @@ export const coreTests: TestCase[] = [
     },
   },
 
+  // 4.5 cookies_for_url on the MAIN thread (issue #110): sync commands execute
+  // on the OHOS main thread, so this read goes through the
+  // ohos.webview-cookie sync bridge (fetchCookieSync) — the path that used to
+  // silently return empty.
+  {
+    name: 'webview.cookies_for_url main-thread sync bridge (OHOS #110)',
+    category: 'side-effect',
+    timeout: 15000,
+    async fn() {
+      await invoke('cookie_test_main_thread_set');
+      // set_cookie is fire-and-forget on OHOS — let the async set settle.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const report = await invoke<any>('cookie_test_main_thread_read');
+      assert(
+        report.test_cookie_found === true,
+        `main-thread cookie not found; cookies_for_url=${JSON.stringify(report.cookies_for_url)}`
+      );
+      assert(
+        Array.isArray(report.cookies_all),
+        `main-thread cookies() should return array, got: ${report.cookies_all}`
+      );
+    },
+  },
+
   // set_bounds / bounds round-trip — desktop-only (Webview::bounds/set_bounds are #[cfg(desktop)]).
   // On OHOS mobile the command is not registered; skip silently via try/catch.
   {

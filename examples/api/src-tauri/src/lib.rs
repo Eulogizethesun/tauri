@@ -51,6 +51,16 @@ pub fn run() {
   run_app(tauri::Builder::default(), |_app| {})
 }
 
+/// Toggle for the implicit-exit prevention test (issue
+/// Eulogizethesun/tauri#103). Off by default so system-initiated closes
+/// (X button / taskbar / tray) keep working; enable via the
+/// `test_set_prevent_exit` command to exercise the PC/2in1 pre-close
+/// interception (onPrepareToTerminateAsync → ExitRequested probe →
+/// prevent_exit genuinely cancels the close).
+#[cfg(target_env = "ohos")]
+pub(crate) static PREVENT_IMPLICIT_EXIT: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(false);
+
 fn init_sentry() -> sentry::ClientInitGuard {
   sentry::init((
     option_env!("SENTRY_DSN").unwrap_or(""),
@@ -346,6 +356,40 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             let _ = app_handle.emit("ohos-print-state", payload);
           }
         });
+      }
+
+      // OHOS device-verification hook for issues #100/#101 (app.exit /
+      // process.restart — both too destructive for the auto suite). A one-shot
+      // `danger-mode` file in the app cache, written via hdc before launch,
+      // schedules the action at +90s (after the autotest suite has finished).
+      // The file is consumed on read, so normal launches never trigger.
+      //   echo -n exit    > cache/danger-mode  → app.exit(0)
+      //   echo -n restart > cache/danger-mode  → app.request_restart()
+      #[cfg(target_env = "ohos")]
+      {
+        const DANGER_MODE_PATH: &str = "/data/storage/el2/base/cache/danger-mode";
+        let mode = std::fs::read_to_string(DANGER_MODE_PATH)
+          .map(|s| s.trim().to_string())
+          .unwrap_or_default();
+        if !mode.is_empty() {
+          let _ = std::fs::remove_file(DANGER_MODE_PATH);
+          log::info!("[danger-mode] '{mode}' scheduled at +90s");
+          let app_handle = app.handle().clone();
+          std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(90));
+            match mode.as_str() {
+              "exit" => {
+                log::info!("[danger-mode] firing app.exit(0)");
+                app_handle.exit(0);
+              }
+              "restart" => {
+                log::info!("[danger-mode] firing app.request_restart()");
+                app_handle.request_restart();
+              }
+              unknown => log::warn!("[danger-mode] unknown mode '{unknown}'"),
+            }
+          });
+        }
       }
 
       #[cfg(target_os = "macos")]
@@ -680,19 +724,34 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             let mut body = Vec::new();
             let _ = request.as_reader().read_to_end(&mut body);
 
-            // Parse path for /status/{code} pattern
+            // Route: /status/{code} overrides the status; /json serves a
+            // fixed JSON payload; everything else echoes the request body.
+            // /json exists so the plugin-http JSON-parse auto test does not
+            // depend on an external endpoint (jsonplaceholder route observed
+            // flaky from the test network: 50% packet loss blew the 5s test
+            // cap). External HTTPS stays covered by the rustls-tls test.
             let path = request.url().to_string();
-            let status = if let Some(code_str) = path.strip_prefix("/status/") {
-              code_str.parse::<u16>().unwrap_or(200)
+            let (status, payload): (u16, Vec<u8>) = if path == "/json" {
+              (
+                200,
+                br#"{"userId":1,"id":1,"title":"delectus aut autem","completed":false}"#
+                  .to_vec(),
+              )
+            } else if let Some(code_str) = path.strip_prefix("/status/") {
+              (
+                code_str.parse::<u16>().unwrap_or(200),
+                std::mem::take(&mut body),
+              )
             } else {
-              200
+              (200, std::mem::take(&mut body))
             };
 
+            let payload_len = payload.len();
             let response = tiny_http::Response::new(
               tiny_http::StatusCode(status),
               request.headers().to_vec(),
-              std::io::Cursor::new(body),
-              request.body_length(),
+              std::io::Cursor::new(payload),
+              Some(payload_len),
               None,
             );
             let _ = request.respond(response);
@@ -799,6 +858,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_reload,
       cmd::cookie_test,
       cmd::cookie_manual_test,
+      cmd::cookie_test_main_thread_set,
+      cmd::cookie_test_main_thread_read,
       #[cfg(any(debug_assertions, feature = "devtools"))]
       cmd::devtools_test,
       #[cfg(any(debug_assertions, feature = "devtools"))]
@@ -854,10 +915,13 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_last_new_window_url,
       #[cfg(target_env = "ohos")]
       cmd::get_ohos_version_info,
+      cmd::set_content_protection,
       cmd::test_web_page_snapshot,
       #[cfg(target_env = "ohos")]
       cmd::test_create_pdf,
       cmd::set_download_test_mode,
+      #[cfg(target_env = "ohos")]
+      cmd::test_set_prevent_exit,
       #[cfg(desktop)]
       tray::simulate_tray_click,
       #[cfg(debug_assertions)]
@@ -900,15 +964,22 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
         RunEvent::ExitRequested { code, api: _api, .. } => {
           log::info!("[RunEvent] ExitRequested, code={:?}", code);
-          // Test whether prevent_exit works
-          // NOTE: This is test-only code. On OHOS LoopDestroyed path, prevent_exit()
-          // cannot actually prevent exit (system is already tearing down), but it gives
-          // user code a chance to run cleanup logic before RunEvent::Exit fires.
+          // Test whether prevent_exit works — but only for implicit exits
+          // (code is None, e.g. system close / all-windows-closed). Explicit
+          // exit requests (app.exit / request_restart, code is Some) are let
+          // through, same convention as the desktop guard below. NOTE: since
+          // issue #103 wired the PC/2in1 pre-close interception
+          // (onPrepareToTerminateAsync) to this dispatch, prevent_exit() here
+          // GENUINELY cancels system-initiated closes — gated behind
+          // PREVENT_IMPLICIT_EXIT (test_set_prevent_exit command) so the
+          // demo stays closable by default.
           #[cfg(target_env = "ohos")]
+          if code.is_none()
+            && PREVENT_IMPLICIT_EXIT.load(std::sync::atomic::Ordering::SeqCst)
           {
             log::info!("[RunEvent] ExitRequested: calling prevent_exit() to test");
             _api.prevent_exit();
-            log::info!("[RunEvent] ExitRequested: prevent_exit() called (may not prevent on LoopDestroyed path)");
+            log::info!("[RunEvent] ExitRequested: prevent_exit() called (implicit exit path)");
           }
           if code.is_some() { "ExitRequested(code)" } else { "ExitRequested" }
         }
@@ -948,7 +1019,18 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       // Keep the event loop running even if all windows are closed
       // This allow us to catch tray icon events when there is no window
       // if we manually requested an exit (code is Some(_)) we will let it go through
-      #[cfg(desktop)]
+      //
+      // OHOS is excluded: since issue Eulogizethesun/tauri#103 wired the
+      // pre-close interception, a prevent_exit() here has become EFFECTIVE on
+      // OHOS desktop (it used to fire into unstoppable teardown) — keeping
+      // this unconditional guard would make the demo permanently unclosable
+      // via the window close button. On OHOS the prevent path is the
+      // PREVENT_IMPLICIT_EXIT toggle in the ExitRequested arm above
+      // (test_set_prevent_exit command) instead. The guard's scenario
+      // (zero windows + live tray loop) cannot occur on OHOS anyway — the
+      // main window's close is the app-level close, which the probe cancels
+      // as a whole.
+      #[cfg(all(desktop, not(target_env = "ohos")))]
       RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
         api.prevent_exit();
       }
