@@ -273,6 +273,48 @@ jobs:
           LINT_BODY: ${{ steps.lint.outputs.body }}
 
   # ═══════════════════════════════════════════════════
+  # JsImage variant sync check
+  # The OHOS JsImage (crates/tauri/src/image/mod.rs) duplicates upstream's
+  # enum + a DataUri variant. Fails when the two variant sets drift, so the
+  # OHOS copy must be re-synced (see the MAINTENANCE CONTRACT comment there).
+  # ═══════════════════════════════════════════════════
+  jsimage-sync-check:
+    name: JsImage Variant Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check OHOS JsImage variants match upstream + DataUri
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=crates/tauri/src/image/mod.rs
+
+          extract_variants() {
+            # $1: file path, $2: ordinal of the `pub enum JsImage` block
+            # (1 = upstream enum, 2 = the OHOS cfg'd copy)
+            local start end
+            start=$(grep -n "^pub enum JsImage" "$1" | sed -n "$2p" | cut -d: -f1)
+            if [ -z "$start" ]; then echo ""; return; fi
+            end=$(awk -v s="$start" 'NR>s && /^}/{print NR; exit}' "$1")
+            sed -n "${start},${end}p" "$1" | grep -oE '^  [A-Z][A-Za-z0-9]*' | tr -d ' ' | sort | tr '\n' ' ' | sed 's/ $//'
+          }
+
+          curl -fsSL https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri/src/image/mod.rs -o /tmp/upstream-image.rs
+          UPSTREAM=$(extract_variants /tmp/upstream-image.rs 1)
+          OHOS=$(extract_variants "$FILE" 2)
+
+          echo "upstream variants: ${UPSTREAM:-<none>}"
+          echo "ohos variants:     ${OHOS:-<none>}"
+
+          # Expected = upstream's variant set + DataUri, compared as sorted sets
+          EXPECTED=$(printf '%s DataUri\n' "$UPSTREAM" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+          if [ -z "$UPSTREAM" ] || [ "$OHOS" != "$EXPECTED" ]; then
+            echo "::error::OHOS JsImage variants drifted from upstream — sync the OHOS enum and its Deserialize impl in $FILE (expected upstream variants + DataUri)"
+            exit 1
+          fi
+
+  # ═══════════════════════════════════════════════════
   # ⑥ Claude AI code review
   # Deep review based on OHOS constraints checklist
   # Runs independently of compile/tests; executes even if compile fails
@@ -407,7 +449,7 @@ jobs:
   # ═══════════════════════════════════════════════════
   gate1-summary:
     name: Gate 1 Summary
-    needs: [host-compile-check, host-tests, ohos-pattern-lint, claude-review]
+    needs: [host-compile-check, host-tests, ohos-pattern-lint, jsimage-sync-check, claude-review]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -429,7 +471,7 @@ jobs:
             // Filter Gate 1 related jobs
             const gate1Prefixes = [
               'Host Compile', 'Host Tests',
-              'OHOS Pattern Lint', 'Claude Code Review'
+              'OHOS Pattern Lint', 'JsImage Variant Sync', 'Claude Code Review'
             ];
             const relevant = checks.check_runs.filter(c =>
               gate1Prefixes.some(p => c.name.startsWith(p))

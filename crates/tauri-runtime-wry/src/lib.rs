@@ -60,8 +60,6 @@ use windows::Win32::Foundation::HWND;
 use wry::WebViewBuilderExtIos;
 #[cfg(target_os = "macos")]
 use wry::WebViewBuilderExtMacos;
-#[cfg(target_env = "ohos")]
-use wry::WebViewBuilderExtOhos;
 #[cfg(windows)]
 use wry::WebViewBuilderExtWindows;
 #[cfg(target_vendor = "apple")]
@@ -103,7 +101,6 @@ use wry::{
 pub use tao;
 pub use tao::window::{Window, WindowBuilder as TaoWindowBuilder, WindowId as TaoWindowId};
 pub use wry;
-#[cfg(not(target_env = "ohos"))]
 pub use wry::webview_version;
 
 #[cfg(windows)]
@@ -113,6 +110,8 @@ use wry::{
   prelude::{dispatch, find_class},
   WebViewBuilderExtAndroid, WebViewExtAndroid,
 };
+#[cfg(target_env = "ohos")]
+use wry::WebViewExtOhos;
 #[cfg(not(any(
   target_os = "windows",
   target_os = "macos",
@@ -135,19 +134,12 @@ use tauri_runtime::ActivationPolicy;
 #[cfg(target_env = "ohos")]
 pub use tauri_runtime::OHOSWindowKind;
 
-// ─── OHOS: global WindowClient for fire-and-forget bridge calls ────────────────
-// The bridge facade is async, but tauri-runtime-wry's call sites (focus_window,
-// set_window_focusable, destroy_window) run on the main thread where block_on
-// would deadlock. We store a WindowClient globally and spawn a worker thread for
-// each call, letting the main thread process the TSFN response asynchronously.
+/// Registers the Rust-side bridge plugins that tao/wry/tauri-plugin-opener
+/// need on OHOS. Must be called once during app setup (`crate::ohos::init`)
+/// — window and webview operations go through tao's per-window
+/// `WindowClient`/bridge runtime, not through a global client here.
 #[cfg(target_env = "ohos")]
-static OHOS_WINDOW_CLIENT: std::sync::OnceLock<openharmony_ability_plugin_window::WindowClient> =
-  std::sync::OnceLock::new();
-
-/// Initializes the global `WindowClient` used by tauri-runtime-wry for OHOS window
-/// operations. Must be called once during app setup.
-#[cfg(target_env = "ohos")]
-pub fn set_ohos_window_client(app: &openharmony_ability::OpenHarmonyApp) {
+pub fn set_ohos_app(app: &openharmony_ability::OpenHarmonyApp) {
   // Register the Rust-side WebView bridge plugin. `WebviewClient::create`
   // (called from wry's webview builder) is a bridge call routed through
   // `WebviewBridgePlugin`; the ArkTS counterpart (`WebviewPlugin`) is already
@@ -173,35 +165,12 @@ pub fn set_ohos_window_client(app: &openharmony_ability::OpenHarmonyApp) {
   // declaration configurePlugins never installs it and every open call fails with
   // "Bridge plugin 'ohos.url' is not installed for '<module>'". Symmetric with the
   // Webview/WindowBridgePlugin registrations above.
+  // Registered HERE (and not by the opener plugin's own initialize) because the
+  // ArkTS EntryAbility installs its bridge plugins at ability startup, before
+  // any Tauri plugin's initialize runs — the registry is only queried once at
+  // EntryAbility construction, so a late registration would never take effect.
   if let Err(e) = app.register_plugin(openharmony_ability_plugin_url::UrlBridgePlugin) {
     log::error!("[WRY] failed to register UrlBridgePlugin: {}", e);
-  }
-  if let Ok(client) = openharmony_ability_plugin_window::WindowClient::new(app) {
-    if OHOS_WINDOW_CLIENT.set(client).is_err() {
-      log::warn!("[WRY] OHOS_WINDOW_CLIENT already initialized");
-    }
-  } else {
-    log::error!("[WRY] Failed to create WindowClient for OHOS");
-  }
-}
-
-/// Fire-and-forget helper: spawns a worker thread to call an async WindowClient method.
-/// Avoids main-thread deadlock since the bridge TSFN dispatch is processed on the main
-/// thread's event loop, which remains free.
-#[cfg(target_env = "ohos")]
-fn ohos_window_spawn<F>(label: &'static str, f: F)
-where
-  F: std::future::Future<Output = napi_ohos::Result<()>> + Send + 'static,
-{
-  if let Some(client) = OHOS_WINDOW_CLIENT.get() {
-    let client = client.clone();
-    std::thread::spawn(move || {
-      if let Err(e) = futures_executor::block_on(f) {
-        log::warn!("[WRY] {} failed: {:?}", label, e);
-      }
-    });
-  } else {
-    log::warn!("[WRY] {} skipped: OHOS_WINDOW_CLIENT not initialized", label);
   }
 }
 
@@ -275,8 +244,8 @@ impl WindowIdStore {
     }
     #[cfg(not(target_env = "ohos"))]
     {
-    self.0.lock().unwrap().insert(w, id);
-  }
+      self.0.lock().unwrap().insert(w, id);
+    }
   }
 
   pub fn get(&self, w: &TaoWindowId) -> Option<WindowId> {
@@ -408,42 +377,19 @@ impl<T: UserEvent> Context<T> {
       })
       .unwrap_or((None, false));
 
-    #[cfg(target_env = "ohos")]
-    let ohos_window_id = Arc::new(std::sync::Mutex::new(None::<i64>));
-    #[cfg(target_env = "ohos")]
-    let ohos_window_id_clone = ohos_window_id.clone();
-
     send_user_message(
       self,
       Message::CreateWindow(
         window_id,
         Box::new(move |event_loop| {
-          #[cfg(target_env = "ohos")]
-          log::debug!("[WRY] CreateWindow callback: start");
-          let window = create_window(
+          create_window(
             window_id,
             webview_id.unwrap_or_default(),
             event_loop,
             &context,
             pending,
             after_window_creation,
-          )?;
-          #[cfg(target_env = "ohos")]
-          {
-            log::info!(
-              "[WRY] CreateWindow callback: inner={}",
-              window.inner.is_some()
-            );
-            if let Some(ref inner) = window.inner {
-              use tao::window::WindowExtOhos;
-              let id = inner.ohos_window_id();
-              log::debug!("[WRY] CreateWindow callback: ohos_window_id={:?}", id);
-              if let Some(id) = id {
-                *ohos_window_id_clone.lock().unwrap() = Some(id);
-              }
-            }
-          }
-          Ok(window)
+          )
         }),
       ),
     )?;
@@ -451,8 +397,6 @@ impl<T: UserEvent> Context<T> {
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.clone(),
-      #[cfg(target_env = "ohos")]
-      ohos_window_id,
     };
 
     let detached_webview = webview_id.map(|id| {
@@ -553,9 +497,12 @@ unsafe impl Send for WindowsStore {}
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Sync for WindowsStore {}
 
+/// OHOS-only, inert on other platforms: guards against duplicate
+/// `ExitRequested` run events (the window-close and LoopDestroyed paths can
+/// both fire). Compiled everywhere because it is threaded through structs
+/// shared with non-OHOS code; adding a cfg would cost six more cfg sites.
 #[derive(Debug)]
 pub struct ExitState(pub AtomicBool);
-// Note: AtomicBool is inherently Send + Sync; no manual impls needed.
 
 #[derive(Debug, Clone)]
 pub struct DispatcherMainThreadContext<T: UserEvent> {
@@ -1051,14 +998,6 @@ impl WindowBuilder for WindowBuilderWrapper {
       .maximizable(config.maximizable)
       .minimizable(config.minimizable)
       .shadow(config.shadow);
-
-    #[cfg(target_env = "ohos")]
-    {
-      use tao::platform::ohos::WindowBuilderExtOpenHarmony;
-      window.inner = window.inner.with_label(&config.label);
-      // Window kind is determined by tao based on UIABILITY_CREATED flag:
-      // first window → UIAbility, subsequent windows → Float
-    }
 
     let mut constraints = WindowSizeConstraints::default();
 
@@ -2154,8 +2093,6 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
 pub struct WryWindowDispatcher<T: UserEvent> {
   window_id: WindowId,
   context: Context<T>,
-  #[cfg(target_env = "ohos")]
-  ohos_window_id: Arc<std::sync::Mutex<Option<i64>>>,
 }
 
 // SAFETY: this is safe since the `Context` usage is guarded on `send_user_message`.
@@ -2593,35 +2530,6 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_focus(&self) -> Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      let ohos_id = {
-        let guard = self.ohos_window_id.lock().unwrap();
-        *guard
-      };
-      log::debug!("[WRY] set_focus: ohos_window_id={:?}", ohos_id);
-      if let Some(id) = ohos_id {
-        if id > 0 {
-          log::debug!(
-            "[WRY] set_focus: dispatching focus_window({}) to main thread",
-            id
-          );
-          // Bridge facade is async; use fire-and-forget worker thread to avoid
-          // main-thread deadlock (bridge TSFN dispatch needs main thread free).
-          ohos_window_spawn("focus_window", async move {
-            OHOS_WINDOW_CLIENT
-              .get()
-              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
-              .clone()
-              .focus_window(id)
-              .await
-          });
-          return Ok(());
-        }
-        return Ok(()); // Main window: focus is OS-managed
-      }
-      log::warn!("[WRY] set_focus: ohos_window_id is None, falling back to event loop");
-    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetFocus),
@@ -2629,27 +2537,6 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_focusable(&self, focusable: bool) -> Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      let ohos_id = {
-        let guard = self.ohos_window_id.lock().unwrap();
-        *guard
-      };
-      if let Some(id) = ohos_id {
-        if id > 0 {
-          ohos_window_spawn("set_window_focusable", async move {
-            OHOS_WINDOW_CLIENT
-              .get()
-              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
-              .clone()
-              .set_window_focusable(id, focusable)
-              .await
-          });
-          return Ok(());
-        }
-        return Ok(());
-      }
-    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetFocusable(focusable)),
@@ -3210,16 +3097,7 @@ impl<T: UserEvent> Wry<T> {
       next_webview_id: Default::default(),
       next_window_event_id: Default::default(),
       next_webview_event_id: Default::default(),
-      webview_runtime_installed: {
-        #[cfg(not(target_env = "ohos"))]
-        {
-          wry::webview_version().is_ok()
-        }
-        #[cfg(target_env = "ohos")]
-        {
-          true
-        }
-      },
+      webview_runtime_installed: wry::webview_version().is_ok(),
     };
 
     Ok(Self {
@@ -3264,11 +3142,6 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
     Self::init_with_builder(event_loop_builder, args)
   }
 
-  #[cfg(target_env = "ohos")]
-  fn new_any_thread(_args: RuntimeInitArgs) -> Result<Self> {
-    unimplemented!()
-  }
-
   fn create_proxy(&self) -> EventProxy<T> {
     EventProxy(self.event_loop.create_proxy())
   }
@@ -3306,20 +3179,9 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
       after_window_creation,
     )?;
 
-    #[cfg(target_env = "ohos")]
-    let ohos_window_id = {
-      let id = window.inner.as_ref().and_then(|w| {
-        use tao::window::WindowExtOhos;
-        w.ohos_window_id()
-      });
-      Arc::new(std::sync::Mutex::new(id))
-    };
-
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.context.clone(),
-      #[cfg(target_env = "ohos")]
-      ohos_window_id,
     };
 
     self
@@ -3480,7 +3342,7 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
       .set_device_event_filter(DeviceEventFilterWrapper::from(filter).0);
   }
 
-  #[cfg(desktop)]
+  #[cfg(all(desktop, not(target_env = "ohos")))]
   fn run_iteration<F: FnMut(RunEvent<T>) + 'static>(&mut self, mut callback: F) {
     use tao::platform::run_return::EventLoopExtRunReturn;
     let windows = self.context.main_thread.windows.clone();
@@ -3545,7 +3407,17 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
     self.event_loop.run(event_handler)
   }
 
-  #[cfg(not(target_os = "ios"))]
+  // OHOS desktop device form (cfg(desktop) is true there): the loop is
+  // callback-driven — the main thread must be returned to ArkTS — and tao
+  // excludes OHOS from `EventLoopExtRunReturn` (tao issue #84), so a "pump one
+  // iteration and return" primitive cannot exist. Fail loudly instead of the
+  // old behavior of silently registering handlers and returning.
+  #[cfg(all(desktop, target_env = "ohos"))]
+  fn run_iteration<F: FnMut(RunEvent<T>) + 'static>(&mut self, _callback: F) {
+    unimplemented!("run_iteration is not supported on OpenHarmony");
+  }
+
+  #[cfg(not(any(target_os = "ios", target_env = "ohos")))]
   fn run_return<F: FnMut(RunEvent<T>) + 'static>(mut self, callback: F) -> i32 {
     use tao::platform::run_return::EventLoopExtRunReturn;
 
@@ -3554,7 +3426,11 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
     self.event_loop.run_return(event_handler)
   }
 
-  #[cfg(target_os = "ios")]
+  // OHOS behaves like iOS here: tao excludes it from `EventLoopExtRunReturn`
+  // because the platform is callback-driven (the main thread must be returned
+  // to ArkTS), so `run_return` cannot honor "return control flow on
+  // ControlFlow::Exit" — alias to `run` instead (tao issue #84).
+  #[cfg(any(target_os = "ios", target_env = "ohos"))]
   fn run_return<F: FnMut(RunEvent<T>) + 'static>(self, callback: F) -> i32 {
     self.run(callback);
     0
@@ -4159,6 +4035,8 @@ fn handle_user_message<T: UserEvent>(
             #[allow(unknown_lints, clippy::manual_inspect)]
             windows.0.borrow_mut().get_mut(&window_id).map(|window| {
               if let Some(i) = window.webviews.iter().position(|w| w.id == webview.id) {
+                // `wrapper` is only read by the OHOS `dispose_child` below.
+                #[cfg_attr(not(target_env = "ohos"), allow(unused_variables))]
                 let wrapper = window.webviews.remove(i);
                 #[cfg(target_env = "ohos")]
                 {
@@ -4235,11 +4113,6 @@ fn handle_user_message<T: UserEvent>(
             }
           }
           WebviewMessage::SetBackgroundColor(color) => {
-            #[cfg(target_env = "ohos")]
-            log::debug!(
-              "[tauri-runtime-wry] SetBackgroundColor message received: {:?}",
-              color
-            );
             if let Err(e) =
               webview.set_background_color(color.map(Into::into).unwrap_or((255, 255, 255, 255)))
             {
@@ -4416,7 +4289,6 @@ fn handle_user_message<T: UserEvent>(
             }
             #[cfg(target_env = "ohos")]
             {
-              use wry::WebViewExtOhos;
               _f(webview.webview_handle());
             }
           }
@@ -4557,96 +4429,12 @@ fn handle_event_loop<T: UserEvent>(
     *control_flow = ControlFlow::Wait;
   }
 
-  // OHOS: Process pending window close requests from ArkTS.
-  // ArkTS calls notifyWindowClose() synchronously (pushes OHOS window ID to Rust queue),
-  // then calls destroyWindow() asynchronously (returns a Promise). The drain runs
-  // synchronously at the start of the next Rust event loop iteration, reading from
-  // stored Rust values before the async destruction completes. See defensive guard
-  // on wrapper.inner below.
-  //
-  // NOTE (known-issue #1, partially remediated): tao WindowId now carries the
-  //   real OHOS window id (the ZST deficiency was fixed — see openspec change
-  //   p1-window-state-per-window-rect Phase 3). This drain bypass is still
-  //   required: Float subwindow close goes through ArkTS destroyWindow → this
-  //   queue and produces no MainEvent::WindowDestroy (that event only fires
-  //   when the main window stage is torn down). Root-cause analysis:
-  //   doc/OHOS窗口遗留问题.md (issue 1).
-  #[cfg(target_env = "ohos")]
-  {
-    use tao::platform::ohos::WindowExtOpenHarmony;
-    let pending_closes = tao::platform::ohos::ability::drain_pending_window_closes();
-    for ohos_win_id in pending_closes {
-      // Find the Tauri WindowId matching this OHOS window ID.
-      // Defensive: wrapper.inner may be None if the OHOS native window was already
-      // destroyed by ArkTS destroyWindow(). In that case, window_id() is unavailable,
-      // so we skip this entry — the TaoWindowEvent::Destroyed handler (if fired)
-      // will process the lifecycle via on_window_close (idempotent).
-      let matching_id = windows.0.borrow().iter().find_map(|(id, wrapper)| {
-        wrapper
-          .inner
-          .as_ref()
-          .and_then(|w| w.window_id())
-          .and_then(|wid| {
-            if wid == ohos_win_id as i64 {
-              Some(*id)
-            } else {
-              None
-            }
-          })
-      });
-      if let Some(window_id) = matching_id {
-        on_close_requested_ohos(callback, window_id, windows.clone(), exit_state.clone());
-      } else {
-        log::debug!(
-          "[wry] OHOS pending close: no matching Tauri window for OHOS window ID {}",
-          ohos_win_id
-        );
-      }
-    }
-
-    // Feed system window status back into the tao mirror state (known-issue #5,
-    // §5.3). windowStatusChange events are enqueued via the notify_window_status
-    // NAPI call; drained here and routed by real OHOS windowId to the matching
-    // tao Window, whose apply_window_status updates the visible/fullscreen
-    // mirror. Routing mirrors drain_pending_window_closes above (does not rely
-    // on the tao ZST WindowId; correct for multiple windows). Details:
-    // doc/OHOS窗口遗留问题.md (issue 5, §5.3).
-    let pending_status = tao::platform::ohos::ability::drain_pending_window_status();
-    for (ohos_win_id, status) in pending_status {
-      let applied = windows.0.borrow().iter().find_map(|(_id, wrapper)| {
-        let w = wrapper.inner.as_ref()?;
-        if w.window_id() == Some(ohos_win_id as i64) {
-          w.apply_window_status(status);
-          Some(())
-        } else {
-          None
-        }
-      });
-      if applied.is_none() {
-        // G6 / cross-cutting (tao#20): a failed Float window has window_id=None
-        // (ohos_win_id() == 0) — it matches no drained status and produces no
-        // status events (no real OHOS window), so its mirror stays silently
-        // stale. A drained-but-unmatched status therefore means either a real
-        // window (id != 0) destroyed between enqueue and drain (stale id) or a
-        // routing mismatch. Non-zero ids are diagnosable stale ids → warn;
-        // id == 0 (main window / failed-Float sentinel) stays at debug to
-        // avoid noise.
-        if ohos_win_id != 0 {
-          log::warn!(
-            "[wry] OHOS pending status drained but no matching window for id {} (status={}); \
-             stale id (window destroyed between queue and drain) or routing mismatch \
-             (failed Float windows never match: window_id=None)",
-            ohos_win_id, status
-          );
-        } else {
-          log::debug!(
-            "[wry] OHOS pending status: no match for id 0 (main window / failed-Float sentinel), status={}",
-            status
-          );
-        }
-      }
-    }
-  }
+  // NOTE (OHOS): the pending window-close and window-status drains that used
+  // to live here moved into tao's OHOS backend (`EventLoop::run_loop`
+  // dispatch): closes are synthesized as standard `CloseRequested` events
+  // routed by the real OHOS window id, and windowStatusChange entries are
+  // applied to tao's own state mirrors. This layer only sees standard tao
+  // events — see `tao/src/platform_impl/ohos/mod.rs` (WINDOW_MIRRORS).
 
   match event {
     Event::NewEvents(StartCause::Init) => {
@@ -5048,41 +4836,23 @@ fn on_window_close_ohos<'a, T: UserEvent>(
 ) -> bool {
   // Remove window entry from WindowsStore (idempotent)
   let removed = windows.0.borrow_mut().remove(&window_id);
-  if let Some(mut window_wrapper) = removed {
-    // OHOS: tao's Window has no close/destroy impl, so the OS window is NOT
-    // destroyed by the default close path — only the Rust-side store entry is
-    // removed here. Without an explicit destroy_window call, the OS Float
-    // window stays on screen → ghost windows that diverge from Rust's records.
-    // destroy_window (NAPI→ArkHelper.closeWindow) actually destroys the OS
-    // window (Float: win.destroyWindow(); UIAbility: context.terminateSelf()).
+  // `mut` would only be needed by the Windows-only surface drop below, which
+  // never applies inside this OHOS-only function; the OHOS path only reads
+  // `inner` and moves `label`.
+  if let Some(window_wrapper) = removed {
+    // Destroy the OS window through tao (OHOS): Float windows call
+    // destroyWindow, the main window terminates the UIAbility — see
+    // `WindowExtOpenHarmony::close`. Without it the OS Float window stays on
+    // screen → ghost windows that diverge from Rust's records.
     //
-    // Recursion safety: destroy_window → ArkTS destroyWindow → FloatPage
+    // Recursion safety: close → ArkTS destroyWindow → FloatPage
     // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
     // The second on_window_close call hits `removed == None` (this block already
     // removed it) and returns early — the idempotent remove breaks the cycle.
-    #[cfg(target_env = "ohos")]
-    {
-      use tao::platform::ohos::WindowExtOpenHarmony;
-      if let Some(ref inner) = window_wrapper.inner {
-        if let Some(ohos_id) = inner.window_id() {
-          log::info!("[wry] on_window_close: destroy_window ohos_id={}", ohos_id);
-          ohos_window_spawn("destroy_window", async move {
-            OHOS_WINDOW_CLIENT
-              .get()
-              .ok_or_else(|| napi_ohos::Error::from_reason("WindowClient not init"))?
-              .clone()
-              .destroy_window(ohos_id)
-              .await
-          });
-        }
-      }
+    use tao::platform::ohos::WindowExtOpenHarmony;
+    if let Some(ref inner) = window_wrapper.inner {
+      inner.close();
     }
-
-    // Maintain drop order: surface must be dropped before window.
-    // softbuffer::Surface holds Arc<Window>; if Window drops first,
-    // Surface may access freed resources on drop.
-    #[cfg(windows)]
-    window_wrapper.surface.take();
 
     let label = window_wrapper.label;
 
@@ -5204,6 +4974,8 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
         .window
         .inner_size
         .unwrap_or_else(|| TaoPhysicalSize::new(800, 600).into());
+      // Only mutated by the non-OHOS `prevent_overflow` block below.
+      #[cfg_attr(target_env = "ohos", allow(unused_mut))]
       let mut inner_size = window_builder
         .inner
         .window
@@ -5264,6 +5036,9 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   #[cfg(target_env = "ohos")]
   {
     use tao::platform::ohos::WindowBuilderExtOpenHarmony;
+    // The label is set here (once) for both the with_config and programmatic
+    // paths. Window kind is determined by tao based on UIABILITY_CREATED flag:
+    // first window → UIAbility, subsequent windows → Float.
     window_builder.inner = window_builder.inner.with_label(&label);
   }
 
@@ -5493,10 +5268,7 @@ You may have it installed on another user account, but it is not available for t
     use tao::platform::ohos::WindowExtOpenHarmony;
     use wry::WebViewBuilderExtOhos;
     if let Some(window_id) = window.window_id() {
-      log::info!("[tauri-runtime-wry DBG] window.window_id()=Some({}), passing to wry WebViewBuilder", window_id);
       webview_builder = webview_builder.with_window_id(window_id);
-    } else {
-      log::info!("[tauri-runtime-wry DBG] window.window_id()=None, NOT passing window_id to wry");
     }
     // Forward use_https_scheme to wry (OHOS branch was missing this — Windows/Android
     // branch above sets it, but OHOS didn't, so pl_attrs.use_https was always false
@@ -5636,14 +5408,10 @@ You may have it installed on another user account, but it is not available for t
           }
         }
         #[cfg(target_env = "ohos")]
-        tauri_runtime::webview::NewWindowResponse::Create { window_id } => {
-          log::info!("[tauri-runtime-wry DBG] on_new_window response: Create (OHOS) window_id={:?}", window_id);
+        tauri_runtime::webview::NewWindowResponse::Create { window_id: _ } => {
           wry::NewWindowResponse::Create {}
         }
-        tauri_runtime::webview::NewWindowResponse::Deny => {
-          log::info!("[tauri-runtime-wry DBG] on_new_window response: Deny");
-          wry::NewWindowResponse::Deny
-        }
+        tauri_runtime::webview::NewWindowResponse::Deny => wry::NewWindowResponse::Deny,
       }
     });
   }
@@ -6165,7 +5933,9 @@ mod with_config_tests {
     assert!(!wb.center);
     assert!(wb.prevent_overflow.is_none());
     assert_eq!(wb.inner.window.title, cfg.title);
-    // Default config carries 800x600, so the size is always applied on OHOS.
+    // Mobile targets ignore the config size (see `with_config`); desktop and
+    // OHOS apply the default 800x600.
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     assert!(wb.inner.window.inner_size.is_some());
   }
 
@@ -6178,8 +5948,6 @@ mod with_config_tests {
     let wb = WindowBuilderWrapper::with_config(&cfg);
     assert!(!wb.center);
     assert!(wb.inner.window.position.is_some());
-    // On OHOS the label is applied via the platform builder extension.
-    assert!(!cfg.label.is_empty());
 
     let mut centered = WindowConfig::default();
     centered.center = true;
@@ -6198,6 +5966,8 @@ mod with_config_tests {
     cfg.max_height = Some(900.0);
     cfg.background_color = Some(Color(1, 2, 3, 4));
     let wb = WindowBuilderWrapper::with_config(&cfg);
+    // Mobile targets ignore the config size (see `with_config`).
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     assert!(wb.inner.window.inner_size.is_some());
     let c = &wb.inner.window.inner_size_constraints;
     assert!(c.min_width.is_some());

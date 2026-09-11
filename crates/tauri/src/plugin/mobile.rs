@@ -62,8 +62,7 @@ pub enum PluginInvokeError {
 }
 
 pub(crate) fn register_channel(channel: Channel<serde_json::Value>) {
-  CHANNELS
-    .get_or_init(Default::default)
+  CHANNELS    .get_or_init(Default::default)
     .lock()
     .unwrap()
     .insert(channel.id(), channel);
@@ -285,6 +284,9 @@ impl<R: Runtime, C: DeserializeOwned> PluginApi<R, C> {
     })
   }
 
+  /// Registers an OHOS native plugin for this builder: the plugin with the
+  /// given `plugin_identifier` and `class_name` is registered when the app
+  /// starts up on OpenHarmony.
   #[cfg(target_env = "ohos")]
   pub fn register_ohos_plugin(
     &self,
@@ -367,6 +369,61 @@ impl<R: Runtime> PluginHandle<R> {
   }
 }
 
+/// Fallback for plugin commands the Rust side did not handle (`extend_api`
+/// returned false): initializes channels carried in the payload and forwards
+/// the command to the native (Kotlin/Swift/ArkTS) plugin side through
+/// [`run_command`]. Returns `true` when the command was forwarded.
+///
+/// Both the main-thread path (`Webview::on_message`) and the OHOS
+/// lock-contention path (`AppManager::extend_api` offloads to the blocking
+/// pool when the plugin store lock is busy) must run this same fallback when
+/// the command is not handled — otherwise the JS promise never settles.
+#[cfg(any(mobile, target_env = "ohos"))]
+pub(crate) fn run_mobile_channel_fallback<R: Runtime>(
+  plugin: &str,
+  app_handle: &AppHandle<R>,
+  message: crate::ipc::InvokeMessage<R>,
+  resolver: &crate::ipc::InvokeResolver<R>,
+) -> bool {
+  fn load_channels<R: Runtime>(payload: &serde_json::Value, webview: &crate::Webview<R>) {
+    use std::str::FromStr;
+
+    if let serde_json::Value::Object(map) = payload {
+      for v in map.values() {
+        if let serde_json::Value::String(s) = v {
+          let _ = crate::ipc::JavaScriptChannelId::from_str(s)
+            .map(|id| id.channel_on::<R, ()>(webview.clone()));
+        }
+      }
+    }
+  }
+
+  // resolve/reject take the resolver by value — take ownership of a clone
+  let resolver = resolver.clone();
+
+  let payload = message.payload.into_json();
+  // initialize channels
+  load_channels(&payload, &message.webview);
+
+  let resolver_ = resolver.clone();
+  match run_command(
+    plugin,
+    app_handle,
+    heck::AsLowerCamelCase(message.command.as_str()).to_string(),
+    payload,
+    move |response| match response {
+      Ok(r) => resolver_.resolve(r),
+      Err(e) => resolver_.reject(e),
+    },
+  ) {
+    Ok(()) => true,
+    Err(e) => {
+      resolver.reject(e.to_string());
+      false
+    }
+  }
+}
+
 #[cfg(target_env = "ohos")]
 pub(crate) fn run_command<R: Runtime, C: AsRef<str>, F: FnOnce(PluginResponse) + Send + 'static>(
   name: &str,
@@ -393,26 +450,6 @@ pub(crate) fn run_command<R: Runtime, C: AsRef<str>, F: FnOnce(PluginResponse) +
 
   Ok(())
 }
-
-#[cfg(target_env = "ohos")]
-macro_rules! register_ohos_plugin {
-  ($api:ident, $name:literal, $identifier:literal, $class_name:literal) => {{
-    let mut plugins = crate::ohos::PLUGINS_TO_REGISTER.lock().unwrap();
-    plugins.push(crate::ohos::PluginRegistration {
-      name: $name.to_string(),
-      identifier: $identifier.to_string(),
-      class_name: $class_name.to_string(),
-      config: (*$api.raw_config).clone(),
-    });
-    Ok(PluginHandle {
-      name: $api.name,
-      handle: $api.handle.clone(),
-    })
-  }};
-}
-
-#[cfg(target_env = "ohos")]
-pub(crate) use register_ohos_plugin;
 
 #[cfg(target_os = "ios")]
 pub(crate) fn run_command<R: Runtime, C: AsRef<str>, F: FnOnce(PluginResponse) + Send + 'static>(

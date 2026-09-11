@@ -4,16 +4,6 @@ use napi_derive_ohos::napi;
 use napi_ohos::bindgen_prelude::{FnArgs, Function, JsObjectValue, ObjectRef};
 use napi_ohos::Env;
 
-#[napi]
-pub fn tauri_set_plugin_manager(_env: &Env, manager: ObjectRef) -> napi_ohos::Result<()> {
-  PLUGIN_MANAGER
-    .lock()
-    .unwrap_or_else(|e| e.into_inner())
-    .replace(manager);
-  println!("[Tauri] PluginManager set from ArkTS");
-  Ok(())
-}
-
 fn create_run_command_tsfn(env: &Env) -> napi_ohos::Result<()> {
   let callback: Function<'_, (), ()> =
     env.create_function_from_closure("run_command_callback", move |_ctx| {
@@ -48,7 +38,7 @@ fn create_run_command_tsfn(env: &Env) -> napi_ohos::Result<()> {
 
   RUN_COMMAND_TSFN.set(tsfn).ok();
 
-  println!("[Tauri] run_command TSFN created");
+  log::debug!("[Tauri] run_command TSFN created");
   Ok(())
 }
 
@@ -59,7 +49,7 @@ pub fn tauri_init_plugins(env: &Env, manager: ObjectRef) -> napi_ohos::Result<St
     .unwrap_or_else(|e| e.into_inner());
   let count = plugins.len();
 
-  println!(
+  log::debug!(
     "[Tauri] tauri_init_plugins called, {} plugins to register",
     count
   );
@@ -89,7 +79,12 @@ pub fn tauri_init_plugins(env: &Env, manager: ObjectRef) -> napi_ohos::Result<St
     "[]".to_string()
   });
 
-  println!("[Tauri] Plugins JSON: {}", plugins_json);
+  // The full config JSON is returned to ArkTS (and serialized below) — never
+  // log it; plugin configs may embed secrets. Log the plugin names only.
+  log::debug!(
+    "[Tauri] plugins to register: {:?}",
+    plugins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>()
+  );
 
   Ok(plugins_json)
 }

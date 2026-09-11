@@ -68,6 +68,20 @@ pub fn get<R: Runtime>(
   })
 }
 
+/// Reads a proxied network response into a [`CachedResponse`] — the shared
+/// body of the OHOS / non-OHOS lock-hygiene variants in `get_response`.
+#[cfg(all(dev, mobile))]
+fn read_cached_response(r: reqwest::Response) -> Result<CachedResponse, Box<dyn std::error::Error>> {
+  let status = r.status();
+  let headers = r.headers().clone();
+  let body = crate::async_runtime::safe_block_on(r.bytes())?;
+  Ok(CachedResponse {
+    status,
+    headers,
+    body,
+  })
+}
+
 fn get_response<R: Runtime>(
   #[allow(unused_mut)] mut request: Request<Vec<u8>>,
   #[allow(unused_variables)] manager: &AppManager<R>,
@@ -119,10 +133,29 @@ fn get_response<R: Runtime>(
       let _ = rustls::crypto::ring::default_provider().install_default();
     }
 
+    // `client` is only mutated when a TLS feature is enabled; this block is
+    // also compiled on OHOS mobile dev builds, which may lack all of them.
+    #[cfg_attr(
+      not(any(
+        feature = "native-tls",
+        feature = "native-tls-vendored",
+        feature = "rustls-tls"
+      )),
+      allow(unused_mut)
+    )]
     let mut client = reqwest::ClientBuilder::new();
 
     if url.starts_with("https://") {
       // we can't load env vars at runtime, gotta embed them in the lib
+      // (`cert_pem` is only read when a TLS feature is enabled — see above)
+      #[cfg_attr(
+        not(any(
+          feature = "native-tls",
+          feature = "native-tls-vendored",
+          feature = "rustls-tls"
+        )),
+        allow(unused_variables)
+      )]
       if let Some(cert_pem) = option_env!("TAURI_DEV_ROOT_CERTIFICATE") {
         #[cfg(any(
           feature = "native-tls",
@@ -176,50 +209,38 @@ fn get_response<R: Runtime>(
         // touch the cache, so this is equivalent.
         #[cfg(target_env = "ohos")]
         let response = {
-          let cached: Option<CachedResponse> = {
-            let response_cache_ = response_cache.lock().unwrap();
-            if r.status() == http::StatusCode::NOT_MODIFIED {
-              response_cache_.get(&url).cloned()
-            } else {
-              None
-            }
-          };
-          if let Some(cached) = cached {
-            cached
+          let cached = if r.status() == http::StatusCode::NOT_MODIFIED {
+            response_cache.lock().unwrap().get(&url).cloned()
           } else {
-            let status = r.status();
-            let headers = r.headers().clone();
-            let body = crate::async_runtime::safe_block_on(r.bytes())?;
-            let new_response = CachedResponse {
-              status,
-              headers,
-              body,
-            };
-            let mut response_cache_ = response_cache.lock().unwrap();
-            response_cache_.insert(url.clone(), new_response.clone());
-            response_cache_.get(&url).unwrap().clone()
+            None
+          };
+          match cached {
+            Some(cached) => cached,
+            None => {
+              let new_response = read_cached_response(r)?;
+              response_cache
+                .lock()
+                .unwrap()
+                .insert(url.clone(), new_response.clone());
+              new_response
+            }
           }
         };
         #[cfg(not(target_env = "ohos"))]
         let response = {
           let mut response_cache_ = response_cache.lock().unwrap();
-          let mut response = None;
-          if r.status() == http::StatusCode::NOT_MODIFIED {
-            response = response_cache_.get(&url);
-          }
-          if let Some(r) = response {
-            r.clone()
+          let cached = if r.status() == http::StatusCode::NOT_MODIFIED {
+            response_cache_.get(&url).cloned()
           } else {
-            let status = r.status();
-            let headers = r.headers().clone();
-            let body = crate::async_runtime::safe_block_on(r.bytes())?;
-            let response = CachedResponse {
-              status,
-              headers,
-              body,
-            };
-            response_cache_.insert(url.clone(), response);
-            response_cache_.get(&url).unwrap().clone()
+            None
+          };
+          match cached {
+            Some(cached) => cached,
+            None => {
+              let new_response = read_cached_response(r)?;
+              response_cache_.insert(url.clone(), new_response.clone());
+              new_response
+            }
           }
         };
         for (name, value) in &response.headers {

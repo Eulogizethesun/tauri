@@ -60,6 +60,13 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 /// See [`current_binary`] for platform specific behavior, and
 /// [`tauri_utils::platform::current_exe`] for possible security implications.
 ///
+/// # Platform-specific behavior
+///
+/// ## OpenHarmony
+///
+/// There is no process relaunch on OHOS: this function exits with code 0 and
+/// lets the OS restart the app through the ability lifecycle.
+///
 /// # Examples
 ///
 /// ```rust,no_run
@@ -72,20 +79,31 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 ///   });
 /// ```
 pub fn restart(env: &Env) -> ! {
-  use std::process::{exit, Command};
-
-  if let Ok(path) = current_binary(env) {
-    // on macOS on updates the binary name might have changed
-    // so we'll read the Contents/Info.plist file to determine the binary path
-    #[cfg(target_os = "macos")]
-    restart_macos_app(&path, env);
-
-    if let Err(e) = Command::new(path).args(env.args_os.iter().skip(1)).spawn() {
-      log::error!("failed to restart app: {e}");
-    }
+  #[cfg(target_env = "ohos")]
+  {
+    // The legacy TSFN-based restart helper was removed during decoupling;
+    // exiting the process triggers the OHOS ability lifecycle restart via the OS.
+    let _ = env;
+    std::process::exit(0);
   }
 
-  exit(0);
+  #[cfg(not(target_env = "ohos"))]
+  {
+    use std::process::{exit, Command};
+
+    if let Ok(path) = current_binary(env) {
+      // on macOS on updates the binary name might have changed
+      // so we'll read the Contents/Info.plist file to determine the binary path
+      #[cfg(target_os = "macos")]
+      restart_macos_app(&path, env);
+
+      if let Err(e) = Command::new(path).args(env.args_os.iter().skip(1)).spawn() {
+        log::error!("failed to restart app: {e}");
+      }
+    }
+
+    exit(0);
+  }
 }
 
 #[cfg(target_os = "macos")]

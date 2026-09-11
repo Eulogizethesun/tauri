@@ -38,22 +38,6 @@ use tauri_runtime::{
 };
 use tauri_utils::{assets::AssetsIter, PackageInfo};
 
-/// Platform-specific restart implementation.
-/// Concentrates the `cfg` branching in one place so the rest of the code
-/// can call `do_restart(env)` without caring about the platform.
-#[cfg(target_env = "ohos")]
-fn do_restart(_env: &crate::Env) -> ! {
-  // OHOS restart: the legacy TSFN-based restart helper was removed during decoupling.
-  // Process exit triggers the OHOS ability lifecycle restart via the OS.
-  std::process::exit(0);
-}
-
-/// Platform-specific restart implementation.
-#[cfg(not(target_env = "ohos"))]
-fn do_restart(env: &crate::Env) -> ! {
-  crate::process::restart(env);
-}
-
 use std::{
   borrow::Cow,
   collections::HashMap,
@@ -537,26 +521,25 @@ impl<R: Runtime> AppHandle<R> {
   /// This method is similar to [`Self::plugin`],
   /// but accepts a boxed trait object instead of a generic type.
   #[cfg_attr(feature = "tracing", tracing::instrument(name = "app::plugin::register", skip(plugin), fields(name = plugin.name())))]
-  pub fn plugin_boxed(&self, mut plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
+  pub fn plugin_boxed(&self, plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
     // OHOS: initialize outside the plugins lock — a plugin's setup may round-trip
     // the ArkTS bridge, which pumps the event loop and would otherwise deadlock
     // against on_event_loop_event's lock below. Non-OHOS keeps the upstream
-    // in-lock ordering.
+    // in-lock ordering through the PluginStore::initialize wrapper.
     #[cfg(target_env = "ohos")]
     {
+      let mut plugin = plugin;
       crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
       let mut store = self.manager().plugins.lock().unwrap();
       store.register(plugin);
     }
     #[cfg(not(target_env = "ohos"))]
-    {
-      // Upstream ordering: initialize while holding the plugins lock (the
-      // removed PluginStore::initialize wrapper just forwarded to
-      // crate::plugin::initialize).
-      let mut store = self.manager().plugins.lock().unwrap();
-      crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
-      store.register(plugin);
-    }
+    self
+      .manager()
+      .plugins
+      .lock()
+      .unwrap()
+      .initialize(plugin, self, &self.config().plugins)?;
 
     Ok(())
   }
@@ -609,7 +592,7 @@ impl<R: Runtime> AppHandle<R> {
     if self.event_loop.lock().unwrap().main_thread_id == std::thread::current().id() {
       log::debug!("restart triggered on the main thread");
       self.cleanup_before_exit();
-      do_restart(&self.env());
+      crate::process::restart(&self.env());
     } else {
       log::debug!("restart triggered from a separate thread");
       // we're running on a separate thread, so we must trigger the exit request and wait for it to finish
@@ -625,7 +608,7 @@ impl<R: Runtime> AppHandle<R> {
         Err(e) => {
           log::error!("failed to request exit: {e}");
           self.cleanup_before_exit();
-          do_restart(&self.env());
+          crate::process::restart(&self.env());
         }
       }
     }
@@ -640,7 +623,7 @@ impl<R: Runtime> AppHandle<R> {
     // We'll be restarting when we receive the next `RuntimeRunEvent::Exit` event in `App::run` if this call succeed
     if self.runtime_handle.request_exit(RESTART_EXIT_CODE).is_err() {
       self.cleanup_before_exit();
-      do_restart(&self.env());
+      crate::process::restart(&self.env());
     }
   }
 
@@ -705,12 +688,6 @@ impl<R: Runtime> AppHandle<R> {
       tx.send(ui_application.supportsMultipleScenes()).unwrap();
     });
     rx.recv().unwrap()
-  }
-
-  /// Whether the application supports multiple windows.
-  #[cfg(target_env = "ohos")]
-  pub fn supports_multiple_windows(&self) -> bool {
-    cfg!(desktop)
   }
 }
 
@@ -1153,6 +1130,14 @@ macro_rules! shared_app_impl {
       }
 
       /// Whether the application supports multiple windows.
+      ///
+      /// On OHOS only the desktop form factor supports multiple windows.
+      #[cfg(target_env = "ohos")]
+      pub fn supports_multiple_windows(&self) -> bool {
+        cfg!(desktop)
+      }
+
+      /// Whether the application supports multiple windows.
       #[cfg(target_os = "android")]
       pub fn supports_multiple_windows(&self) -> bool {
         let runtime_handle = match self.runtime() {
@@ -1450,7 +1435,7 @@ impl<R: Runtime> App<R> {
         callback(&app_handle, event);
         app_handle.cleanup_before_exit();
         if self.manager.restart_on_exit.load(atomic::Ordering::Relaxed) {
-          do_restart(&self.env());
+          crate::process::restart(&self.env());
         }
       }
       _ => {
@@ -1517,7 +1502,7 @@ impl<R: Runtime> App<R> {
 #[allow(clippy::type_complexity)]
 pub struct Builder<R: Runtime> {
   /// A flag indicating that the runtime must be started on an environment that supports the event loop not on the main thread.
-  #[cfg(any(windows, target_os = "linux"))]
+  #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
   runtime_any_thread: bool,
 
   /// The JS message handler.
@@ -1609,17 +1594,13 @@ impl<R: Runtime> Builder<R> {
     let invoke_key = crate::generate_invoke_key().unwrap();
 
     Self {
-      #[cfg(any(windows, target_os = "linux"))]
+      #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
       runtime_any_thread: false,
       setup: Box::new(|_| Ok(())),
       invoke_handler: Box::new(|_| false),
       invoke_initialization_script: InvokeInitializationScript {
         process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
-        os_name: if cfg!(target_env = "ohos") {
-          "ohos"
-        } else {
-          std::env::consts::OS
-        },
+        os_name: crate::os_name(),
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
         invoke_key: &invoke_key.clone(),
       }
@@ -1654,8 +1635,12 @@ impl<R: Runtime> Builder<R> {
   /// ## Platform-specific
   ///
   /// - **macOS:** on macOS the application *must* be executed on the main thread, so this function is not exposed.
-  #[cfg(any(windows, target_os = "linux"))]
-  #[cfg_attr(docsrs, doc(cfg(any(windows, target_os = "linux"))))]
+  /// - **OpenHarmony:** the event loop must live on the ArkTS main thread, so this function is not exposed.
+  #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
+  #[cfg_attr(
+    docsrs,
+    doc(cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos"))))
+  )]
   #[must_use]
   pub fn any_thread(mut self) -> Self {
     self.runtime_any_thread = true;
@@ -2340,28 +2325,7 @@ tauri::Builder::default()
       },
 
       #[cfg(target_env = "ohos")]
-      app: {
-        let ohos_app = crate::ohos::APP
-          .lock()
-          .unwrap()
-          .clone()
-          .expect("OpenHarmony app instance not initialized");
-        crate::ohos::BASE_PATH.set(ohos_app.base_path()).ok();
-        crate::ohos::MODULE_NAME.set(ohos_app.module_name()).ok();
-        #[cfg(feature = "tray-icon")]
-        {
-          tray_icon::set_ohos_app(ohos_app.clone());
-        }
-        // Initialize vibrancy WindowClient (no feature gate — window-vibrancy is always a dep)
-        window_vibrancy::set_ohos_app(&ohos_app);
-        // Initialize runtime-wry WindowClient for OHOS window operations
-        // (gated like tray-icon above: tauri-runtime-wry is an optional dep behind
-        // the `wry` feature; consumers building tauri with default-features=false
-        // and no `wry` feature must still compile on OHOS)
-        #[cfg(feature = "wry")]
-        tauri_runtime_wry::set_ohos_window_client(&ohos_app);
-        ohos_app
-      },
+      app: crate::ohos::init(),
     };
 
     // The env var must be set before the Runtime is created so that GetAvailableBrowserVersionString picks it up.
@@ -2384,13 +2348,13 @@ tauri::Builder::default()
       }
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
     let mut runtime = if self.runtime_any_thread {
       R::new_any_thread(runtime_args)?
     } else {
       R::new(runtime_args)?
     };
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(all(any(windows, target_os = "linux"), not(target_env = "ohos"))))]
     let mut runtime = R::new(runtime_args)?;
 
     #[cfg(desktop)]
@@ -2690,19 +2654,9 @@ fn on_event_loop_event<R: Runtime>(
     _ => unimplemented!(),
   };
 
-  // OHOS: the plugin store lock can be held across an ArkTS bridge round-trip
-  // (which pumps the event loop); a blocking lock here would freeze the main
-  // thread, so try_lock and skip instead. Non-OHOS keeps the upstream blocking
-  // lock.
-  #[cfg(target_env = "ohos")]
-  if let Ok(mut store) = manager.plugins.try_lock() {
-    store.on_event(app_handle, &event);
-  } else {
-    // lock contended (e.g. during plugin register); skip on_event to avoid blocking the main
-    // thread. Log so a dropped event (e.g. a deep-link RunEvent::Opened) is traceable.
-    log::warn!("[tauri] plugin store lock busy, skipping on_event (appfreeze try_lock)");
-  }
-  #[cfg(not(target_env = "ohos"))]
+  // The plugins lock is never held across an ArkTS bridge round-trip (see
+  // plugin_boxed / initialize_plugins), so the event loop can take the
+  // blocking lock like upstream — plugin events are no longer dropped.
   manager
     .plugins
     .lock()

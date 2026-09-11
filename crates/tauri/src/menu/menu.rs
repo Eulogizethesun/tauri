@@ -16,6 +16,10 @@ use super::{
 use crate::run_main_thread;
 use crate::Window;
 use crate::{AppHandle, Manager, Position, Runtime};
+// The muda `ContextMenu` trait is only used by the non-OHOS popup arms below
+// (`hpopupmenu` on Windows, `show_context_menu_*` on macOS/Linux); OHOS calls
+// the inherent `popup` instead.
+#[cfg(not(target_env = "ohos"))]
 use muda::ContextMenu;
 use muda::MenuId;
 
@@ -116,6 +120,18 @@ impl<R: Runtime> Menu<R> {
   pub fn new<M: Manager<R>>(manager: &M) -> crate::Result<Self> {
     let handle = manager.app_handle();
     let app_handle = handle.clone();
+
+    // OHOS: subscribe to muda's menu-change notifications so every menu
+    // mutation (item text/enabled/checked/icon, add/remove/insert) refreshes
+    // the menubars through one coalesced callback — the individual menu APIs
+    // no longer refresh manually.
+    #[cfg(all(target_env = "ohos", desktop))]
+    {
+      let refresh_handle = app_handle.clone();
+      muda::set_on_menu_change(Some(move || {
+        super::auto_refresh_menubar(&refresh_handle)
+      }));
+    }
 
     let menu = run_main_thread!(handle, || {
       let menu = muda::Menu::new();
@@ -298,8 +314,6 @@ impl<R: Runtime> Menu<R> {
       (*self_.0).as_ref().append(kind.inner().inner_muda())
     })?
     .map_err(Into::<crate::Error>::into)?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
@@ -311,22 +325,10 @@ impl<R: Runtime> Menu<R> {
   ///
   /// [`Submenu`]: super::Submenu
   pub fn append_items(&self, items: &[&dyn IsMenuItem<R>]) -> crate::Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      for item in items {
-        let kind = item.kind();
-        (*self.0).as_ref().append(kind.inner().inner_muda())?;
-      }
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
+    for item in items {
+      self.append(*item)?
     }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      for item in items {
-        self.append(*item)?
-      }
-      Ok(())
-    }
+    Ok(())
   }
 
   /// Add a menu item to the beginning of this menu.
@@ -342,8 +344,6 @@ impl<R: Runtime> Menu<R> {
       (*self_.0).as_ref().prepend(kind.inner().inner_muda())
     })?
     .map_err(Into::<crate::Error>::into)?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
@@ -355,19 +355,7 @@ impl<R: Runtime> Menu<R> {
   ///
   /// [`Submenu`]: super::Submenu
   pub fn prepend_items(&self, items: &[&dyn IsMenuItem<R>]) -> crate::Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      for (i, item) in items.iter().enumerate() {
-        let kind = item.kind();
-        (*self.0).as_ref().insert(kind.inner().inner_muda(), i)?;
-      }
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      self.insert_items(items, 0)
-    }
+    self.insert_items(items, 0)
   }
 
   /// Insert a menu item at the specified `position` in the menu.
@@ -383,8 +371,6 @@ impl<R: Runtime> Menu<R> {
       .as_ref()
       .insert(kind.inner().inner_muda(), position))?
     .map_err(Into::<crate::Error>::into)?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
@@ -396,24 +382,10 @@ impl<R: Runtime> Menu<R> {
   ///
   /// [`Submenu`]: super::Submenu
   pub fn insert_items(&self, items: &[&dyn IsMenuItem<R>], position: usize) -> crate::Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      for (i, item) in items.iter().enumerate() {
-        let kind = item.kind();
-        (*self.0)
-          .as_ref()
-          .insert(kind.inner().inner_muda(), position + i)?;
-      }
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
+    for (i, item) in items.iter().enumerate() {
+      self.insert(*item, position + i)?
     }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      for (i, item) in items.iter().enumerate() {
-        self.insert(*item, position + i)?
-      }
-      Ok(())
-    }
+    Ok(())
   }
 
   /// Remove a menu item from this menu.
@@ -423,8 +395,6 @@ impl<R: Runtime> Menu<R> {
       (*self_.0).as_ref().remove(kind.inner().inner_muda())
     })?
     .map_err(Into::<crate::Error>::into)?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
@@ -436,8 +406,6 @@ impl<R: Runtime> Menu<R> {
         .remove_at(position)
         .map(|i| MenuItemKind::from_muda(self_.0.app_handle.clone(), i))
     })?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(result)
   }
 

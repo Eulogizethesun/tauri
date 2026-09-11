@@ -487,14 +487,28 @@ impl<R: Runtime> AppManager<R> {
       Err(_) => {
         // Plugin store lock contention -> offload to the tokio blocking pool;
         // the main thread returns immediately and the command is not lost.
+        // Clone what the mobile Channel fallback needs before `invoke` is
+        // moved into the task: when the plugin does not handle the command
+        // there, the fallback must still run or the JS promise hangs forever.
         let this = self.clone();
         let plugin_owned = plugin.to_owned();
+        let app_handle = invoke.message.webview.app_handle.clone();
+        let message = invoke.message.clone();
+        let resolver = invoke.resolver.clone();
         crate::async_runtime::spawn_blocking(move || {
-          this
+          let handled = this
             .plugins
             .lock()
             .expect("poisoned plugin store")
-            .extend_api(&plugin_owned, invoke)
+            .extend_api(&plugin_owned, invoke);
+          if !handled {
+            crate::plugin::mobile::run_mobile_channel_fallback(
+              &plugin_owned,
+              &app_handle,
+              message,
+              &resolver,
+            );
+          }
         });
         true
       }
@@ -510,6 +524,33 @@ impl<R: Runtime> AppManager<R> {
   }
 
   pub fn initialize_plugins(&self, app: &AppHandle<R>) -> crate::Result<()> {
+    // OHOS: a plugin's initialize may round-trip the ArkTS bridge, which pumps
+    // the event loop — the plugins lock must not be held across it, or the
+    // re-entrant on_event_loop_event / extend_api paths deadlock against it.
+    // Take the plugins out under a short lock, initialize each one outside,
+    // and re-register under a short lock (same discipline as plugin_boxed).
+    // Non-OHOS keeps the upstream in-lock initialization.
+    #[cfg(target_env = "ohos")]
+    {
+      let plugins = self
+        .plugins
+        .lock()
+        .expect("poisoned plugin store")
+        .take_all();
+      let mut result = Ok(());
+      for mut plugin in plugins {
+        if result.is_ok() {
+          result = crate::plugin::initialize(&mut plugin, app, &self.config.plugins);
+        }
+        self
+          .plugins
+          .lock()
+          .expect("poisoned plugin store")
+          .register(plugin);
+      }
+      result
+    }
+    #[cfg(not(target_env = "ohos"))]
     self
       .plugins
       .lock()

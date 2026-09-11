@@ -468,6 +468,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **iOS / Android:** Unsupported.
+  /// - **OHOS:** Unsupported — the working-area clamp is silently skipped.
   #[must_use]
   pub fn prevent_overflow(mut self) -> Self {
     self.window_builder = self.window_builder.prevent_overflow();
@@ -482,6 +483,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **iOS / Android:** Unsupported.
+  /// - **OHOS:** Unsupported — the working-area clamp is silently skipped.
   #[must_use]
   pub fn prevent_overflow_with_margin(mut self, margin: impl Into<Size>) -> Self {
     self.window_builder = self.window_builder.prevent_overflow_with_margin(margin);
@@ -1041,8 +1043,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// but you still need to add menu item accelerators to use shortcuts.
   ///
   /// **OHOS** is enabled by default (ArkWeb native clipboard shortcuts);
-  /// use [`Self::disable_clipboard_access`] to intercept keyboard
-  /// Ctrl+C/X/V/A/Z/Y.
+  /// use `disable_clipboard_access` to intercept keyboard Ctrl+C/X/V/A/Z/Y.
   #[must_use]
   pub fn enable_clipboard_access(mut self) -> Self {
     self.webview_builder = self.webview_builder.enable_clipboard_access();
@@ -1053,8 +1054,8 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///
   /// This is the default on **Linux** and **Windows**. On **OHOS** the default
   /// is enabled (ArkWeb native clipboard shortcuts); calling this intercepts
-  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview. See the
-  /// ohos-webview-flag-clipboard spec.
+  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview.
+  #[cfg(target_env = "ohos")]
   #[must_use]
   pub fn disable_clipboard_access(mut self) -> Self {
     self.webview_builder = self.webview_builder.disable_clipboard_access();
@@ -1727,7 +1728,9 @@ impl<R: Runtime> WebviewWindow<R> {
     self.window.show_menu()
   }
 
-  /// Shows the window menu.
+  /// Returns whether the window menu is visible.
+  ///
+  /// See [`Window::is_menu_visible`] for platform-specific behavior.
   pub fn is_menu_visible(&self) -> crate::Result<bool> {
     self.window.is_menu_visible()
   }

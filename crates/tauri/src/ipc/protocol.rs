@@ -37,9 +37,6 @@ pub fn message_handler<R: Runtime>(
 
 pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler {
   Box::new(move |label, request, responder| {
-    #[cfg(target_env = "ohos")]
-    log::info!("[IPC] request: label={:?}, method={}, uri={}", label, request.method(), request.uri());
-
     #[cfg(feature = "tracing")]
     let span = tracing::trace_span!(
       "ipc::request",

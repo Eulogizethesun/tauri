@@ -12,7 +12,6 @@ pub mod openharmony_ability {
   pub use ::openharmony_ability::OpenHarmonyApp;
   pub use ::openharmony_ability::get_main_thread_env;
   pub use ::openharmony_ability::version;
-  pub use ::openharmony_ability::menu;
 }
 
 pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(None);
@@ -46,6 +45,35 @@ pub type RunCommandTsfn =
 pub static RUN_COMMAND_TSFN: OnceLock<RunCommandTsfn> = OnceLock::new();
 
 pub static RUN_COMMAND_QUEUE: Mutex<VecDeque<RunCommandArgs>> = Mutex::new(VecDeque::new());
+
+/// Initializes the OHOS runtime singletons from the global [`APP`] instance
+/// and returns the app handle.
+///
+/// Called once by `Builder::build` before the runtime is created. Panics when
+/// the app instance is missing — `mobile_entry_point!` must run first to
+/// install it.
+pub fn init() -> openharmony_ability::OpenHarmonyApp {
+  let ohos_app = APP
+    .lock()
+    .unwrap()
+    .clone()
+    .expect("OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build");
+  BASE_PATH.set(ohos_app.base_path()).ok();
+  MODULE_NAME.set(ohos_app.module_name()).ok();
+  #[cfg(feature = "tray-icon")]
+  {
+    tray_icon::set_ohos_app(ohos_app.clone());
+  }
+  // Initialize vibrancy WindowClient (no feature gate — window-vibrancy is always a dep).
+  window_vibrancy::set_ohos_app(&ohos_app);
+  // Initialize runtime-wry's OHOS bridge plugins for window/webview/url
+  // operations (gated like tray-icon above: tauri-runtime-wry is an optional
+  // dep behind the `wry` feature; consumers building tauri with
+  // default-features=false and no `wry` feature must still compile on OHOS).
+  #[cfg(feature = "wry")]
+  tauri_runtime_wry::set_ohos_app(&ohos_app);
+  ohos_app
+}
 
 pub fn dispatch_run_command(args: RunCommandArgs) {
   RUN_COMMAND_QUEUE

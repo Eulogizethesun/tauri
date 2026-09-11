@@ -85,18 +85,24 @@ specta = { version = "^2.0.0-rc.16", optional = true, default-features = false, 
 cookie = "0.18"
 
 # desktop (exclude ohos)
+# Registry-style requirements + workspace-level [patch.crates-io] redirect to
+# the local forks (same pattern as window-vibrancy below), so this section
+# stays byte-comparable with upstream.
 [target.'cfg(all(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "windows", target_os = "macos"), not(target_env = "ohos")))'.dependencies]
-muda = { path = "../../../muda", default-features = false, features = [
+muda = { version = "0.19", default-features = false, features = [
   "serde",
   "gtk",
 ] }
-tray-icon = { path = "../../../tray-icon", default-features = false, features = [
+tray-icon = { version = "0.24", default-features = false, features = [
   "serde",
 ], optional = true }
 
 # linux
 [target.'cfg(all(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"), not(target_env = "ohos")))'.dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
+# Exact pin: keeps the workspace on the webkit2gtk 2.0.x (gtk3 / webkit2gtk-4.1)
+# line that matches the gtk "0.18" v3_24 requirement — a future 2.x minor has
+# not been validated against this tree.
 webkit2gtk = { version = "=2.0", features = ["v2_40"], optional = true }
 
 # darwin
@@ -155,18 +161,23 @@ rustls = { version = "0.23", default-features = false, features = [
 # [patch.crates-io] to ../window-vibrancy. Registry-style requirement so the
 # dep source stays canonical across targets (macos/windows keep upstream "0.6").
 window-vibrancy = "0.7"
-muda = { path = "../../../muda", default-features = false, features = [
+# Same registry-style + [patch.crates-io] redirect as window-vibrancy above:
+# the desktop section declares muda/tray-icon with upstream-shaped version
+# requirements, and the OHOS section redirects the local fork here.
+muda = { version = "0.19", default-features = false, features = [
   "serde",
 ] }
-tray-icon = { path = "../../../tray-icon", default-features = false, features = [
+tray-icon = { version = "0.24", default-features = false, features = [
   "serde",
 ], optional = true }
-openharmony-ability = { path = "../../../openharmony-ability/crates/ability", features = ["menu"] }
+openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }
 openharmony-ability-derive = { path = "../../../openharmony-ability/crates/derive" }
 openharmony-ability-plugin-menu = { path = "../../../openharmony-ability/crates/plugin-menu" }
 napi-ohos = "1"
 napi-derive-ohos = "1"
 futures-executor = "0.3"
+# Strict-mode base64 for JsImage::DataUri (replaced a hand-written decoder).
+base64 = "0.22"
 
 # android
 [target.'cfg(target_os = "android")'.dependencies]

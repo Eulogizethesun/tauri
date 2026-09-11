@@ -53,10 +53,6 @@
   html_favicon_url = "https://github.com/tauri-apps/tauri/raw/dev/.github/icon.png"
 )]
 #![warn(missing_docs, rust_2018_idioms)]
-#![cfg_attr(
-  target_env = "ohos",
-  allow(unused_imports, unused_macros, unused_variables, dead_code)
-)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Setups the binding that initializes an iOS plugin.
@@ -1128,7 +1124,25 @@ macro_rules! run_main_thread {
 #[allow(unused)]
 pub(crate) use run_main_thread;
 
-#[cfg(all(any(test, feature = "test"), not(target_env = "ohos")))]
+/// The OS name injected into the JS initialization-script templates
+/// (`ipc-protocol.js`, `core.js`, `drag.js`, `toggle-devtools.js`,
+/// `zoom-hotkey.js`).
+///
+/// OHOS reports `linux` through `std::env::consts::OS`, but the templates
+/// check for the `ohos` name explicitly — `ipc-protocol.js` disables the
+/// custom-protocol IPC path for it — so the injection uses `ohos` instead.
+/// The remaining template checks (`windows`, `android`, `macos`) fall through
+/// to their generic branches for both names, so the value only matters where
+/// an `ohos` check exists.
+pub(crate) fn os_name() -> &'static str {
+  if cfg!(target_env = "ohos") {
+    "ohos"
+  } else {
+    std::env::consts::OS
+  }
+}
+
+#[cfg(any(test, feature = "test"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test")))]
 pub mod test;
 

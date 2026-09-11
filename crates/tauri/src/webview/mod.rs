@@ -22,8 +22,12 @@ pub use tauri_runtime::webview::{NewWindowFeatures, PageLoadEvent, ScrollBarStyl
 // Remove this re-export in v3
 pub use tauri_runtime::Cookie;
 #[cfg(desktop)]
+use tauri_runtime::dpi::{PhysicalPosition, PhysicalSize};
+// `WebviewBuilder::build` compiles for `any(desktop, test)` (the manager unit
+// tests exercise it through the mock runtime), so these imports follow suit.
+#[cfg(any(desktop, test))]
 use tauri_runtime::{
-  dpi::{PhysicalPosition, PhysicalSize, Position, Size},
+  dpi::{Position, Size},
   WindowDispatch,
 };
 use tauri_runtime::{
@@ -788,7 +792,7 @@ tauri::Builder::default()
   }
 
   /// Creates a new webview on the given window.
-  #[cfg(desktop)]
+  #[cfg(any(desktop, test))]
   pub(crate) fn build(
     self,
     window: Window<R>,
@@ -991,8 +995,7 @@ fn main() {
   /// but you still need to add menu item accelerators to use shortcuts.
   ///
   /// **OHOS** is enabled by default (ArkWeb native clipboard shortcuts);
-  /// use [`Self::disable_clipboard_access`] to intercept keyboard
-  /// Ctrl+C/X/V/A/Z/Y.
+  /// use `disable_clipboard_access` to intercept keyboard Ctrl+C/X/V/A/Z/Y.
   #[must_use]
   pub fn enable_clipboard_access(mut self) -> Self {
     self.webview_attributes.clipboard = true;
@@ -1003,8 +1006,8 @@ fn main() {
   ///
   /// This is the default on **Linux** and **Windows**. On **OHOS** the default
   /// is enabled (ArkWeb native clipboard shortcuts); calling this intercepts
-  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview. See the
-  /// ohos-webview-flag-clipboard spec.
+  /// keyboard Ctrl+C/X/V/A/Z/Y so they never reach the webview.
+  #[cfg(target_env = "ohos")]
   #[must_use]
   pub fn disable_clipboard_access(mut self) -> Self {
     self.webview_attributes.clipboard = false;
@@ -1899,41 +1902,16 @@ tauri::Builder::default()
       let mut handled = manager.extend_api(plugin, invoke);
 
       #[cfg(any(mobile, target_env = "ohos"))]
-      {
-        if !handled {
-          handled = true;
+      if !handled {
+        handled = true;
 
-          fn load_channels<R: Runtime>(payload: &serde_json::Value, webview: &Webview<R>) {
-            use std::str::FromStr;
-
-            if let serde_json::Value::Object(map) = payload {
-              for v in map.values() {
-                if let serde_json::Value::String(s) = v {
-                  let _ = crate::ipc::JavaScriptChannelId::from_str(s)
-                    .map(|id| id.channel_on::<R, ()>(webview.clone()));
-                }
-              }
-            }
-          }
-
-          let payload = message.payload.into_json();
-          // initialize channels
-          load_channels(&payload, &message.webview);
-
-          let resolver_ = resolver.clone();
-          if let Err(e) = crate::plugin::mobile::run_command(
-            plugin,
-            &app_handle,
-            heck::AsLowerCamelCase(message.command).to_string(),
-            payload,
-            move |response| match response {
-              Ok(r) => resolver_.resolve(r),
-              Err(e) => resolver_.reject(e),
-            },
-          ) {
-            resolver.reject(e.to_string());
-            return;
-          }
+        if !crate::plugin::mobile::run_mobile_channel_fallback(
+          plugin,
+          &app_handle,
+          message,
+          &resolver,
+        ) {
+          return;
         }
       }
 

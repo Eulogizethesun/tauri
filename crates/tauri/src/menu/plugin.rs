@@ -678,8 +678,6 @@ async fn popup<R: Runtime>(
   window: Option<String>,
   at: Option<Position>,
 ) -> crate::Result<()> {
-  #[cfg(target_env = "ohos")]
-  log::debug!("[Menu] popup command called: rid={rid}, at={at:?}");
   let window = window
     .map(|w| webview.manager().get_window(&w))
     .unwrap_or(Some(current_window));
@@ -721,21 +719,14 @@ async fn popup<R: Runtime>(
     match kind {
       ItemKind::Menu => {
         let menu = resources_table.get::<Menu<R>>(rid)?;
-        #[cfg(target_env = "ohos")]
-        log::debug!("[Menu] calling menu.popup_inner");
         menu.popup_inner(window, at)?;
       }
       ItemKind::Submenu => {
         let submenu = resources_table.get::<Submenu<R>>(rid)?;
-        #[cfg(target_env = "ohos")]
-        log::debug!("[Menu] calling submenu.popup_inner");
         submenu.popup_inner(window, at)?;
       }
       _ => return Err(anyhow::anyhow!("unexpected menu item kind").into()),
     };
-  } else {
-    #[cfg(target_env = "ohos")]
-    log::debug!("[Menu] popup: window is None!");
   }
 
   Ok(())
@@ -935,16 +926,6 @@ fn set_icon<R: Runtime>(
 struct MenuChannels(Mutex<HashMap<MenuId, Channel<MenuId>>>);
 
 pub(crate) fn init<R: Runtime>() -> TauriPlugin<R> {
-  #[cfg(target_env = "ohos")]
-  {
-    // Legacy popup/menu forwarder replaced by the MenuBridgePlugin facade.
-    // Menu operations (set-menubar, popup, set-menubar-visible, execute-predefined)
-    // now route through MenuClient (openharmony-ability-plugin-menu) which calls
-    // the ArkTS MenuPlugin directly via the typed bridge.
-    // Menu click events flow back through MenuBridgePlugin::on_main_thread_event
-    // → MENU_EVENT_SENDER, which muda registers via register_menu_event_sender().
-  }
-
   #[allow(unused_mut)]
   let mut builder = Builder::new("menu")
     .setup(|app, _api| {

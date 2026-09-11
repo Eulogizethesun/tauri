@@ -16,10 +16,9 @@ use crate::{
 use crate::{ResourceId, UnsafeSend};
 use serde::Serialize;
 use std::path::Path;
-#[cfg(not(target_env = "ohos"))]
-pub use tray_icon::TrayIconId;
 #[cfg(target_env = "ohos")]
-pub use tray_icon::{QuickOperationConfig, TrayIconId};
+pub use tray_icon::QuickOperationConfig;
+pub use tray_icon::TrayIconId;
 
 /// Describes the mouse button state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Serialize)]
@@ -350,13 +349,12 @@ impl<R: Runtime> TrayIconBuilder<R> {
     self
   }
 
-  /// Set QuickOperation for left-click popup. **OHOS only**.
+  /// Set QuickOperation for left-click popup. **OHOS only** — this method does
+  /// not exist on other platforms.
   ///
   /// On OHOS, configures the system popup panel shown when the user left-clicks
   /// the tray icon. The popup is rendered by a `StatusBarViewExtensionAbility`
   /// that the application registers in `module.json5`.
-  ///
-  /// On other platforms, this is silently ignored.
   #[cfg(target_env = "ohos")]
   pub fn quick_operation(mut self, config: QuickOperationConfig) -> Self {
     self.inner = self.inner.with_quick_operation(config);
@@ -396,9 +394,45 @@ impl<R: Runtime> TrayIconBuilder<R> {
   ) -> crate::Result<(TrayIcon<R>, ResourceId)> {
     let id = self.id().clone();
 
+    // OHOS allows a single status-bar tray per ability: the tray-icon backend
+    // rejects a second *visible* tray ("only one statusbar tray per ability").
+    // Tauri's cross-platform API still lets apps create several TrayIcons
+    // (they coexist on Windows/macOS), so map that contract onto the OHOS
+    // reality at this layer: hide every tray this manager knows about before
+    // adding the new one. The previous trays keep their objects (and can be
+    // made visible again later); exactly one is registered with the system at
+    // any time. set_visible(false) also works when other handles keep the
+    // previous tray alive, which plain removal would not.
+    #[cfg(target_env = "ohos")]
+    for existing_id in app_handle.manager.tray.tray_ids() {
+      if let Some(existing) = app_handle.manager.tray.tray_by_id(app_handle, &existing_id) {
+        let _ = existing.set_visible(false);
+      }
+    }
+
+    // OHOS: tray-icon's own QuickOperation defaults are deliberately neutral
+    // (empty title falls back to the app name on the ArkTS side, `None`
+    // module uses the system default). Tauri apps know better — the product
+    // name for the panel title and the `entry` module where the templates
+    // register abilities — so layer those Tauri-specific defaults here unless
+    // the app configured a panel itself.
+    #[cfg(target_env = "ohos")]
+    let mut inner = self.inner;
+    #[cfg(target_env = "ohos")]
+    if inner.quick_operation_config().is_none() {
+      inner = inner.with_quick_operation(QuickOperationConfig {
+        title: app_handle.package_info().name.clone(),
+        module_name: Some("entry".to_string()),
+        ..Default::default()
+      });
+    }
+
     // SAFETY:
     // the menu within this builder was created on main thread
     // and will be accessed on the main thread
+    #[cfg(target_env = "ohos")]
+    let unsafe_builder = UnsafeSend(inner);
+    #[cfg(not(target_env = "ohos"))]
     let unsafe_builder = UnsafeSend(self.inner);
 
     #[cfg(target_env = "ohos")]
@@ -647,17 +681,13 @@ impl<R: Runtime> TrayIcon<R> {
     Ok(())
   }
 
-  /// Set QuickOperation for left-click popup. **OHOS only**.
+  /// Set QuickOperation for left-click popup. **OHOS only** — this method does
+  /// not exist on other platforms.
   ///
   /// On OHOS, configures the system popup panel shown when the user left-clicks
   /// the tray icon. Pass `None` to disable the popup (left-click will only fire events).
-  ///
-  /// On other platforms, this is silently ignored.
   #[cfg(target_env = "ohos")]
-  pub fn set_quick_operation(
-    &self,
-    config: Option<QuickOperationConfig>,
-  ) -> crate::Result<()> {
+  pub fn set_quick_operation(&self, config: Option<QuickOperationConfig>) -> crate::Result<()> {
     self.inner.set_quick_operation(config);
     Ok(())
   }

@@ -423,8 +423,6 @@ impl<R: Runtime> PredefinedMenuItem<R> {
   pub fn set_text<S: AsRef<str>>(&self, text: S) -> crate::Result<()> {
     let text = text.as_ref().to_string();
     run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_text(text))?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 

@@ -7,7 +7,7 @@
 pub(crate) mod plugin;
 
 #[cfg(target_env = "ohos")]
-use tauri_runtime::OHOSWindowKind;
+use crate::ohos::OHOSWindowKind;
 use tauri_runtime::{
   dpi::{PhysicalPosition, PhysicalRect, PhysicalSize},
   webview::PendingWebview,
@@ -56,51 +56,12 @@ use std::{
 
 /// Obtains a `MenuClient` from the global OHOS app singleton.
 /// Returns `None` if the app is not yet initialized.
-#[cfg(target_env = "ohos")]
+#[cfg(all(target_env = "ohos", desktop))]
 fn ohos_menu_client() -> Option<openharmony_ability_plugin_menu::MenuClient> {
   use openharmony_ability_plugin_menu::MenuExt;
   let guard = crate::ohos::APP.lock().ok()?;
   let app = guard.as_ref()?;
   app.menu().ok()
-}
-
-/// Dispatches a menu visibility update through muda's dedicated OHOS worker so
-/// that all menu operations (set_menu, remove_menu, show/hide) share one FIFO
-/// queue. Previously this used `async_runtime::spawn` (tokio) while
-/// `refresh_menubar` used muda's worker — two executors with no FIFO guarantee
-/// meant the empty "remove_menu" dispatch could land 1ms after the real data,
-/// clearing the Menu Bar. Routing both through muda's worker ensures the empty
-/// dispatch (called first in `remove_menu`) always precedes the real data.
-#[cfg(target_env = "ohos")]
-fn ohos_menu_set_visible(visible: bool, window_id: String) {
-  use openharmony_ability_plugin_menu::MenuExt;
-  muda::dispatch_menu_bridge_call(move || {
-    if let Some(client) = ohos_menu_client() {
-      futures_executor::block_on(async move {
-        let _ = client
-          .set_menubar_visible(openharmony_ability_plugin_menu::MenuSetVisibleRequest {
-            visible,
-            window_id,
-          })
-          .await;
-      });
-    }
-  });
-}
-
-/// Dispatches a menu JSON update through muda's dedicated OHOS worker (same
-/// rationale as `ohos_menu_set_visible`): serialise all menu dispatches through
-/// the single FIFO queue so real data always becomes the final state.
-#[cfg(target_env = "ohos")]
-fn ohos_menu_set_json(json_data: String, window_id: String) {
-  use openharmony_ability_plugin_menu::MenuExt;
-  muda::dispatch_menu_bridge_call(move || {
-    if let Some(client) = ohos_menu_client() {
-      futures_executor::block_on(async move {
-        let _ = client.set_menu_json(json_data, window_id).await;
-      });
-    }
-  });
 }
 
 /// Monitor descriptor.
@@ -182,8 +143,6 @@ unstable_struct!(
     created_by_activity_name_set: bool,
     #[cfg(target_os = "ios")]
     requested_by_scene_identifier_set: bool,
-    #[cfg(target_env = "ohos")]
-    ohos_window_kind: Option<OHOSWindowKind>,
   }
 );
 
@@ -274,8 +233,6 @@ async fn create_window(app: tauri::AppHandle) {
       created_by_activity_name_set: false,
       #[cfg(target_os = "ios")]
       requested_by_scene_identifier_set: false,
-      #[cfg(target_env = "ohos")]
-      ohos_window_kind: None,
     }
   }
 
@@ -315,8 +272,6 @@ async fn reopen_window(app: tauri::AppHandle) {
       created_by_activity_name_set: config.created_by_activity_name.is_some(),
       #[cfg(target_os = "ios")]
       requested_by_scene_identifier_set: config.requested_by_scene_identifier.is_some(),
-      #[cfg(target_env = "ohos")]
-      ohos_window_kind: None,
       manager,
       label: config.label.clone(),
       window_effects: config.window_effects.clone(),
@@ -437,11 +392,6 @@ tauri::Builder::default()
       }
     }
 
-    #[cfg(target_env = "ohos")]
-    if let Some(kind) = self.ohos_window_kind {
-      self.window_builder = self.window_builder.ohos_window_kind(kind);
-    }
-
     let mut pending = PendingWindow::new(self.window_builder, self.label)?;
     if let Some(webview) = webview {
       pending.set_webview(webview);
@@ -527,7 +477,7 @@ tauri::Builder::default()
         .inner()
         .refresh_menubar(window.label())
         .ok();
-      ohos_menu_set_visible(true, window.label().to_string());
+      muda::set_menubar_visible(true, window.label());
     }
 
     Ok(window)
@@ -560,6 +510,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **iOS / Android:** Unsupported.
+  /// - **OHOS:** Unsupported — the working-area clamp is silently skipped.
   #[must_use]
   pub fn prevent_overflow(mut self) -> Self {
     self.window_builder = self.window_builder.prevent_overflow();
@@ -574,6 +525,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **iOS / Android:** Unsupported.
+  /// - **OHOS:** Unsupported — the working-area clamp is silently skipped.
   #[must_use]
   pub fn prevent_overflow_with_margin(mut self, margin: impl Into<Size>) -> Self {
     self.window_builder = self
@@ -717,6 +669,10 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   ///     - An owned window is hidden when its owner is minimized.
   /// - **Linux**: This makes the new window transient for parent, see <https://docs.gtk.org/gtk3/method.Window.set_transient_for.html>
   /// - **macOS**: This adds the window as a child of parent, see <https://developer.apple.com/documentation/appkit/nswindow/1419152-addchildwindow?language=objc>
+  /// - **OpenHarmony**: Currently ignored — no owner/transient/child relation is applied.
+  // On OHOS none of the platform branches below apply, so `mut self` and
+  // `parent` are unused there.
+  #[cfg_attr(target_env = "ohos", allow(unused_mut, unused_variables))]
   pub fn parent(mut self, parent: &Window<R>) -> crate::Result<Self> {
     #[cfg(windows)]
     {
@@ -1053,7 +1009,7 @@ impl<R: Runtime, M: Manager<R>> WindowBuilder<'_, R, M> {
   ///
   /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
   pub fn ohos_window_kind(mut self, kind: OHOSWindowKind) -> Self {
-    self.ohos_window_kind = Some(kind);
+    self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
   }
 }
@@ -1385,37 +1341,43 @@ tauri::Builder::default()
     #[cfg(target_env = "ohos")]
     {
       menu.inner().refresh_menubar(self.label()).ok();
-      ohos_menu_set_visible(true, self.label().to_string());
+      muda::set_menubar_visible(true, self.label());
     }
 
-    let window = self.clone();
-    let menu_ = menu.clone();
-    self.run_on_main_thread(move || {
-      #[cfg(windows)]
-      if let Ok(hwnd) = window.hwnd() {
-        let theme = window
-          .theme()
-          .map(crate::menu::map_to_menu_theme)
-          .unwrap_or(muda::MenuTheme::Auto);
+    // OHOS: the Win32/GTK per-window menubar init does not apply — the
+    // menubar is already driven through the OHOS menu bridge in the block
+    // above, so the main-thread hop is skipped entirely.
+    #[cfg(not(target_env = "ohos"))]
+    {
+      let window = self.clone();
+      let menu_ = menu.clone();
+      self.run_on_main_thread(move || {
+        #[cfg(windows)]
+        if let Ok(hwnd) = window.hwnd() {
+          let theme = window
+            .theme()
+            .map(crate::menu::map_to_menu_theme)
+            .unwrap_or(muda::MenuTheme::Auto);
 
-        let _ = unsafe { menu_.inner().init_for_hwnd_with_theme(hwnd.0 as _, theme) };
-      }
-      #[cfg(all(
-        any(
-          target_os = "linux",
-          target_os = "dragonfly",
-          target_os = "freebsd",
-          target_os = "netbsd",
-          target_os = "openbsd"
-        ),
-        not(target_env = "ohos")
-      ))]
-      if let (Ok(gtk_window), Ok(gtk_box)) = (window.gtk_window(), window.default_vbox()) {
-        let _ = menu_
-          .inner()
-          .init_for_gtk_window(&gtk_window, Some(&gtk_box));
-      }
-    })?;
+          let _ = unsafe { menu_.inner().init_for_hwnd_with_theme(hwnd.0 as _, theme) };
+        }
+        #[cfg(all(
+          any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+          ),
+          not(target_env = "ohos")
+        ))]
+        if let (Ok(gtk_window), Ok(gtk_box)) = (window.gtk_window(), window.default_vbox()) {
+          let _ = menu_
+            .inner()
+            .init_for_gtk_window(&gtk_window, Some(&gtk_box));
+        }
+      })?;
+    }
 
     self.menu_lock().replace(WindowMenu {
       is_app_wide: false,
@@ -1436,11 +1398,14 @@ tauri::Builder::default()
 
     #[cfg(target_env = "ohos")]
     if let Some(_menu) = &prev_menu {
-      ohos_menu_set_visible(false, self.label().to_string());
-      ohos_menu_set_json("[]".to_string(), self.label().to_string());
+      muda::set_menubar_visible(false, self.label());
+      muda::set_menu_json("[]", self.label());
     }
 
     // remove from the window
+    // OHOS: same as `set_menu` — the bridge already received the empty JSON
+    // above, and the Win32/GTK removal does not apply.
+    #[cfg(not(target_env = "ohos"))]
     #[cfg_attr(target_os = "macos", allow(unused_variables))]
     if let Some(menu) = &prev_menu {
       let window = self.clone();
@@ -1477,7 +1442,7 @@ tauri::Builder::default()
   pub fn hide_menu(&self) -> crate::Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      ohos_menu_set_visible(false, self.label().to_string());
+      muda::set_menubar_visible(false, self.label());
       return Ok(());
     }
 
@@ -1518,7 +1483,7 @@ tauri::Builder::default()
       if let Some(window_menu) = &*self.menu_lock() {
         window_menu.menu.inner().refresh_menubar(self.label()).ok();
       }
-      ohos_menu_set_visible(true, self.label().to_string());
+      muda::set_menubar_visible(true, self.label());
       return Ok(());
     }
 
@@ -1552,14 +1517,22 @@ tauri::Builder::default()
     Ok(())
   }
 
-  /// Shows the window menu.
+  /// Returns whether the window menu is visible.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **OHOS:** The visibility is read synchronously from the menu bridge,
+  ///   while `hide_menu`/`show_menu` apply their change asynchronously through
+  ///   muda's menu worker queue — so a read immediately after a hide/show may
+  ///   briefly return the previous state (eventual consistency).
   pub fn is_menu_visible(&self) -> crate::Result<bool> {
     #[cfg(target_env = "ohos")]
     {
       if let Some(client) = ohos_menu_client() {
         return Ok(client.is_menubar_visible(self.label()));
       }
-      return Ok(true);
+      // Upstream semantics: no window menu -> not visible.
+      return Ok(false);
     }
 
     #[cfg(not(target_env = "ohos"))]

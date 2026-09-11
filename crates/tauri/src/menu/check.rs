@@ -98,12 +98,17 @@ impl<R: Runtime> CheckMenuItem<R> {
     run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().text())
   }
 
-  /// Set the text for this check menu item.
+  /// Set the text for this menu item. `text` could optionally contain
+  /// an `&` before a character to assign this character as the mnemonic
+  /// for this menu item. To display a `&` without assigning a mnemenonic, use `&&`.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony**: `&` mnemonics are not supported; the `&` characters are
+  ///   silently removed from the displayed text.
   pub fn set_text<S: AsRef<str>>(&self, text: S) -> crate::Result<()> {
     let text = text.as_ref().to_string();
     run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_text(text))?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
@@ -115,29 +120,16 @@ impl<R: Runtime> CheckMenuItem<R> {
   /// Set whether this check menu item is enabled.
   pub fn set_enabled(&self, enabled: bool) -> crate::Result<()> {
     run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_enabled(enabled))?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 
   /// Set the accelerator for this check menu item.
   pub fn set_accelerator<S: AsRef<str>>(&self, accelerator: Option<S>) -> crate::Result<()> {
     let accel = accelerator.and_then(|s| s.as_ref().parse().ok());
-    // Behavior-divergent: OHOS discards the muda Result + refreshes menubar;
-    // non-OHOS propagates the muda Result via .map_err. Left paired.
-    #[cfg(target_env = "ohos")]
-    {
-      let _ = (*self.0).as_ref().set_accelerator(accel);
-      super::auto_refresh_menubar(&self.0.app_handle);
-      Ok(())
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-      run_item_main_thread!(self, |self_: Self| {
-        (*self_.0).as_ref().set_accelerator(accel)
-      })?
-      .map_err(Into::into)
-    }
+    run_item_main_thread!(self, |self_: Self| {
+      (*self_.0).as_ref().set_accelerator(accel)
+    })?
+    .map_err(Into::into)
   }
 
   /// Get whether this check menu item is checked.
@@ -148,8 +140,6 @@ impl<R: Runtime> CheckMenuItem<R> {
   /// Set whether this check menu item is checked.
   pub fn set_checked(&self, checked: bool) -> crate::Result<()> {
     run_item_main_thread!(self, |self_: Self| (*self_.0).as_ref().set_checked(checked))?;
-    #[cfg(target_env = "ohos")]
-    super::auto_refresh_menubar(&self.0.app_handle);
     Ok(())
   }
 }
