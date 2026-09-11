@@ -48,12 +48,10 @@ export const coreTests: TestCase[] = [
         const info = await invoke<{
           sdkApiVersion: number;
           distributionApiVersion: number;
-          canIUseWindowManager: boolean;
         }>('get_ohos_version_info');
-        console.log(`[OHOS Version] sdk_api=${info.sdkApiVersion}, distribution_api=${info.distributionApiVersion}, canIUse(WindowManager)=${info.canIUseWindowManager}`);
+        console.log(`[OHOS Version] sdk_api=${info.sdkApiVersion}, distribution_api=${info.distributionApiVersion}`);
         assert(info.sdkApiVersion >= 12, `sdkApiVersion should be >= 12, got ${info.sdkApiVersion}`);
         assert(info.distributionApiVersion > 0, `distributionApiVersion should be > 0, got ${info.distributionApiVersion}`);
-        assert(typeof info.canIUseWindowManager === 'boolean', 'canIUse should return boolean');
       } catch {
         // Not on OHOS — command doesn't exist, skip silently
       }
@@ -1434,6 +1432,30 @@ export const coreTests: TestCase[] = [
       assert(
         Array.isArray(report.cookies_for_url),
         `cookies_for_url should return array, got: ${report.cookies_for_url}`
+      );
+    },
+  },
+
+  // 4.5 cookies_for_url on the MAIN thread (issue #110): sync commands execute
+  // on the OHOS main thread, so this read goes through the
+  // ohos.webview-cookie sync bridge (fetchCookieSync) — the path that used to
+  // silently return empty.
+  {
+    name: 'webview.cookies_for_url main-thread sync bridge (OHOS #110)',
+    category: 'side-effect',
+    timeout: 15000,
+    async fn() {
+      await invoke('cookie_test_main_thread_set');
+      // set_cookie is fire-and-forget on OHOS — let the async set settle.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const report = await invoke<any>('cookie_test_main_thread_read');
+      assert(
+        report.test_cookie_found === true,
+        `main-thread cookie not found; cookies_for_url=${JSON.stringify(report.cookies_for_url)}`
+      );
+      assert(
+        Array.isArray(report.cookies_all),
+        `main-thread cookies() should return array, got: ${report.cookies_all}`
       );
     },
   },

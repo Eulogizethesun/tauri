@@ -81,10 +81,43 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 pub fn restart(env: &Env) -> ! {
   #[cfg(target_env = "ohos")]
   {
-    // The legacy TSFN-based restart helper was removed during decoupling;
-    // exiting the process triggers the OHOS ability lifecycle restart via the OS.
+    use openharmony_ability_plugin_app_control::AppControlExt;
+
     let _ = env;
-    std::process::exit(0);
+    // OHOS restart uses the official `ApplicationContext.restartApp` (API 12+)
+    // through the app-control MainThreadSync bridge: it kills all of the app's
+    // processes and relaunches the current UIAbility. A bare
+    // `std::process::exit` does NOT relaunch — verified on device, the OS keeps
+    // the process dead — so it is only the failure fallback.
+    let restart_error: Option<String> = (|| -> Result<(), String> {
+      let app_guard = crate::ohos::APP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      let app = app_guard
+        .as_ref()
+        .ok_or_else(|| "OpenHarmonyApp not initialized".to_string())?;
+      let env_cell = crate::ohos::openharmony_ability::get_main_thread_env();
+      let env_ref = env_cell.borrow();
+      let env = env_ref
+        .as_ref()
+        .ok_or_else(|| "main thread N-API Env not available".to_string())?;
+      app
+        .restart(env)
+        .map_err(|e| format!("restartApp bridge call failed: {e}"))
+    })()
+    .err();
+
+    if let Some(e) = restart_error {
+      log::error!("[tauri] OHOS restartApp failed: {e} — falling back to process exit");
+      std::process::exit(0);
+    }
+
+    // restartApp accepted: the ability runtime is killing and relaunching this
+    // process. Never return — let the runtime perform the teardown (a racing
+    // local exit could interfere with the restart handshake).
+    loop {
+      std::thread::sleep(std::time::Duration::MAX);
+    }
   }
 
   #[cfg(not(target_env = "ohos"))]

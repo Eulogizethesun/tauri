@@ -252,4 +252,18 @@ export const windowOpsTests: TestCase[] = [
       await smoke(() => win.setFocus(), 'setFocus');
     },
   },
+  // Content protection (issue Eulogizethesun/tauri#115): on OHOS this reaches
+  // OH_WindowManager_SetWindowPrivacyMode — the window is excluded from
+  // screenshot/recording/casting. Invoked via a demo command because
+  // @tauri-apps/api/window has no setContentProtection. The visual effect
+  // (screenshot of the window turns black) is verified manually.
+  {
+    name: 'window.setContentProtection (demo cmd)',
+    category: 'auto',
+    async fn() {
+      await invoke('set_content_protection', { enabled: true });
+      await new Promise((r) => setTimeout(r, 300));
+      await invoke('set_content_protection', { enabled: false });
+    },
+  },
 ];

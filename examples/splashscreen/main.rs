@@ -19,8 +19,11 @@ fn close_splashscreen(app: AppHandle) {
 }
 
 fn main() {
-  tauri::Builder::default()
-    .menu(tauri::menu::Menu::default)
+  let builder = tauri::Builder::default();
+  // The app-wide menu is desktop-only (mobile form factors have no menubar).
+  #[cfg(desktop)]
+  let builder = builder.menu(tauri::menu::Menu::default);
+  builder
     .invoke_handler(tauri::generate_handler![close_splashscreen])
     .run(tauri::generate_context!(
       "../../examples/splashscreen/tauri.conf.json"
