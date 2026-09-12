@@ -648,11 +648,40 @@ export const pluginTests: TestCase[] = [
     },
   },
 
-  // @tauri-apps/plugin-updater
-  // check() removed: requires AppGallery update source (dev env can't test)
-  // downloadAndInstall is manual — triggers a system dialog on OHOS
+  // @tauri-apps/plugin-updater (OpenHarmony: AppGallery-backed update APIs)
+  // The desktop updater APIs (check/downloadAndInstall) are not registered on
+  // OpenHarmony - updates are handled by AppGallery. On non-OHOS platforms the
+  // AG commands are rejected by the ACL ("Command not found") and get skipped.
   {
-    name: '@tauri-apps/plugin-updater.downloadAndInstall',
+    name: '@tauri-apps/plugin-updater.checkAppGalleryUpdate',
+    category: 'auto',
+    async fn() {
+      const { checkAppGalleryUpdate } = await import('@tauri-apps/plugin-updater');
+      try {
+        const update = await checkAppGalleryUpdate();
+        // null = no update available (typical in dev: the app is not
+        // distributed via AppGallery, the ArkTS side degrades to "no update")
+        if (update !== null) {
+          assert(update.available === true, `expected available=true when non-null, got ${JSON.stringify(update)}`);
+          assert(
+            typeof update.currentVersion === 'string' && update.currentVersion.length > 0,
+            `currentVersion should be a non-empty string, got ${JSON.stringify(update.currentVersion)}`
+          );
+          assert(
+            update.version === null || typeof update.version === 'string',
+            `version should be a string or null, got ${JSON.stringify(update.version)}`
+          );
+        }
+      } catch (e) {
+        if (isMissing(e)) skip(`updater AppGallery API not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+  {
+    // Opens the AppGallery system update dialog - user-driven, requires human
+    // interaction; the promise resolving does not mean the update was installed.
+    name: '@tauri-apps/plugin-updater.showAppGalleryUpdateDialog',
     category: 'manual',
     async fn() {},
   },
