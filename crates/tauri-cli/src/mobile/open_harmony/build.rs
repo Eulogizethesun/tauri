@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: MIT
 
 use super::{
-  active_entry_module, delete_codegen_vars, ensure_init, env, get_app, get_config, inject_resources,
-  log_finished, open_and_wait, plugins, signing::OhosSigningConfig, MobileTarget, OptionsHandle,
+  active_entry_module, delete_codegen_vars, ensure_init, env, get_app, get_config,
+  inject_resources, log_finished, open_and_wait, plugins, signing::OhosSigningConfig, MobileTarget,
+  OptionsHandle,
 };
 use crate::{
   build::Options as BuildOptions,
   helpers::{
-    app_paths::{resolve_tauri_dir, Dirs},
+    app_paths::Dirs,
     config::{get_config as get_tauri_config, ConfigMetadata},
     flock,
   },
@@ -26,12 +27,9 @@ use cargo_mobile2::{
   target::TargetTrait,
 };
 
-
 use std::collections::HashMap;
 use std::env::{set_current_dir, set_var};
 use std::ffi::OsString;
-
-use std::path::Path;
 
 #[derive(Debug, Clone, Parser)]
 #[clap(
@@ -70,7 +68,7 @@ pub struct Options {
   #[clap(long, env = "CI")]
   pub ci: bool,
   /// Device type to build for (mobile or desktop)
-  #[clap(long, default_value = "mobile", value_parser(["mobile", "desktop"]))]
+  #[clap(long, env = "OHOS_DEVICE_TYPE", default_value = "mobile", value_parser(["mobile", "desktop"]))]
   pub device_type: String,
   /// Build the multi-entry `.app` (AppGallery unified package) for every device
   /// form in `bundle.openHarmony.deviceTypes`, instead of a single-form HAP.
@@ -141,12 +139,25 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
   )?;
   let (interface, config, metadata) = {
     let interface = AppInterface::new(&tauri_config, build_options.target.clone(), dirs.tauri)?;
-    interface.build_options(&mut Vec::new(), &mut build_options.features, true);
+    // Explicit form of the android flow's
+    // `interface.build_options(&mut args, &mut features, true)`: only the
+    // `tauri/custom-protocol` feature applies here — the `--lib` cargo arg is
+    // not used because `Target::compile_lib` builds through `ohrs`, not a raw
+    // cargo invocation.
+    build_options.features.push("tauri/custom-protocol".into());
 
-    let app = get_app(MobileTarget::OpenHarmony, &tauri_config, &interface, dirs.tauri);
+    let app = get_app(
+      MobileTarget::OpenHarmony,
+      &tauri_config,
+      &interface,
+      dirs.tauri,
+    );
 
     let mut vars = HashMap::new();
-    vars.insert("OHOS_DEVICE_TYPE".into(), OsString::from(&options.device_type));
+    vars.insert(
+      "OHOS_DEVICE_TYPE".into(),
+      OsString::from(&options.device_type),
+    );
     let cli_options = CliOptions {
       vars,
       ..Default::default()
@@ -167,18 +178,17 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
     Profile::Release
   };
 
-  let tauri_path = resolve_tauri_dir().unwrap();
-  set_current_dir(tauri_path).with_context(|| "failed to change current working directory")?;
+  set_current_dir(dirs.tauri).with_context(|| "failed to change current working directory")?;
 
   ensure_init(
     &tauri_config,
     config.app(),
     config.project_dir(),
     MobileTarget::OpenHarmony,
-    false
+    options.ci,
   )?;
 
-  let plugin_metadata = inject_plugins(&dirs.tauri, &config.project_dir())?;
+  let plugin_metadata = plugins::inject_plugins(&dirs.tauri, &config.project_dir())?;
 
   let mut env = env()?;
 
@@ -195,14 +205,16 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
       );
     }
     // Compile the `.so` for each active form (sets cfg(mobile)/cfg(desktop)),
-    // inject icons + plugin deps into each entry module. OHOS_DEVICE_TYPE drives
-    // compile_lib's `--dist` (entry_{form}/libs) and the injectors' target entry.
+    // inject icons + resources + plugin deps into each entry module.
+    // OHOS_DEVICE_TYPE drives compile_lib's `--dist` (entry_{form}/libs) and
+    // the injectors' target entry.
     for form in &active_forms {
       set_var("OHOS_DEVICE_TYPE", form);
       first_target
         .build(&config, &metadata, &env, noise_level, true, profile)
         .context("failed to build OpenHarmony app")?;
       super::inject_icons(&config, &tauri_config, dirs.tauri)?;
+      inject_resources(&config, &tauri_config, form)?;
       if !plugin_metadata.is_empty() {
         plugins::update_entry_package(&config.project_dir(), &plugin_metadata)?;
       }
@@ -225,14 +237,7 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
       )
       .context("failed to align entry continuation gating")?;
     }
-    run_app(
-      &config,
-      &mut env,
-      noise_level,
-      profile,
-      &tauri_config,
-      &active_forms,
-    )?;
+    run_app(&config, &mut env, noise_level, profile, &active_forms)?;
   } else {
     // run an initial build to initialize plugins
     first_target
@@ -262,20 +267,17 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
 
 /// Package the multi-entry `.app` via `hvigorw assembleApp`. Assumes `command`
 /// has already done the per-form setup for every active form: compiled the
-/// `.so` into `entry_{form}/libs`, injected icons + plugin deps, and rewritten
-/// each entry's `module.json5` deviceTypes. This fn only activates all entry
-/// modules in build-profile, skips the tauriPlugin, then signs + logs.
-#[allow(clippy::too_many_arguments)]
+/// `.so` into `entry_{form}/libs`, injected icons + resources + plugin deps,
+/// and rewritten each entry's `module.json5` deviceTypes. This fn only
+/// activates all entry modules in build-profile, skips the tauriPlugin, then
+/// signs + logs.
 fn run_app(
   config: &OpenHarmonyConfig,
   env: &mut Env,
   noise_level: NoiseLevel,
   profile: Profile,
-  tauri_config: &ConfigMetadata,
   active_forms: &[&str],
 ) -> Result<()> {
-  inject_resources(config, tauri_config)?;
-
   let entries: Vec<String> = active_forms.iter().map(|f| format!("entry_{f}")).collect();
   let entries_ref: Vec<&str> = entries.iter().map(|s| s.as_str()).collect();
   plugins::write_build_profile_modules(&config.project_dir(), &entries_ref)
@@ -329,7 +331,7 @@ fn run_build(
   };
   let handle = write_options(&tauri_config, cli_options)?;
 
-  inject_resources(config, &tauri_config)?;
+  inject_resources(config, &tauri_config, &options.device_type)?;
   super::inject_icons(config, &tauri_config, dirs.tauri)?;
 
   // Activate only the entry module for the requested device form so hvigor
@@ -397,55 +399,6 @@ fn run_build(
   log_finished(hap_outputs, "HAP");
 
   Ok(handle)
-}
-
-pub(crate) fn inject_plugins(
-  tauri_dir: &Path,
-  project_dir: &Path,
-) -> Result<Vec<plugins::PluginMeta>> {
-  log::info!("Starting OpenHarmony dynamic plugin injection");
-
-  let detected_plugins =
-    plugins::detect_all_plugins(tauri_dir).context("Plugin detection failed")?;
-
-  if detected_plugins.is_empty() {
-    log::info!("No OpenHarmony-compatible plugins detected, continuing build");
-    return Ok(vec![]);
-  }
-
-  log::info!(
-    "Detected {} OpenHarmony plugins: {:?}",
-    detected_plugins.len(),
-    detected_plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
-  );
-
-  let metadata: Vec<plugins::PluginMeta> = detected_plugins
-    .iter()
-    .map(|d| plugins::parse_plugin_meta(&d.har_path, &d.name))
-    .collect::<Result<Vec<_>>>()
-    .context("Plugin metadata parsing failed")?;
-
-  for plugin in &metadata {
-    plugins::validate_plugin_meta(plugin)
-      .context(format!("Invalid metadata for plugin '{}'", plugin.name))?;
-  }
-
-  for plugin in &metadata {
-    plugins::copy_plugin_har(plugin, project_dir)
-      .context(format!("Failed to copy plugin '{}' HAR", plugin.name))?;
-  }
-
-  plugins::update_plugin_configs(project_dir, &metadata)
-    .context("Failed to update plugin configurations")?;
-
-  plugins::validate_plugin_configs(project_dir, &metadata)
-    .context("Plugin configuration validation failed")?;
-
-  log::info!(
-    "Build completed successfully with {} plugins",
-    metadata.len()
-  );
-  Ok(metadata)
 }
 
 /// Sign HAP / `.app` artifacts if OHOS signing environment variables are

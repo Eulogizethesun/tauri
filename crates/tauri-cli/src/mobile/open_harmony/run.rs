@@ -2,9 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+use cargo_mobile2::open_harmony::env::Env;
 use clap::{ArgAction, Parser};
+use std::path::PathBuf;
 
-use crate::{error::Context, ConfigValue, Result};
+use crate::{
+  error::Context,
+  helpers::config::ConfigMetadata,
+  interface::{DevProcess, WatcherOptions},
+  mobile::DevChild,
+  ConfigValue, Result,
+};
 
 #[derive(Debug, Clone, Parser)]
 #[clap(
@@ -28,6 +36,12 @@ pub struct Options {
   /// but you can use this for more specific use cases such as different build flavors.
   #[clap(short, long)]
   pub config: Vec<ConfigValue>,
+  /// Disable the file watcher
+  #[clap(long)]
+  pub no_watch: bool,
+  /// Additional paths to watch for changes.
+  #[clap(long)]
+  pub additional_watch_folders: Vec<PathBuf>,
   /// Open DevEco Studio instead of running on a connected device
   #[clap(short, long)]
   pub open: bool,
@@ -42,7 +56,7 @@ pub struct Options {
   #[clap(long)]
   pub ignore_version_mismatches: bool,
   /// Device type to build for (mobile or desktop)
-  #[clap(long, default_value = "mobile", value_parser(["mobile", "desktop"]))]
+  #[clap(long, env = "OHOS_DEVICE_TYPE", default_value = "mobile", value_parser(["mobile", "desktop"]))]
   pub device_type: String,
 }
 
@@ -61,21 +75,59 @@ pub fn command(options: Options, noise_level: cargo_mobile2::opts::NoiseLevel) -
     ignore_version_mismatches: options.ignore_version_mismatches,
   };
 
-  super::build::command(build_options, noise_level)?;
+  super::build::command(build_options.clone(), noise_level)?;
 
   // If --open, build command already opened DevEco Studio
   if options.open {
     return Ok(());
   }
 
-  // Step 2: Install + launch + stream logs
-  install_launch_and_log(&options)?;
+  // Step 2: Install + launch, mirroring the android `run` flow: without
+  // --no-watch, keep watching for changes and rebuild + reinstall + relaunch
+  // on every change.
+  let dirs = crate::helpers::app_paths::resolve_dirs();
+  let mut tauri_config = crate::helpers::config::get_config(
+    tauri_utils::platform::Target::OpenHarmony,
+    &options
+      .config
+      .iter()
+      .map(|conf| &conf.0)
+      .collect::<Vec<_>>(),
+    dirs.tauri,
+  )?;
+
+  // The initial build already ran above; only re-runs triggered by the file
+  // watcher need to go through the full build command again.
+  let no_watch = options.no_watch;
+  let first_run = std::cell::Cell::new(true);
+  let watch_options = WatcherOptions {
+    config: options.config.clone(),
+    additional_watch_folders: options.additional_watch_folders.clone(),
+  };
+  let runner = move |_tauri_config: &ConfigMetadata| {
+    if first_run.get() {
+      first_run.set(false);
+    } else {
+      super::build::command(build_options.clone(), noise_level)?;
+    }
+    install_launch_and_log(&options)
+  };
+
+  if no_watch {
+    runner(&tauri_config)?;
+  } else {
+    let mut interface = crate::interface::AppInterface::new(&tauri_config, None, dirs.tauri)?;
+    interface.watch(&mut tauri_config, watch_options, runner, &dirs)?;
+  }
 
   Ok(())
 }
 
-/// Detect device, install the signed HAP, and launch the app.
-fn install_launch_and_log(options: &Options) -> Result<()> {
+/// Detect device, install the signed HAP, launch the app, and start streaming
+/// the app's hilog output. The returned process is what the file watcher in
+/// `command` kills and replaces between rebuilds (android `run` parity: the
+/// runner streams logcat).
+fn install_launch_and_log(options: &Options) -> Result<Box<dyn DevProcess + Send>> {
   use super::{device_prompt, env};
   use cargo_mobile2::open_harmony::{hap, hdc};
 
@@ -97,8 +149,7 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
     dirs.tauri,
   )?;
 
-  let interface =
-    crate::interface::AppInterface::new(&tauri_config, None, dirs.tauri)?;
+  let interface = crate::interface::AppInterface::new(&tauri_config, None, dirs.tauri)?;
   let app = super::get_app(
     super::MobileTarget::OpenHarmony,
     &tauri_config,
@@ -249,13 +300,47 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
     if !stderr.is_empty() {
       log::error!("hdc stderr:\n{stderr}");
     }
-    log::warn!("Failed to launch app on device");
-    return Ok(());
+    crate::error::bail!("Failed to launch app on device");
   }
 
   log::info!("App launched successfully");
 
-  Ok(())
+  // Stream the app's hilog output so `run` behaves like the dev flow (and the
+  // android `run` logcat stream). The watcher kills and restarts this process
+  // around each rebuild. A duct expression inherits our stdio by default, so
+  // the stream lands on the user's terminal without any capture calls.
+  let pid = wait_for_app_pid(&env, &device_id, &bundle_name);
+  let mut hilog = hdc::hdc(&env, ["-t", &device_id, "shell", "hilog"]);
+  if !pid.is_empty() {
+    hilog = hilog.before_spawn(move |cmd| {
+      cmd.args(["--pid", &pid]);
+      Ok(())
+    });
+  }
+  let hilog = hilog.start().context("failed to start hilog stream")?;
+  Ok(Box::new(DevChild::new(hilog)))
+}
+
+/// Polls `pidof` for the launched app so the hilog stream can be filtered to
+/// this app only. The app may take a moment to register, so retry briefly;
+/// returns an empty string (unfiltered stream) if it never shows up.
+fn wait_for_app_pid(env: &Env, device_id: &str, bundle_name: &str) -> String {
+  use cargo_mobile2::open_harmony::hdc;
+
+  for _ in 0..10 {
+    if let Ok(out) = hdc::hdc(env, ["-t", device_id, "shell", "pidof", "-s", bundle_name])
+      .stdout_capture()
+      .stderr_capture()
+      .read()
+    {
+      let pid = out.trim().to_string();
+      if !pid.is_empty() {
+        return pid;
+      }
+    }
+    std::thread::sleep(std::time::Duration::from_secs(1));
+  }
+  String::new()
 }
 
 /// Detects whether an `hdc install` actually failed.
@@ -270,13 +355,6 @@ fn install_launch_and_log(options: &Options) -> Result<()> {
 fn hdc_install_failed(stdout: &str, stderr: &str) -> bool {
   let out = stdout.to_lowercase();
   let err = stderr.to_lowercase();
-  const MARKERS: &[&str] = &[
-    "[fail]",
-    "failure",
-    "failed",
-    "error opening file",
-  ];
-  MARKERS
-    .iter()
-    .any(|m| out.contains(m) || err.contains(m))
+  const MARKERS: &[&str] = &["[fail]", "failure", "failed", "error opening file"];
+  MARKERS.iter().any(|m| out.contains(m) || err.contains(m))
 }

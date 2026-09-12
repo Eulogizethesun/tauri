@@ -44,12 +44,6 @@
             "resource": "$profile:backup_config"
           }
         ]
-      },
-      {
-        "name": "TestTrayAbility",
-        "srcEntry": "./ets/testtrayability/TestTrayAbility.ets",
-        "type": "statusBarView",
-        "exported": true
       }
     ],
     "requestPermissions": [
@@ -58,7 +52,7 @@
       },
       {
         "name": "ohos.permission.SET_WINDOW_TRANSPARENT"
-      },
+      }{{#if (eq form "desktop")}},
       {
         "name": "ohos.permission.WINDOW_TOPMOST"
       },
@@ -72,7 +66,7 @@
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
-      }
+      }{{/if}}
     ]
   }
 }

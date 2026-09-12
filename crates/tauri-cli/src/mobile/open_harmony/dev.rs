@@ -9,7 +9,6 @@ use super::{
 use crate::{
   dev::Options as DevOptions,
   helpers::{
-    app_paths::resolve_tauri_dir,
     config::{get_config as get_tauri_config, ConfigMetadata},
     flock,
   },
@@ -21,6 +20,7 @@ use crate::{
   ConfigValue, Result,
 };
 use clap::{ArgAction, Parser};
+use url::Host;
 
 use crate::error::Context;
 use cargo_mobile2::{
@@ -35,7 +35,7 @@ use cargo_mobile2::{
 };
 
 use crate::helpers::app_paths::Dirs;
-use std::{env::set_current_dir, path::PathBuf};
+use std::{env::set_current_dir, net::Ipv4Addr, path::PathBuf};
 
 #[derive(Debug, Clone, Parser)]
 #[clap(
@@ -109,7 +109,7 @@ pub struct Options {
   #[clap(long, env = "TAURI_DEV_ROOT_CERTIFICATE_PATH")]
   pub root_certificate_path: Option<PathBuf>,
   /// Device type to build for (mobile or desktop)
-  #[clap(long, default_value = "mobile", value_parser(["mobile", "desktop"]))]
+  #[clap(long, env = "OHOS_DEVICE_TYPE", default_value = "mobile", value_parser(["mobile", "desktop"]))]
   pub device_type: String,
 }
 
@@ -202,8 +202,7 @@ fn run_command(options: Options, noise_level: NoiseLevel, dirs: Dirs) -> Result<
     (interface, config, metadata)
   };
 
-  let tauri_path = resolve_tauri_dir().unwrap();
-  set_current_dir(tauri_path).with_context(|| "failed to change current working directory")?;
+  set_current_dir(dirs.tauri).with_context(|| "failed to change current working directory")?;
 
   ensure_init(
     &tauri_config,
@@ -213,7 +212,7 @@ fn run_command(options: Options, noise_level: NoiseLevel, dirs: Dirs) -> Result<
     false,
   )?;
 
-  let plugin_metadata = inject_plugins_for_dev(&dirs.tauri, &config.project_dir())?;
+  let plugin_metadata = plugins::inject_plugins(&dirs.tauri, &config.project_dir())?;
 
   run_dev(
     interface,
@@ -244,12 +243,17 @@ fn run_dev(
   dirs: &Dirs,
   plugin_metadata: Vec<plugins::PluginMeta>,
 ) -> Result<()> {
-  // when running on an actual device we must use the network IP
+  // when --host is provided or running on a physical device or resolving 0.0.0.0 we must use the network IP
   if options.host.0.is_some()
     || device
       .as_ref()
       .map(|device| !device.model().starts_with("emulator"))
       .unwrap_or(false)
+    || tauri_config
+      .build
+      .dev_url
+      .as_ref()
+      .is_some_and(|url| matches!(url.host(), Some(Host::Ipv4(i)) if i == Ipv4Addr::UNSPECIFIED))
   {
     use_network_address_for_dev_url(
       &mut tauri_config,
@@ -293,6 +297,9 @@ fn run_dev(
     .context("failed to build OpenHarmony app")?;
 
   let open = options.open;
+  // The watch callback's `options` param (MobileOptions) has no device form —
+  // capture it here so resource injection can target the active entry.
+  let device_type = options.device_type.clone();
   interface.mobile_dev(
     &mut tauri_config,
     MobileOptions {
@@ -319,7 +326,7 @@ fn run_dev(
 
       let _handle = write_options(tauri_config, cli_options)?;
 
-      inject_resources(config, tauri_config)?;
+      inject_resources(config, tauri_config, &device_type)?;
       super::inject_icons(config, tauri_config, dirs.tauri)?;
 
       // Activate only the entry module for the current device form so hvigor
@@ -375,53 +382,4 @@ fn run(
     .run(config, env, noise_level, profile)
     .map(DevChild::new)
     .context("failed to run OpenHarmony app")
-}
-
-fn inject_plugins_for_dev(
-  tauri_dir: &std::path::Path,
-  project_dir: &std::path::Path,
-) -> crate::Result<Vec<plugins::PluginMeta>> {
-  log::info!("Starting OpenHarmony dynamic plugin injection for dev");
-
-  let detected_plugins =
-    plugins::detect_all_plugins(tauri_dir).context("Plugin detection failed")?;
-
-  if detected_plugins.is_empty() {
-    log::info!("No OpenHarmony-compatible plugins detected, continuing dev");
-    return Ok(vec![]);
-  }
-
-  log::info!(
-    "Detected {} OpenHarmony plugins: {:?}",
-    detected_plugins.len(),
-    detected_plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
-  );
-
-  let metadata: Vec<plugins::PluginMeta> = detected_plugins
-    .iter()
-    .map(|d| plugins::parse_plugin_meta(&d.har_path, &d.name))
-    .collect::<crate::Result<Vec<_>>>()
-    .context("Plugin metadata parsing failed")?;
-
-  for plugin in &metadata {
-    plugins::validate_plugin_meta(plugin)
-      .context(format!("Invalid metadata for plugin '{}'", plugin.name))?;
-  }
-
-  for plugin in &metadata {
-    plugins::copy_plugin_har(plugin, project_dir)
-      .context(format!("Failed to copy plugin '{}' HAR", plugin.name))?;
-  }
-
-  plugins::update_plugin_configs(project_dir, &metadata)
-    .context("Failed to update plugin configurations")?;
-
-  plugins::validate_plugin_configs(project_dir, &metadata)
-    .context("Plugin configuration validation failed")?;
-
-  log::info!(
-    "Dev plugin injection completed with {} plugins",
-    metadata.len()
-  );
-  Ok(metadata)
 }

@@ -5,7 +5,7 @@
 use serde::Deserialize;
 
 use cargo_mobile2::{
-  config::app::{App, DEFAULT_ASSET_DIR},
+  config::app::App,
   open_harmony::{
     config::{
       Config as OpenHarmonyConfig, Metadata as OpenHarmonyMetadata, Raw as RawOpenHarmonyConfig,
@@ -140,23 +140,6 @@ pub fn get_config(
     open_harmony_options.features.extend_from_slice(features);
   }
 
-  let mut cargo_args: Vec<String> = Vec::new();
-  let mut skip_next = false;
-  for arg in &open_harmony_options.args {
-    if skip_next {
-      skip_next = false;
-      continue;
-    }
-    if arg == "--device-type" {
-      skip_next = true;
-      continue;
-    }
-    if arg.starts_with("--device-type=") {
-      continue;
-    }
-    cargo_args.push(arg.clone());
-  }
-
   let raw = RawOpenHarmonyConfig {
     features: Some(open_harmony_options.features.clone()),
     logcat_filter_specs: vec![
@@ -177,7 +160,7 @@ pub fn get_config(
 
   let metadata = OpenHarmonyMetadata {
     supported: true,
-    cargo_args: Some(cargo_args),
+    cargo_args: Some(open_harmony_options.args),
     features: Some(open_harmony_options.features),
     ..Default::default()
   };
@@ -330,7 +313,9 @@ fn detect_target_ok<'a>(env: &Env) -> Option<&'a Target<'a>> {
 
 fn open_and_wait(config: &OpenHarmonyConfig, env: &Env) -> ! {
   log::info!("Opening DevEco Studio");
-  if let Err(e) = os::open_file_with("DevEco-Studio", config.project_dir(), &env.base) {
+  // "DevEco Studio" (with a space) is the actual application name — on macOS
+  // `open -a` only accepts the real app name.
+  if let Err(e) = os::open_file_with("DevEco Studio", config.project_dir(), &env.base) {
     log::error!("{e}");
   }
   loop {
@@ -351,10 +336,7 @@ pub fn active_entry_module() -> String {
 /// The conf `deviceTypes` list for the given form. With the per-form config
 /// schema (`{ mobile: [...], desktop: [...]] }`), this is a direct lookup — no
 /// intersection with a hardcoded device-class set.
-pub fn device_types_for_form(
-  device_types: &OpenHarmonyDeviceTypes,
-  form: &str,
-) -> Vec<String> {
+pub fn device_types_for_form(device_types: &OpenHarmonyDeviceTypes, form: &str) -> Vec<String> {
   match form {
     "mobile" => device_types.mobile.clone(),
     "desktop" => device_types.desktop.clone(),
@@ -376,17 +358,30 @@ pub fn forms_for_device_types(device_types: &OpenHarmonyDeviceTypes) -> Vec<&'st
   forms
 }
 
-fn inject_resources(config: &OpenHarmonyConfig, tauri_config: &TauriConfig) -> Result<()> {
-  let asset_dir = config.project_dir().join(DEFAULT_ASSET_DIR);
-  create_dir_all(&asset_dir).fs_context("failed to create asset directory", asset_dir.clone())?;
+/// Copy `tauri.conf.json` and the configured `bundle.resources` into the
+/// `entry_{form}` module's `src/main/resources/rawfile/` directory — the only
+/// app-writable location besides `AppScope/resources` that the HAP actually
+/// packages (a top-level `assets/` dir would be silently dropped). At runtime
+/// the files are reachable through the resource manager's rawfile APIs.
+fn inject_resources(
+  config: &OpenHarmonyConfig,
+  tauri_config: &TauriConfig,
+  form: &str,
+) -> Result<()> {
+  let rawfile_dir = config
+    .project_dir()
+    .join(format!("entry_{form}/src/main/resources/rawfile"));
+
+  create_dir_all(&rawfile_dir)
+    .fs_context("failed to create rawfile directory", rawfile_dir.clone())?;
 
   write(
-    asset_dir.join("tauri.conf.json"),
+    rawfile_dir.join("tauri.conf.json"),
     serde_json::to_string(&tauri_config).with_context(|| "failed to serialize tauri config")?,
   )
   .fs_context(
     "failed to write tauri config",
-    asset_dir.join("tauri.conf.json"),
+    rawfile_dir.join("tauri.conf.json"),
   )?;
 
   let resources = match &tauri_config.bundle.resources {
@@ -397,7 +392,7 @@ fn inject_resources(config: &OpenHarmonyConfig, tauri_config: &TauriConfig) -> R
   if let Some(resources) = resources {
     for resource in resources.iter() {
       let resource = resource.context("failed to get resource")?;
-      let dest = asset_dir.join(resource.target());
+      let dest = rawfile_dir.join(resource.target());
       crate::helpers::fs::copy_file(resource.path(), dest)?;
     }
   }
@@ -421,8 +416,10 @@ fn inject_icons(
   // via `active_entry_module()`, which reads the env var the CLI set for the
   // requested form. For `--app`, the per-form loop in `command` re-sets the env
   // and calls this once per form so both entries get icons.
-  let entry_media_dir = project_dir
-    .join(format!("{}/src/main/resources/base/media", active_entry_module()));
+  let entry_media_dir = project_dir.join(format!(
+    "{}/src/main/resources/base/media",
+    active_entry_module()
+  ));
 
   let mut foreground_path: Option<PathBuf> = None;
   let mut background_path: Option<PathBuf> = None;
@@ -434,8 +431,9 @@ fn inject_icons(
       continue;
     };
     let stem_lower = stem.to_lowercase();
-    let is_ohos_icon =
-      stem_lower.ends_with("-starticon") || stem_lower.ends_with("-foreground") || stem_lower.ends_with("-background");
+    let is_ohos_icon = stem_lower.ends_with("-starticon")
+      || stem_lower.ends_with("-foreground")
+      || stem_lower.ends_with("-background");
     if !is_ohos_icon {
       continue;
     }
@@ -473,14 +471,18 @@ fn inject_icons(
   };
 
   // Copy to AppScope media
-  create_dir_all(&app_media_dir)
-    .fs_context("failed to create AppScope media directory", app_media_dir.clone())?;
+  create_dir_all(&app_media_dir).fs_context(
+    "failed to create AppScope media directory",
+    app_media_dir.clone(),
+  )?;
   crate::helpers::fs::copy_file(fg, app_media_dir.join("foreground.png"))?;
   crate::helpers::fs::copy_file(bg, app_media_dir.join("background.png"))?;
 
   // Copy to entry media
-  create_dir_all(&entry_media_dir)
-    .fs_context("failed to create entry media directory", entry_media_dir.clone())?;
+  create_dir_all(&entry_media_dir).fs_context(
+    "failed to create entry media directory",
+    entry_media_dir.clone(),
+  )?;
   crate::helpers::fs::copy_file(fg, entry_media_dir.join("foreground.png"))?;
   crate::helpers::fs::copy_file(bg, entry_media_dir.join("background.png"))?;
 

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+  collections::HashSet,
+  path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use tauri_utils::{config::AndroidIntentAction, write_if_changed};
@@ -196,6 +199,99 @@ dependencies {
 
   println!("cargo:rerun-if-changed={}", gradle_settings_path.display());
   println!("cargo:rerun-if-changed={}", app_build_gradle_path.display());
+
+  Ok(())
+}
+
+/// Paths inside the generated `tauri` module that belong to hvigor/ohpm
+/// tooling rather than the `@tauri/app` sources — never touched (and in
+/// particular never pruned) by [`sync_ohos_tauri_module`].
+const OHOS_MODULE_TOOLING_PATHS: &[&str] = &[
+  "build",
+  "oh_modules",
+  ".cxx",
+  ".preview",
+  "BuildProfile.ets",
+  "oh-package-lock.json5",
+];
+
+fn is_ohos_module_tooling_path(rel_path: &Path) -> bool {
+  let rel = rel_path.to_string_lossy().replace('\\', "/");
+  OHOS_MODULE_TOOLING_PATHS
+    .iter()
+    .any(|owned| rel == *owned || rel.starts_with(&format!("{owned}/")))
+}
+
+/// Sync the `@tauri/app` runtime HAR sources into the generated OpenHarmony
+/// project (`gen/ohos/tauri`).
+///
+/// The single source of truth is `crates/tauri/mobile/ohos`, which the
+/// `tauri` crate exposes to downstream build scripts through cargo metadata
+/// (`DEP_TAURI_OHOS_LIBRARY_PATH`). The app template deliberately ships no
+/// copy of the module, so it is materialized here on every Rust build —
+/// which always precedes the hvigor HAP/HAR packaging — keeping the
+/// generated module in sync with the tauri sources without a second
+/// hand-maintained copy (the drift this replaces is documented in
+/// Eulogizethesun/tauri#83).
+///
+/// Files are only rewritten when their contents change and stale source files
+/// are pruned, so hvigor's incremental builds stay intact. Tooling outputs
+/// (`build/`, `BuildProfile.ets`, …) are left untouched.
+pub fn sync_ohos_tauri_module(project_dir: PathBuf) -> Result<()> {
+  let source = std::env::var_os("DEP_TAURI_OHOS_LIBRARY_PATH")
+    .map(PathBuf::from)
+    .context(
+      "missing `DEP_TAURI_OHOS_LIBRARY_PATH` environment variable. Make sure `tauri` is a dependency of the app.",
+    )?;
+  println!("cargo:rerun-if-env-changed=DEP_TAURI_OHOS_LIBRARY_PATH");
+  println!("cargo:rerun-if-changed={}", source.display());
+
+  let target = project_dir.join("tauri");
+
+  for entry in walkdir::WalkDir::new(&source) {
+    let entry = entry.context("failed to walk the tauri OHOS library sources")?;
+    let rel_path = entry
+      .path()
+      .strip_prefix(&source)
+      .with_context(|| format!("failed to relativize {}", entry.path().display()))?;
+    let dest = target.join(rel_path);
+    if entry.file_type().is_dir() {
+      std::fs::create_dir_all(&dest)
+        .with_context(|| format!("failed to create {}", dest.display()))?;
+    } else {
+      let contents = std::fs::read(entry.path())
+        .with_context(|| format!("failed to read {}", entry.path().display()))?;
+      write_if_changed(&dest, contents)
+        .with_context(|| format!("failed to write {}", dest.display()))?;
+    }
+  }
+
+  // Prune files that no longer exist in the source so the module stays an
+  // exact mirror of `crates/tauri/mobile/ohos`; anything owned by the
+  // hvigor/ohpm tooling is skipped. A walk error here can only race with the
+  // tooling deleting its own outputs, which is precisely the outcome anyway.
+  if target.exists() {
+    for entry in walkdir::WalkDir::new(&target).into_iter() {
+      let entry = match entry {
+        Ok(entry) => entry,
+        Err(_) => continue,
+      };
+      let rel_path = match entry.path().strip_prefix(&target) {
+        Ok(rel) => rel,
+        Err(_) => continue,
+      };
+      if rel_path.as_os_str().is_empty()
+        || is_ohos_module_tooling_path(rel_path)
+        || !entry.file_type().is_file()
+      {
+        continue;
+      }
+      if !source.join(rel_path).exists() {
+        std::fs::remove_file(entry.path())
+          .with_context(|| format!("failed to remove {}", entry.path().display()))?;
+      }
+    }
+  }
 
   Ok(())
 }

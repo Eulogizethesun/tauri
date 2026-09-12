@@ -2,8 +2,10 @@
   "module": {
     "name": "tauri",
     "type": "har",
-    "deviceTypes": ["phone", "tablet", "2in1"],
-    "deliveryWithInstall": true,
-    "installationFree": false
+    "deviceTypes": [
+      "default",
+      "tablet",
+      "2in1"
+    ]
   }
 }
