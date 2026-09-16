@@ -172,6 +172,16 @@ pub fn set_ohos_app(app: &openharmony_ability::OpenHarmonyApp) {
   if let Err(e) = app.register_plugin(openharmony_ability_plugin_url::UrlBridgePlugin) {
     log::error!("[WRY] failed to register UrlBridgePlugin: {}", e);
   }
+  // Register the Rust-side app-control bridge plugin (id="ohos.app-control"). tao's
+  // OHOS loop teardown dispatches terminate (terminateSelf) through it via
+  // AppControlExt. The ArkTS
+  // counterpart (AppControlPlugin) is already in EntryAbility's bridgePlugins
+  // list, but without this Rust-side declaration configurePlugins never installs
+  // it and every terminate/restart call fails with "not installed". Symmetric
+  // with the Webview/Window/Url registrations above.
+  if let Err(e) = app.register_plugin(openharmony_ability_plugin_app_control::AppControlBridgePlugin) {
+    log::error!("[WRY] failed to register AppControlBridgePlugin: {}", e);
+  }
   // Set up the synchronous webview-cookie bridge (ohos.webview-cookie): main-
   // thread cookies_for_url calls (setup closures, sync command handlers) fetch
   // through ArkTS fetchCookieSync instead of silently returning empty. The
@@ -179,6 +189,26 @@ pub fn set_ohos_app(app: &openharmony_ability::OpenHarmonyApp) {
   // bridgePlugins list — apps using the allBridgePlugins array get it
   // automatically; hand-written lists (e.g. the API example) need the entry.
   wry::set_ohos_app(app.clone());
+}
+
+/// Unified "not supported on OpenHarmony" error for window/webview operations
+/// that have no OHOS implementation. Applied at the dispatcher layer (not tao)
+/// because the runtime-wry message handlers intentionally discard tao Results
+/// (`let _ = window.xxx()`), so a tao-level Err never reaches the caller.
+#[cfg(target_env = "ohos")]
+fn ohos_unsupported(op: &str) -> Error {
+  Error::NotSupported(format!("{op} is not supported on OpenHarmony"))
+}
+
+/// Unified version-gate error: the operation exists on OHOS but only from the
+/// given SDK API level. The current level is read dynamically so the message
+/// never goes stale.
+#[cfg(target_env = "ohos")]
+fn ohos_requires_api(op: &str, min: i32) -> Error {
+  let current = openharmony_ability::version::sdk_api_version();
+  Error::NotSupported(format!(
+    "{op} requires API level {min}+ on OpenHarmony (current: {current})"
+  ))
 }
 
 use std::{
@@ -1803,6 +1833,15 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
   }
 
   fn print(&self) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // ArkWeb WebviewController.createPdf backs this flow and is API 14+;
+      // without the gate the chained ArkTS print fails on a missing temp PDF
+      // with the real reason hidden.
+      if openharmony_ability::version::sdk_api_version() < 14 {
+        return Err(ohos_requires_api("print", 14));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Webview(
@@ -1933,6 +1972,14 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
   }
 
   fn delete_cookie(&self, cookie: Cookie<'_>) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // ArkWeb has no single-cookie deletion API (wry's OHOS impl no-ops with a
+      // warn). Surface the unified unsupported error instead of a silent Ok.
+      let _ = cookie;
+      return Err(ohos_unsupported("deleteCookie"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Webview(
@@ -1940,8 +1987,7 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
         self.webview_id,
         WebviewMessage::DeleteCookie(cookie.into_owned()),
       ),
-    )?;
-    Ok(())
+    )
   }
 
   fn set_auto_resize(&self, auto_resize: bool) -> Result<()> {
@@ -2051,6 +2097,12 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
     config: Option<tauri_runtime::PdfConfig>,
     callback: Box<dyn Fn(bool) + Send + 'static>,
   ) -> Result<()> {
+    // ArkWeb createPdf is API 14+; without the gate the ArkTS typeof-detection
+    // reports bare `false` through the callback with no reason.
+    if openharmony_ability::version::sdk_api_version() < 14 {
+      callback(false);
+      return Err(ohos_requires_api("createPdf", 14));
+    }
     send_user_message(
       &self.context,
       Message::Webview(
@@ -2440,6 +2492,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_shadow(&self, enable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS windows have no shadow concept; unified unsupported error
+      // (the ArkTS layer would silently ignore this op).
+      let _ = enable;
+      return Err(ohos_unsupported("setShadow"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetShadow(enable)),
@@ -2447,6 +2507,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_always_on_bottom(&self, always_on_bottom: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // No OHOS API keeps a window below others; tao's OHOS impl is an empty
+      // no-op, so surface the unified unsupported error instead.
+      let _ = always_on_bottom;
+      return Err(ohos_unsupported("setAlwaysOnBottom"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2457,6 +2525,15 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_always_on_top(&self, always_on_top: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // setWindowTopmost is API 14+. Below that the ArkTS layer no-ops with a
+      // hilog warn; surface the unified version error instead so callers know.
+      let _ = always_on_top;
+      if openharmony_ability::version::sdk_api_version() < 14 {
+        return Err(ohos_requires_api("setAlwaysOnTop", 14));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetAlwaysOnTop(always_on_top)),
@@ -2464,6 +2541,13 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_visible_on_all_workspaces(&self, visible_on_all_workspaces: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS has no workspace concept; unified unsupported error.
+      let _ = visible_on_all_workspaces;
+      return Err(ohos_unsupported("setVisibleOnAllWorkspaces"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2474,6 +2558,13 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_content_protected(&self, protected: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // No OHOS screen-capture-protection window flag; unified unsupported error.
+      let _ = protected;
+      return Err(ohos_unsupported("setContentProtection"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2505,6 +2596,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_size_constraints(&self, constraints: WindowSizeConstraints) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // WindowSizeConstraints (inner/outer combined struct) has no OHOS mapping;
+      // setMinSize/setMaxSize DO work (setWindowLimits) and stay available.
+      let _ = constraints;
+      return Err(ohos_unsupported("setSizeConstraints"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2551,6 +2650,15 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_icon(&self, icon: Icon) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS windows cannot change their icon at runtime (set at install time);
+      // tao's set_window_icon is a no-op. Note TaoIcon::try_from is skipped
+      // entirely on this path.
+      let _ = icon;
+      return Err(ohos_unsupported("setIcon"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2561,6 +2669,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_skip_taskbar(&self, skip: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS windows are always represented in the recent-apps/task view;
+      // there is no skip-taskbar API. Unified unsupported error.
+      let _ = skip;
+      return Err(ohos_unsupported("setSkipTaskbar"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetSkipTaskbar(skip)),
@@ -2568,6 +2684,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_cursor_grab(&self, grab: bool) -> crate::Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OH_WindowManager_LockCursor NDK is API 22+ (tao keeps a defense-in-depth
+      // gate). Surface the unified version error at the dispatcher so the
+      // message reaches the caller — the message handler discards tao Results.
+      let _ = grab;
+      if openharmony_ability::version::sdk_api_version() < 22 {
+        return Err(ohos_requires_api("setCursorGrab", 22));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetCursorGrab(grab)),
@@ -2589,6 +2715,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_cursor_position<Pos: Into<Position>>(&self, position: Pos) -> crate::Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS has no API to move the system cursor; tao returns
+      // Err(NotSupported) which the message handler would discard.
+      let _ = position;
+      return Err(ohos_unsupported("setCursorPosition"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2606,6 +2740,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn start_dragging(&self) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS startMoving must be called from inside a touch-down callback
+      // (FloatPage title bar) — it cannot work from a command context.
+      // tao's drag_window is a documented no-op returning Ok.
+      return Err(ohos_unsupported("startDragging"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::DragWindow),
@@ -2613,6 +2755,17 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn start_resize_dragging(&self, direction: tauri_runtime::ResizeDirection) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // OHOS enableDrag (API 20+) enables edge-drag resize but ignores the
+      // direction — degraded-usable on API 20+ (kept as-is), while below API 20
+      // the ArkTS side throws and tao's fire-and-forget swallows it, i.e. the
+      // call has no effect at all — surface the unified version error there.
+      let _ = direction;
+      if openharmony_ability::version::sdk_api_version() < 20 {
+        return Err(ohos_requires_api("startResizeDragging", 20));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::ResizeDragWindow(direction)),
@@ -2620,6 +2773,14 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_badge_count(&self, count: Option<i64>, desktop_filename: Option<String>) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // App badges only exist on macOS dock / iOS / Linux docks; OHOS has no
+      // equivalent. Unified unsupported error instead of a silent no-op.
+      let _ = (count, desktop_filename);
+      return Err(ohos_unsupported("setBadgeCount"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(
@@ -2630,6 +2791,13 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_badge_label(&self, label: Option<String>) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // macOS dock-only feature; no OHOS equivalent.
+      let _ = label;
+      return Err(ohos_unsupported("setBadgeLabel"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetBadgeLabel(label)),
@@ -2637,15 +2805,32 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_overlay_icon(&self, icon: Option<Icon>) -> Result<()> {
-    let icon: Result<Option<TaoIcon>> = icon.map_or(Ok(None), |x| Ok(Some(TaoIcon::try_from(x)?)));
+    #[cfg(target_env = "ohos")]
+    {
+      // Windows taskbar-only feature; no OHOS equivalent.
+      let _ = icon;
+      return Err(ohos_unsupported("setOverlayIcon"));
+    }
+    #[cfg(not(target_env = "ohos"))]
+    {
+      let icon: Result<Option<TaoIcon>> =
+        icon.map_or(Ok(None), |x| Ok(Some(TaoIcon::try_from(x)?)));
 
-    send_user_message(
-      &self.context,
-      Message::Window(self.window_id, WindowMessage::SetOverlayIcon(icon?)),
-    )
+      send_user_message(
+        &self.context,
+        Message::Window(self.window_id, WindowMessage::SetOverlayIcon(icon?)),
+      )
+    }
   }
 
   fn set_progress_bar(&self, progress_state: ProgressBarState) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Taskbar/dock progress indication; tao's OHOS impl is an empty no-op.
+      let _ = progress_state;
+      return Err(ohos_unsupported("setProgressBar"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(

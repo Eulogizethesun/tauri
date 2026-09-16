@@ -39,7 +39,15 @@ ohos_prerequisites() {
     if [ -d "$PLUGINS_DIR" ]; then
         echo ""
         echo ">>> [prereq] Building plugins dist-js..."
-        (cd "$PLUGINS_DIR" && pnpm build 2>&1 | tail -3) || echo "    WARNING: plugins build failed, using existing dist-js"
+        # 复刻 plugins-workspace 根 package.json 的 build 命令，但去掉 --parallel、
+        # 改用 --workspace-concurrency=4 限流：unbounded 并行会一次拉起 ~33 个
+        # rollup，2026-09-09 实测在内存充裕（16GB 空闲）时仍整批停摆——进程全部
+        # 闲置、40 分钟零进展、产物只写了 8/33 个包。限流后单批可靠完成。
+        (cd "$PLUGINS_DIR" && pnpm run -r --workspace-concurrency=4 \
+            --filter '!plugins-workspace' \
+            --filter '!./plugins/*/examples/**' \
+            --filter '!./examples/*' \
+            build 2>&1 | tail -3) || echo "    WARNING: plugins build failed, using existing dist-js"
     fi
 
     # ─── 4. ACL permission consistency check ───

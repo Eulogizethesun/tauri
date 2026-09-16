@@ -9,6 +9,7 @@
 > - **问题四**:set_minimizable/set_maximizable/set_closable 语义错位 —— 名义控制"窗口能否最小化/最大化/关闭",实际只控制装饰按钮显隐,不拦截编程式 API,与应有语义无关
 > - **问题五**:Window 大量 Atomic 镜像位与 ArkTS 真实状态不同步 —— 单向写不回读、maximized/minimized 为僵尸字段、系统状态变化不回灌,导致 is_* 查询与实际状态脱节
 > - **问题六**:set_cursor_visible / set_ignore_cursor_events / set_cursor_icon / set_always_on_top 尚未测试 —— 前三者已 dispatch 到系统 API 但行为未验证,always_on_top 为 no-op 无 z-order API
+> - **问题七**:spawned UIAbility 窗口创建期属性竞态 —— decorations/min-max 创建期下发先于新实例 stage 注册,ArkTS `requireWindow` 抛错致属性静默丢失;主窗 id 0 与 Float 默认路径无竞态
 >
 > **姊妹文档**:[多窗口特性实现文档.md](多窗口特性实现文档.md) 描述多窗口的正向实现(创建/路由/竞态);本文档专门记录正向文档未覆盖的遗留问题。
 
@@ -696,3 +697,50 @@ pub fn is_minimized(&self) -> bool {
 - [ ] `set_always_on_top(true)` 主窗口:warn 日志是否产出;`is_always_on_top()` 返回值(预期 true,但为本地镜像非系统态)
 - [ ] `set_always_on_top(true)` Float 子窗口:是否因系统默认浮于主窗口而看似"生效"
 - [ ] autotest / manual_tests 是否有对应用例(预期否,待补)
+
+---
+
+## 问题七:spawned UIAbility 窗口创建期属性竞态 —— 创建期属性下发先于新实例 stage 注册,属性静默丢失
+
+> **状态**:已定位(2026-09-17 rebase 检视发现),修复方向已定(tao 侧排队 / ArkTS 侧缓冲二选一),待专项实现 + 真机验证。不阻塞 rebase 产物:相对 rebase 前行为**无任何回归**(见"后果"第 1 点)。
+>
+> **关联代码**:
+> - [tao `Window::new` 创建期属性下发](../../tao/src/platform_impl/ohos/window.rs) —— `apply_window_limits`(创建期 min/max 下发)与 `set_window_decorations`(创建期 decorations 下发)
+> - [openharmony-ability `register_pending_ui_ability` / pending 注册表](../../openharmony-ability/crates/ability/src/window/mod.rs) —— D7 握手注册端
+> - [ArkTS `requireWindow`](../../openharmony-ability/plugins/window/src/main/ets/WindowPlugin.ets) —— 查不到 id 时 `throw new Error("Unknown OS sub-window '<id>' ...")`
+> - [wry `pending_ops` 排队先例](../../wry/src/ohos/mod.rs) —— webview 操作按 window_id 排队至握手的既有保护(D7),窗口属性操作缺同等门控
+
+### 现象
+
+以 `.ohos_window_kind(OHOSWindowKind::UIAbility)` 创建第二个及以后的 UIAbility 窗口,且 builder 带 `.decorations(false)` 或 `.min_inner_size()` / `.max_inner_size()` 时,这些属性不生效:窗口带系统默认标题栏出现、无尺寸约束。调用方拿到 `Ok(())`,无任何报错,唯一痕迹是 hilog 一条 warn(`Unknown OS sub-window '<id>'`)。对 spawn 窗口接近必现——`startAbility` 拉起一个新 Ability 实例的链路(几十~几百 ms)远慢于属性调用的派发。
+
+### 机制(时序)
+
+- **主窗口 id 0 无竞态**:进程启动即由系统拉起,`onWindowStageCreate` 早于 Rust runtime 初始化,任何 Rust 侧调用到达时注册表保证已有 id 0。
+- **spawned 窗口 id>0 有竞态**:`Window::new` 调 `start_ui_ability`(系统异步拉起新 EntryAbility 实例,几十~几百 ms 后才 `onWindowStageCreate` 并注册 id),**不等握手即返回**(设计 D7 刻意如此,避免阻塞);同一个 `Window::new` 内紧随其后把 builder 属性立刻派发出去。ArkTS 侧 `requireWindow` 查注册表,无此 id → throw → Rust 侧仅 `log::warn!`,属性丢失。
+- **保护缺口是结构性的**:wry 的 webview 操作有 `pending_ops` 按 window_id 排队至握手的保护(同一 D7 机制),窗口属性操作没有同等门控。
+- **泛化形态**:`build()` 返回后**立刻**对该窗口 id 的任何属性下发(如紧接着调 `set_decorations()`)都暴露在同一窗口期;注册落地后再调(运行时路径)完全正常。
+
+**来源考古(2026-09-17 git 实证)**:decorations 半(rebase 前本地分支 mod.rs 已泛化到真实窗口 id)先于 rebase 存在,出生自多 UIAbility 专项;min/max 半(`apply_window_limits` 创建期下发)系 rebase 把 upstream #84 修复(upstream 树内安全——其无 spawn 路径,UIAbility 恒为 0)拼入带 spawn 路径的本地树后新增。两半指向同一缺口:spawn 路径缺注册握手门控。
+
+### 后果
+
+1. **无回归**:decorations 半与 rebase 前行为一致;min/max 半 rebase 前本就不下发(upstream #84 修复在 spawn 窗口上未兑现,但也不比原来差)。主窗 id 0 与默认 Float 路径(不调 `ohos_window_kind` 的后续窗口)均不受影响。
+2. **触发面窄**:须显式 `.ohos_window_kind(UIAbility)`(多 UIAbility 专项新 API)加创建期 decorations(false)/min-max;当前唯一调用方 examples/api 多实例测试不带这些属性。
+3. **静默失败**:调用方拿到 `Ok(())`,排查链路长——hilog warn 是唯一线索。
+4. **有 workaround**:注册落地后(窗口可见后)再调 `set_decorations()` / `set_min_inner_size()` 走运行时路径,完全正常。
+
+### 正确做法(两案,均需真机验证,单独立项)
+
+- **方案 A(tao 侧排队,推荐方向)**:对照 wry `pending_ops` 先例——id 仍在 pending 注册表时把窗口属性调用暂存,握手后按序回放。需 tao + openharmony-ability 两仓配合,把 D7 握手机制从"只覆盖 wry webview 操作"扩展到"覆盖窗口属性操作"。
+- **方案 B(ArkTS 侧缓冲)**:`requireWindow` 查不到时为 pending id 缓冲调用不抛错。须设计超时并区分"正在出生"与"已销毁的僵尸 id"(僵尸句柄为既有独立问题),否则会掩盖真错误、延迟错误暴露。
+- 两案均为设计级改动 + 真机回归,不随 rebase 提交搭车。
+
+### 验证清单(待专项修复后执行)
+
+- [ ] `.ohos_window_kind(UIAbility)` + `.decorations(false)` build:窗口无边框(当前必带标题栏)
+- [ ] 同上 + `.min_inner_size(400,300)`:窗口拖不小(当前无约束)
+- [ ] `build()` 后立即 `set_decorations(false)`:生效(当前同窗口期丢失)
+- [ ] 主窗 id 0 带同属性:不回归(始终正常)
+- [ ] Float 窗口带同属性:不回归(不经 spawn 分支)
+- [ ] 全量 299 例回归持平

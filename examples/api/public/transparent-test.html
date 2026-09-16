@@ -33,9 +33,9 @@
   </style>
 </head>
 <body>
-  <h1>🪟 窗口透明测试 (自驱)</h1>
+  <h1>🪟 窗口透明测试 (UIAbility)</h1>
   <p class="desc">此 UIAbility 实例主窗口已通过 builder.transparent(true) 创建。
-  页面加载后<strong>自行运行</strong>测试序列，每步 invoke 底层 API 并在下方日志区展示。
+  手动点击各分区按钮逐步 invoke 底层 API，结果展示在下方日志区。
   操作语义由 hilog 验证（START 锚点 + 底层模块日志），不回传主窗口。</p>
 
   <h2>① 窗口背景色 (setBackgroundColor) — 系统窗口层</h2>
@@ -70,7 +70,7 @@
     <button data-action="queryState">查询状态</button>
   </div>
 
-  <div class="log" id="log">等待自驱序列开始...</div>
+  <div class="log" id="log">等待操作...</div>
 
   <script>
     // 纯内联 JS — 函数声明自动挂 window，onclick 可直接调
@@ -137,7 +137,8 @@
     // ④ 装饰/全屏
     function toggleDecor() {
       return invWindow('is_decorated', {}).then(function (before) {
-        return invWindow('set_decorations', { decorations: !before }).then(function () {
+        // setter! 宏生成的命令参数名统一是 value（与 ① set_background_color 同约定）
+        return invWindow('set_decorations', { value: !before }).then(function () {
           onMessage('setDecorations: ' + before + ' → ' + !before);
         });
       }).catch(function (e) { onMessage('toggleDecor failed: ' + e); });
@@ -145,7 +146,7 @@
 
     function toggleFullscreen() {
       return invWindow('is_fullscreen', {}).then(function (before) {
-        return invWindow('set_fullscreen', { fullscreen: !before }).then(function () {
+        return invWindow('set_fullscreen', { value: !before }).then(function () {
           onMessage('setFullscreen: ' + before + ' → ' + !before);
         });
       }).catch(function (e) { onMessage('toggleFullscreen failed: ' + e); });

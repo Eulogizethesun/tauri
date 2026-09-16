@@ -106,7 +106,9 @@ export const windowOpsTests: TestCase[] = [
     name: 'window.createUIAbilityWindow (webview registered + new instance IPC)',
     category: 'auto',
     async fn() {
-      const label = 'uiability-' + Date.now();
+      // "test-" prefix matches the run-app capability window patterns ([test-*])
+      // so the spawned instance's webview is allowed to invoke commands.
+      const label = 'test-uiability-' + Date.now();
       const result = await invoke<{
         label: string;
         webview_acquired: boolean;
@@ -360,6 +362,69 @@ export const windowOpsTests: TestCase[] = [
       await smoke(() => win.setResizable(true), 'setResizable(true)');
       await smoke(() => win.setFocusable(false), 'setFocusable(false)');
       await smoke(() => win.setFocusable(true), 'setFocusable(true)');
+    },
+  },
+  // ─── 6.3 Float 专项：D11 按 windowKinds 分支的方法在 Float 子窗口上的行为 ───
+  // 生产入口审计（2026-09-16）：show→showWindowMethod（Float 分支 win.showWindow）；
+  // set-decoration-flags→setDecorationFlags（Float 分支写 LocalStorage 4 键驱动
+  // FloatPage 按钮显隐）；set-decorations→setDecorations（Float 分支写 LocalStorage
+  // 'decorations' 驱动自绘标题栏显隐——pluginize 迁移期曾旁路直调 setWindowDecorVisible
+  // 致 Float no-op，2026-09-16 修复为委托 WindowManager）；set-background-color→子窗
+  // 句柄直调（两 kind 同 API 无分支语义）；closeWindow→仅菜单路径可达（Float 无菜单，
+  // 分支为防御性代码，代码审计定案不自动化）。
+  {
+    name: 'window Float kind-branch ops (D11: decorations/flags/minimize/show)',
+    category: 'auto',
+    async fn() {
+      const label = 'test-float-' + Date.now();
+      await invoke('create_decorated_window', { windowId: label });
+      await delay(600);
+      const w = await Window.getByLabel(label);
+      assert(w, `Float window "${label}" not found after create`);
+
+      // ① setDecorations（decorated Float 起点 decorations=true）。
+      //    isDecorated 只读 tao 镜像（round-trip 自证）；Float 真实语义 =
+      //    FloatPage 自绘标题栏显隐（LocalStorage 'decorations'），视觉/hilog 证据归手动章。
+      assert((await w.isDecorated()) === true, 'decorated Float should start decorated');
+      await w.setDecorations(false);
+      assert((await w.isDecorated()) === false, 'setDecorations(false) mirror readback');
+      await w.setDecorations(true);
+      assert((await w.isDecorated()) === true, 'setDecorations(true) mirror readback');
+
+      // ② decoration flags：Float 分支写 LocalStorage 4 键。is*() 读 tao 位域（自证），
+      //    真实效果 = FloatPage 按钮显隐，归 hilog/手动章；主窗口 no-op 对照见上用例。
+      await w.setClosable(false);
+      assert((await w.isClosable()) === false, 'setClosable(false) readback');
+      await w.setMaximizable(false);
+      assert((await w.isMaximizable()) === false, 'setMaximizable(false) readback');
+      await w.setMinimizable(false);
+      assert((await w.isMinimizable()) === false, 'setMinimizable(false) readback');
+      await w.setResizable(false);
+      assert((await w.isResizable()) === false, 'setResizable(false) readback');
+      await w.setClosable(true);
+      assert((await w.isClosable()) === true, 'setClosable(true) readback');
+      await w.setMaximizable(true);
+      assert((await w.isMaximizable()) === true, 'setMaximizable(true) readback');
+      await w.setMinimizable(true);
+      assert((await w.isMinimizable()) === true, 'setMinimizable(true) readback');
+      await w.setResizable(true);
+      assert((await w.isResizable()) === true, 'setResizable(true) readback');
+
+      // ③ minimize → show：isMinimized 读 ArkTS getWindowStatus() 活状态（非 tao 镜像），
+      //    真实断言。show 走 showWindowMethod Float 分支（win.showWindow()）。
+      await w.minimize();
+      await delay(500);
+      assert((await w.isMinimized()) === true, 'Float minimize should reflect in live window status');
+      await w.show();
+      await delay(500);
+      assert((await w.isMinimized()) === false, 'Float show (showWindowMethod Float branch) should restore from minimized');
+
+      // ④ setBackgroundColor：Float = 子窗句柄直调（与 UIAbility 分支同 API），仅 smoke。
+      await smoke(() => w.setBackgroundColor([255, 0, 0, 255]), 'Float setBackgroundColor');
+
+      // 收尾：flags 已还原 true；close 走 destroy-window 幂等路径（best-effort；
+      // 若留残留窗与既有套件行为一致——core.ts 时间戳 label 同理防重跑碰撞）。
+      await w.close().catch(() => {});
     },
   },
   {

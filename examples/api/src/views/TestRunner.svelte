@@ -19,6 +19,8 @@
   import { driverTests, sideReplayTests, badInputTests } from '../lib/tests/driver-generated';
   import { faultInjectionTests } from '../lib/tests/fault-injection-generated';
   import { apiGapTests } from '../lib/tests/api-gap';
+  import { riskSupplementTests } from '../lib/tests/risk-supplement';
+  import { strongholdTests } from '../lib/tests/stronghold';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, currentMonitor, cursorPosition, Effect, LogicalSize, PhysicalPosition, PhysicalSize, UserAttentionType } from '@tauri-apps/api/window';
@@ -26,6 +28,7 @@
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { saveWindowState, restoreStateCurrent, filename as windowStateFilename, StateFlags } from '@tauri-apps/plugin-window-state';
   import { appCacheDir, join } from '@tauri-apps/api/path';
+  import { exists, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
   import { flushConsoleLog, clearConsoleLog } from '../lib/console-capture';
 
   let { onMessage } = $props();
@@ -84,8 +87,13 @@
   // 门控：仅覆盖率验证构建（cov-build.sh VITE_COVERAGE_TESTS=true）注入覆盖率批次；
   // VITE_AUTOTEST（自动跑测试）不注入，普通 demo 保持 283 用例标准集。
   // api-gap 批（S10）压轴：含 app 隐显 / 设置页跳转等破坏性操作，必须在所有批次之后。
-  const coverageTests = import.meta.env.VITE_COVERAGE_TESTS ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
-  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...coverageTests];
+  // risk-supplement 批（2026-09-04）附于 windowOps 之后、覆盖率批次之前：
+  // fs watcher / shell 子进程三个风险点补测，OHOS 以外平台 skip，
+  // 追加在尾部以保持既有 #1-#293 编号稳定。
+  // stronghold 批（2026-09-09）同样附于覆盖率批次之前：仅内存态操作
+  // （store/过程链），快照 scrypt（~107s/次）归手动按钮，编号稳定性同上。
+  const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
+  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...riskSupplementTests, ...strongholdTests, ...coverageTests];
   const webview = getCurrentWebview();
 
   async function runAll() {
@@ -125,6 +133,40 @@
     }
   }
 
+  // ─── process exit/restart 实验阶段（自杀性，不进 runAll）───
+  // 仅 VITE_PROCESS_TESTS 构建启用（export VITE_PROCESS_TESTS=true 后经
+  // run-tests.sh 走 cargo tauri ohos build，前端构建继承该变量）。
+  // process exit/restart 会杀掉测试进程本身，不能作为套件用例（run-tests.sh
+  // 的报告轮询 / 后续用例全被中断）；改为跨进程状态机：
+  //   boot 1（无 phase）: runAll 完成后 arm 'exit-launched' → invoke exit(0)
+  //     （exit → app.exit → ExitRequested；上游 #82-14 分层后事件循环在 OHOS
+  //      不再派发 terminateSelf，进程不会被终止，本腿仅验证事件链是否触发；
+  //      仅当 8s 观察窗内进程被外部终止（hdc kill / 崩溃）才会出现 boot 2，
+  //      观察窗过后 phase 复位，之后重启只会回到 boot 1）
+  //   boot 2（exit-launched）: arm 'restart-launched' → invoke restart()
+  //     （OHOS 上 restart 走 ohos.process 桥 appRecovery.restartApp（API 12+），
+  //      不经过 ExitRequested/restart_on_exit；进程被硬杀，OS 自动重启 → boot 3）
+  //   boot 3（restart-launched）: restart 之后的重启（OS 自动 or 手动拉起，
+  //     「是否自动重启」的判定靠外部 pidof/hilog 时间线，本端只记录并清状态）
+  // 跨进程状态落 appCacheDir/process-phase.json（fs 落盘，进程死亡后仍在；
+  // localStorage 跨进程重启的持久性未验证，不用）。
+  const delayMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function processPhasePath() {
+    return await join(await appCacheDir(), 'process-phase.json');
+  }
+  async function readProcessPhase() {
+    try {
+      const p = await processPhasePath();
+      if (!(await exists(p))) return null;
+      return JSON.parse(await readTextFile(p)).phase ?? null;
+    } catch {
+      return null;
+    }
+  }
+  async function writeProcessPhase(phase) {
+    await writeTextFile(await processPhasePath(), JSON.stringify({ phase }));
+  }
+
   // Auto-run on first mount — ONLY in the main window, and only in autotest
   // builds (VITE_AUTOTEST / VITE_COVERAGE_TESTS，由 run-tests.sh / cov-build.sh
   // 设置)。普通 demo 构建（cargo tauri ohos run）不自动跑，手动点 Run All。
@@ -133,11 +175,56 @@
   // would also fire runAll() and spawn a flood of auto-test sub-windows,
   // polluting keyboard-interaction verification (Ctrl+C / Ctrl+= intercept).
   // Gate on the main window label so sub-windows stay static.
+  // Vite 把构建期 env 变量以字符串形式烙进 bundle：显式 "false" 若走
+  // Boolean("false") 会被当成 true，导致想关 autotest 反而全量自跑。
+  // 只认 "true"/"1"（run-tests.sh / cov-build.sh 的实际取值）。
+  const envFlag = (v) => v === 'true' || v === true || v === '1';
   let listenId = 0;
   onMount(async () => {
     const isMainWindow = getCurrentWindow().label === 'main';
-    const isAutotest = Boolean(import.meta.env.VITE_AUTOTEST || import.meta.env.VITE_COVERAGE_TESTS);
-    if (isMainWindow && isAutotest) {
+    const isAutotest = envFlag(import.meta.env.VITE_AUTOTEST) || envFlag(import.meta.env.VITE_COVERAGE_TESTS);
+    const isProcessTest = envFlag(import.meta.env.VITE_PROCESS_TESTS);
+    if (isMainWindow && isAutotest && isProcessTest) {
+      // process exit/restart 实验启动序列（见上方状态机注释）
+      const phase = await readProcessPhase();
+      if (phase === 'exit-launched') {
+        onMessage('[process] 本次启动为 exit(0) 之后（上一进程在 8s 观察窗内终止——终止路径是 exit 链还是外部原因，需 pidof/hilog 时间线判定）');
+        await writeProcessPhase('restart-launched');
+        // restart 在 OHOS 走 ohos.process 桥（appRecovery.restartApp，API 12+），
+        // 不经过 ExitRequested，prevent_exit 守卫与本腿无关；此调用仅为与
+        // boot 1 对称的防御性清位（无副作用，每 boot 默认恢复 true）
+        await invoke('set_exit_prevention', { enabled: false });
+        onMessage('[process] invoking plugin:process|restart（ohos.process 桥 appRecovery.restartApp，API 12+ 门控）...');
+        let restartRejected = false;
+        try {
+          await invoke('plugin:process|restart');
+        } catch (e) {
+          restartRejected = true;
+          onMessage(`[process] restart 被拒: ${String(e)}（API<12 时为预期的统一版本错误，实验终止）`);
+          await writeProcessPhase(null);
+        }
+        if (!restartRejected) {
+          await delayMs(8000);
+          onMessage('[process] restart 后 8s 进程仍存活 → restart 未退出进程');
+          await writeProcessPhase(null);
+        }
+      } else if (phase === 'restart-launched') {
+        onMessage('[process] 本次启动为 restart() 之后（OS 自动重启 or 手动拉起，判定见外部 pidof/hilog 时间线）');
+        await writeProcessPhase(null);
+        // 实验结束；报告已在 boot 1 生成并拉取，不再自动 runAll
+      } else {
+        await runAll();
+        onMessage('[process] runAll 完成，invoking plugin:process|exit（code 0 → ExitRequested；#82-14 分层后事件循环不再派发终止，预期进程存活）...');
+        await writeProcessPhase('exit-launched');
+        // 关闭 app 自身的 prevent_exit 测试插桩（lib.rs ExitRequested handler
+        // 默认对每次退出请求调 prevent_exit），否则 exit 被测试代码拦下
+        await invoke('set_exit_prevention', { enabled: false });
+        await invoke('plugin:process|exit', { code: 0 });
+        await delayMs(8000);
+        onMessage('[process] exit 后 8s 进程仍存活 → exit 未生效');
+        await writeProcessPhase(null);
+      }
+    } else if (isMainWindow && isAutotest) {
       runAll();
     } else if (isMainWindow) {
       onMessage('[TestRunner] autotest disabled (no VITE_AUTOTEST/VITE_COVERAGE_TESTS) — click Run All to test');
@@ -1057,7 +1144,9 @@ Expected behavior:
 
   async function manualCreateUIAbilityWindow() {
     await wrapManual('createUIAbilityWindow', async () => {
-      const windowId = 'uiability-instance-' + Date.now();
+      // "test-" prefix matches the run-app capability window patterns ([test-*])
+      // so the spawned instance's webview is allowed to invoke commands.
+      const windowId = 'test-uiability-' + Date.now();
       await invoke('create_ui_ability_window', { windowId });
       manualResult = `UIAbility instance window requested (label: "${windowId}").\n\n` +
         `Expected: A new EntryAbility instance starts via context.startAbility,\n` +
@@ -2828,20 +2917,50 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
-  async function manualNfc() {
+  async function manualNfcIsAvailable() {
     await wrapManual('nfc', async () => {
       const { invoke } = await import('@tauri-apps/api/core');
       const r = await invoke('plugin:nfc|is_available');
-      let scanResult = '';
-      try {
-        await invoke('plugin:nfc|scan');
-        scanResult = 'scan resolve（意外：当前设计应 reject）';
-      } catch (e) {
-        scanResult = `scan reject（预期）：${e}`;
-      }
-      manualResult = `is_available → ${JSON.stringify(r)}\n${scanResult}\n` +
-        '断言：is_available 返回布尔；scan 报错信息含能力说明（未实现，设计决策）';
+      manualResult = `is_available → ${JSON.stringify(r)}\n` +
+        '断言：返回 {available: boolean}（HAD-W32 无 NFC 硬件应 false；有 NFC 设备开 NFC 后应 true）';
       onMessage(`nfc isAvailable=${JSON.stringify(r)}`);
+    });
+  }
+
+  async function manualNfcScan() {
+    await wrapManual('nfc', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        const tag = await invoke('plugin:nfc|scan', { kind: { tag: {} } });
+        manualResult = `✅ scan resolve（贴标签）：${JSON.stringify(tag)}\n` +
+          '断言：id 为 uid 字节数组；kind 含 RF 技术名（NDEF 标签含 "Ndef"）；records 为记录数组（非 NDEF 标签为空数组）';
+        onMessage(`nfc scan: ${JSON.stringify(tag)}`);
+      } catch (e) {
+        manualResult = `❌ scan reject：${e}\n` +
+          '断言：无 NFC 硬件设备（HAD-W32）应报 "NFC unavailable: Device does not have NFC capabilities"；有 NFC 设备贴标签后应 resolve';
+        onMessage(`nfc scan reject: ${e}`);
+      }
+    });
+  }
+
+  async function manualNfcWrite() {
+    await wrapManual('nfc', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const enc = new TextEncoder();
+      const text = 'Tauri OHOS NFC';
+      const payload = Array.from(enc.encode('en' + text));
+      payload.unshift('en'.length); // NDEF text record: language-length status byte
+      const record = { format: 1, kind: [0x54], id: [], payload }; // TNF well-known + RTD "T"
+      try {
+        await invoke('plugin:nfc|write', { records: [record], kind: { ndef: {} } });
+        manualResult = `✅ write resolve（贴标签后写入 textRecord "${text}"）\n` +
+          '断言：resolve 即写入成功；可用 NFC Tools 等读标签验证文本记录';
+        onMessage('nfc write: success');
+      } catch (e) {
+        manualResult = `❌ write reject：${e}\n` +
+          '断言：无 NFC 硬件报 NFC unavailable；只读标签报 read-only；非 NDEF 且不可格式化报 doesn\'t support Ndef';
+        onMessage(`nfc write reject: ${e}`);
+      }
     });
   }
 
@@ -2884,6 +3003,82 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
       manualResult = `${loginResult}\n${silentResult}\n(logout 已调用)`;
       onMessage(manualResult);
       onMessage('huawei-account flow attempted');
+    });
+  }
+
+  // ─── Stronghold Manual Tests ───
+  // Snapshot ops run upstream scrypt at work factor 19 — ≈107s per snapshot
+  // read/write on device in a debug build (upstream password-hardening design,
+  // ~1s in release). That cost is why they are manual buttons, not autotest
+  // cases (see src/lib/tests/stronghold.ts for the fast in-memory cases).
+  const STRONGHOLD_MANUAL_SNAPSHOT = 'stronghold-manual.hold';
+  const STRONGHOLD_MANUAL_PASSWORD = 'manual-test-password';
+
+  async function strongholdManualClient() {
+    const { Stronghold } = await import('@tauri-apps/plugin-stronghold');
+    // Stronghold.load (initialize) always builds a FRESH Rust-side instance;
+    // when the snapshot file exists it is read + decrypted right there (a
+    // wrong password rejects at that step). Persisted clients only come back
+    // via loadClient — createClient would silently REPLACE the client with an
+    // empty one (upstream create_client never errors on an existing name;
+    // 09-09 first round read null because of exactly that), so try the
+    // snapshot path first and create only when nothing is persisted yet.
+    const instance = await Stronghold.load(STRONGHOLD_MANUAL_SNAPSHOT, STRONGHOLD_MANUAL_PASSWORD);
+    let client;
+    try {
+      client = await instance.loadClient('manual-client');
+    } catch {
+      // Snapshot does not contain the client yet (first run before Snapshot
+      // Save) — creating it fresh is the correct path.
+      client = await instance.createClient('manual-client');
+    }
+    return { instance, client };
+  }
+
+  async function manualStrongholdSave() {
+    await wrapManual('strongholdSave', async () => {
+      manualResult = '⏳ Stronghold 快照操作进行中——scrypt work factor 19，每次快照读/写在 debug 构建约 107s（release 按上游设计 ~1s），请勿关闭应用…';
+      const { instance, client } = await strongholdManualClient();
+      const value = Array.from(new TextEncoder().encode(`manual-secret-${Date.now()}`));
+      await client.getStore().insert('manual-roundtrip', value);
+      const t0 = Date.now();
+      await instance.save();
+      const written = new TextDecoder().decode(Uint8Array.from(value));
+      manualResult = `✅ 快照已保存（save() 耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）。\n` +
+        `写入记录 manual-roundtrip = ${written}\n` +
+        '断言：接着点「Reload Verify」应回读同值；点「Wrong Password」应被拒绝';
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualStrongholdReload() {
+    await wrapManual('strongholdReload', async () => {
+      manualResult = '⏳ 重新加载快照中（load 触发 scrypt 解密，约 107s）…';
+      const { client } = await strongholdManualClient();
+      const got = await client.getStore().get('manual-roundtrip');
+      if (got) {
+        manualResult = `✅ 快照重载成功，store 回读 manual-roundtrip = ${new TextDecoder().decode(got)}\n` +
+          '断言：与「Snapshot Save」输出的写入值一致 → PASS';
+      } else {
+        manualResult = '⚠️ 回读为 null —— 快照不存在（先点 Snapshot Save）或数据丢失';
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  async function manualStrongholdWrongPassword() {
+    await wrapManual('strongholdWrongPassword', async () => {
+      manualResult = '⏳ 错密码加载中（scrypt 解密后失败，约 107s）…';
+      const { Stronghold } = await import('@tauri-apps/plugin-stronghold');
+      try {
+        await Stronghold.load(STRONGHOLD_MANUAL_SNAPSHOT, 'definitely-wrong-password');
+        manualResult =
+          '❌ 错密码竟然加载成功 —— 快照未加密或密钥派生异常' +
+          '（若尚未点过 Snapshot Save，快照不存在时本按钮无意义，请先 Save）';
+      } catch (e) {
+        manualResult = `✅ 错密码被拒绝（预期）：${e}\n断言：报错来自快照解密失败，而非命令级错误`;
+      }
+      onMessage(manualResult);
     });
   }
 
@@ -3698,7 +3893,9 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualBarcodeScan}>Barcode Scan (camera)</button>
         <button class="btn" onclick={manualBarcodeVibrate}>Barcode Vibrate (扫码振动反馈)</button>
         <button class="btn" onclick={manualBiometricAuth}>Biometric Authenticate</button>
-        <button class="btn" onclick={manualNfc}>NFC isAvailable + scan</button>
+        <button class="btn" onclick={manualNfcIsAvailable}>NFC isAvailable</button>
+        <button class="btn" onclick={manualNfcScan}>NFC scan (贴标签)</button>
+        <button class="btn" onclick={manualNfcWrite}>NFC write (贴标签写入文本)</button>
         <button class="btn" onclick={manualHaptics}>Haptics (vibrate/impact/notification/selection)</button>
         <button class="btn" onclick={manualHuaweiAccount}>Huawei Account (login/silent/logout)</button>
       </div>
@@ -3745,6 +3942,14 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualStoreVerify}>Store Verify (after restart)</button>
         <button class="btn" onclick={manualUploadProgress}>Upload (echo+progress)</button>
         <button class="btn" onclick={manualLocalhostFetch}>Localhost fetch (CORS)</button>
+      </div>
+    </div>
+    <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+      <h5 class="my-1 text-xs text-gray-500">Stronghold (密钥保险库) Manual Tests — 每次快照读/写约 107s（scrypt 上游设计，release ~1s）</h5>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn" onclick={manualStrongholdSave}>Snapshot Save (写记录+保存)</button>
+        <button class="btn" onclick={manualStrongholdReload}>Reload Verify (重载+回读)</button>
+        <button class="btn" onclick={manualStrongholdWrongPassword}>Wrong Password (应被拒)</button>
       </div>
     </div>
     {#if manualResult}

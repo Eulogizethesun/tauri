@@ -58,7 +58,7 @@
 | core | menu | menubar/基础 | MenuBar Dropdown — 菜单栏下拉菜单 | **T0** | 应用已启动 | 1. 点击 "MenuBar Dropdown" 按钮 2. 点击菜单栏 "Click Me" | 下拉菜单显示 "Item A" 和 "Item B" 两个选项 | 验证基本下拉功能 |
 | core | menu | menubar/基础 | MenuBar Hide — 隐藏菜单栏 | **T0** | 应用已启动 | 1. 点击 "MenuBar Hide" 按钮 | 菜单栏从窗口顶部消失；`is_menu_visible()` 返回 `false` | 调用 `plugin:app-menu\|hide_menu` |
 | core | menu | menubar/基础 | MenuBar Show — 显示菜单栏 | **T0** | 菜单栏已隐藏 | 1. 点击 "MenuBar Show" 按钮 | 菜单栏重新出现（恢复默认 File/Edit/Window/Help）；`is_menu_visible()` 返回 `true` | 调用 `plugin:app-menu\|show_menu`；会先恢复默认菜单 |
-| core | menu | menubar/快捷键 | MenuBar Accelerator Ctrl+O — 自定义快捷键 | **T0** | 应用已启动 | 1. 点击 "MenuBar Accelerator Ctrl+O" 按钮 2. 按下 Ctrl+O（或点击 Accel → Accel Test） | action 回调触发，结果区显示 `Accelerator Ctrl+O FIRED! id=<id>` | 验证 `setAccelerator('Ctrl+O')` |
+| core | menu | menubar/快捷键 | MenuBar Accelerator Ctrl+O — 自定义快捷键 ✅ | **T0** | 应用已启动；设备连接物理键盘 | 1. 点击 "MenuBar Accelerator Ctrl+O" 按钮（挂载 Accel → Accel Test，Ctrl+O） 2. 点击主窗口标题栏确保主窗聚焦 3. 按下 Ctrl+O 4. 对照：点击菜单栏 Accel → Accel Test | ① action 回调触发，结果区显示 `Accelerator Ctrl+O FIRED! id=<id>` ② Menu Event Log 输出 `[menu-event #N lid=N] global:<同一 id> at <时间>`（普通项触发后同时发全局事件） | 验证完整触发链：`setAccelerator('Ctrl+O')` + `setAsWindowMenu` 挂载 → onKeyPreIme 拦截 → accelerator matcher → menuClickHandler → action 回调 + 全局 menu-event。**2026-09-07 验证 PASS**（3QC0124C11000038，desktop）：host 侧 uinput 注入 Ctrl+K（与物理键盘同一输入管线，键事件签名一致）全链实测——hilog 菜单送达 matcher（`[Menubar] items=1`）→ `[Accelerator] combo="ctrl+k"` 命中 → `menuClickHandler invoked` → menu-event payload `global:{id}` 含菜单项 id；09-09 于 com.tauri.api 包复验菜单送达正常。predefined 项（Ctrl+C/Ctrl+M）走预定义动作不经 menu-event（Ctrl+M minimize 见「Key Repeat Detection」章）。焦点前提：主窗须聚焦（失焦时按键进入其他窗口的空 matcher）——步骤 2 保证。原自动用例（host 注入 Ctrl+K）2026-09-09 迁档并入本用例：需 host 侧注入配合才能 PASS，不符自动套件自包含原则 |
 | core | menu | menubar/事件 | MenuBar Action Event — 菜单项点击事件 | **T0** | 应用已启动 | 1. 点击 "MenuBar Action Event" 按钮 2. 点击 EventTest → Click Me | 结果区显示 `action callback fired! id=menu-event-test`；Menu Event Log 输出 `[menu-event #N lid=1] global:menu-event-test at <时间>` | 验证 JS action 回调 + Rust 全局事件同时触发 |
 | core | menu | menubar/预定义项 | Menu Edit→Copy — 预定义复制 | **T0** | 应用已启动；输入框有文本 | 1. 点击 "Menu Edit→Copy" 按钮 2. 选中输入框文本 3. 点击 Edit → Copy | 选中文本被复制到剪贴板 | 验证 PredefinedMenuItem Copy 功能 |
 | core | menu | menubar/点击交互 | MenuBar Check Item — 勾选菜单项点击切换 | **T0** | 应用已启动 | 1. 点击 "MenuBar Auto Refresh Checked" 按钮 2. 展开 "Refresh" 下拉菜单 3. 点击 "Check Me" 项 | ① 初始状态未勾选，500ms 后自动变为勾选 ✓ ② 点击后勾选状态切换 ③ Menu Event Log 输出 `[menu-event #N lid=1] global:check_me at <时间>` | 验证 CheckMenuItem 点击行为 |
@@ -596,7 +596,7 @@
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | plugin | notification | onAction/trigger | onAction 触发 — 展开通知点 Action 按钮 ✅ | **T0** | 应用已启动；通知权限已授予；进入 Tests 页面 | 1. 点 Notification Manual Tests 区 `Send With Action Button (onAction)` 按钮 2. 下拉通知栏，展开 "Action 手动测试" 通知 3. 点击 "Tap Me" Action 按钮 4. 等待回调（热启动即时；冷启动需先杀进程，见 manual_tests §三十二） | ① console 输出 `[onAction] fired (N): {…}`（manualResult 显示 actionId === "manual-action" ✅）② 回调 payload 含 action id | **2026-08-31 复验 PASS（上库前终验，随 §三十二 同按钮）**（3QC0124C11000038）：回调实际触发两次、actionId='manual-action'（用户 UI 确认）。manual 类别；回调触发依赖真机通知交付；2026-08-27 已补专用手动按钮（原引用的 `onAction trigger (manual)` autotest 按钮不存在——manual 类别被 Run All 过滤且无独立运行入口） |
 | plugin | notification | onNotificationReceived/trigger | onNotificationReceived 触发 — 发送后回调 ✅ | **T1** | 同上 | 1. 点 Notification Manual Tests 区 `Send & Listen (onNotificationReceived)` 按钮（2026-08-27 补齐：原引用的 `onNotificationReceived trigger (manual)` autotest 按钮不存在——manual 类别被 Run All 过滤且无独立运行入口）2. 等待最多 15s 3. 观察 console 区输出 | ① console 区输出 `onNotificationReceived manual: fired=false`（当前设备实测原文）② fired=false 为最终态，回调永不触发 ③ 通知栏可见 "onNotificationReceived 手动测试" 通知（sendNotification 链路 OK，与回调缺失无关）④ manualResult 区文案随源码版本而异（当前源码 L2497 为 `⏳ 15s 内未触发 onNotificationReceived 回调（OHOS 平台限制…记录形态）`，重建部署后应与此一致） | **2026-08-31 复验 PASS（上库前终验）**（3QC0124C11000038，pid 17693）：registerListener ok → 通知 id=9002 送达通知中心（sceneboard `onConsume __…com.tauri.api__9002`）→ 两轮 15s 窗口均 `⏳ …未触发…（OHOS 平台限制…记录形态）`，fired=false 最终态、manualResult 文案与当前源码逐字一致。**平台限制（2026-08-28 源码核实定论）**：OHOS 无三方可用的"通知到达"订阅 API——`notificationManager.subscribe` 为 `@systemapi`（需 `ohos.permission.NOTIFICATION_CONTROLLER`，system_basic 级，三方不可申请），故插件实现根本未 subscribe（`Plugin.ets:633` 注释："no corresponding OHOS subscription API; registration succeeds but no events will be delivered"），注册仅记 listener channel 无事件源驱动，fired=false 即最终态、不可避免。非缺陷、非待修。对照：actionPerformed 有驱动源（EntryAbility.handleNotificationAction，WantAgent 冷启动/onNewWant 热启动），故 §32 onAction T0 真 PASS。 |
-| plugin | updater | check | updater.check — AppGallery 更新检查 ✅ | **T1** | 应用已发布到 AppGallery 且存在更高版本 | 1. 点击 `plugin-updater.check (manual)` 占位测试 2. 查看 console 输出 | ① check() 返回非 null Update 对象（有新版本）② 无 AppGallery 源时 reject（预期）| **2026-08-31 复验 PASS（预期② reject 路径）**（3QC0124C11000038，pid 17693）：bridge 注册正常且 **AppGalleryKit 真实查询链路走通**（CheckAppUpdate → appgallery_service `getSingleAppInfo com.tauri.api` → 回调 `{"resultCode":0,"hasNew":0}` → `UpdaterPlugin.ets: No update available`）→ null → Rust 反序列化 `check() rejected: StringExpected … UpdaterCheckResponse.body`——与 8-28 记录同错误（走到真实业务路径，非 not installed）。**UpdaterBridgePlugin 漏注册缺陷已修复验证通过（2026-08-28）**：在 updater 插件 `.setup()` 闭包 register_plugin 后，错误从 `not installed for 'api_lib'` 变成 `StringExpected, Failed to convert JavaScript value Null into rust type String on UpdaterCheckResponse.body`（走到真实业务路径——无 AppGallery 更新源，ArkTS 返回 null → Rust 反序列化 body 字段失败）。另修 updater config null panic：tauri.conf.json 加最小 `"updater":{"pubkey":""}`（endpoints default 空，pubkey 必填故补空串；只影响 OHOS，桌面不注册 updater 不读此配置）。需 AppGallery 环境（T1，前置条件重） |
+| plugin | updater | check | updater.check — AppGallery 更新检查 ✅ | **T1** | 设备可连 AppGallery（场景②无需上架；场景①另须商店已发布更高版本） | 1. 启动应用触发 `plugin-updater.check`（启动探针或页面按钮）2. 查看 console/hilog 输出 | ① **无更新（当前真机常态场景）：`check()` 必须返回 `Ok(None)`**——Rust 侧 `CHECK_NONE no update available`，hilog 佐证 AppGalleryService `checkAppUpdate finish, errCode = 0` + `UpdaterPlugin.ets: No update available` ② 有新版本（须上架 AppGallery）：返回 `Ok(Some(Update))` ③ 仅链路级故障（plugin not installed/桥接失败）允许 Err；**任何反序列化类 Err（如 StringExpected）一律判 FAIL** | **2026-09-08 断言收紧并纠正 8-31 误判**：旧预期②"无 AppGallery 源时 reject（预期）"过宽——当时 `check() rejected: StringExpected … UpdaterCheckResponse.body` 被记为合法 reject 而判 PASS，定性错误；该错实为 napi-derive-backend-ohos 1.2.0 派生缺陷（`Option<String>` 字段被派生按 `String` 转换，ArkTS 类实例显式送 `body:null` 即爆；属性缺失时派生恰好跳过转换，故其他 Option 字段桥接类型未暴露）。修复 = openharmony-ability 0fef6d0 手写 `BridgeNapiType::from_bridge_value`（显式 turbofish+flatten，present-null/缺失/undefined 三态通吃）。**收紧后真机复验 PASS（2026-09-08，com.tauri.api，无更新场景）**：返回 `Ok(None)`（`UPDATER-PROBE CHECK_NONE no update available`），全链 AppGalleryKit `checkAppUpdate errCode=0`——Tier-1 链路（Rust facade→桥接→UpdaterPlugin.ets→checkAppUpdate）完整闭环。历史有效结论保留：**UpdaterBridgePlugin 漏注册缺陷已修复验证（2026-08-28）**（updater 插件 `.setup()` 闭包 register_plugin 后错误从 `not installed for 'api_lib'` 变为走到真实业务路径）；**updater config null panic 已修**（tauri.conf.json 加最小 `"updater":{"pubkey":""}`，endpoints default 空 pubkey 必填故补空串；只影响 OHOS，桌面不注册 updater 不读此配置）。场景①真实弹窗流/download_and_install 与"返回 Update 对象"仍须上架环境（Tier-2 官方约束：本地版本低于商店版本+签名一致；不支持邀请测/公测；模拟器不支持，Phone/Tablet/PC-2in1 支持） |
 
 ---
 
@@ -636,7 +636,7 @@
 | plugin | biometric | authenticate | 生物认证 — 拉起系统认证框 ✅ | **T0** | 应用已启动；设备已录入指纹/人脸；ACCESS_BIOMETRIC 权限已声明（2026-08-29 补） | 1. 点 `Biometric Authenticate` 按钮（内部先 status 再 authenticate）2. 完成认证/取消 3. 观察 manualResult | ① 认证成功 resolve（result.success=true），hilog `✅ authenticate() resolve（认证成功）` ② 取消/失败 reject 且 errorCode 清晰 ③ 系统认证 UI（指纹 widget）正常显示，hilog `widgetParam has valid uiContext` + `has context:1` + `authTypeSize:1` + `UserAuthInstance::start result:0 ret:0` | 双层修复（2026-08-29 mobile 真机验证通过）：层一 `widgetParam.uiContext = this.context`（UIAbilityContext extends Context）；层二 `authType` 只传单一类型（widget 不支持 FACE+FINGERPRINT 组合，先 getAvailableStatus 探测）。详见验证记录 |
 | plugin | geolocation | get_current_position | 定位 — 获取当前位置 ✅ | **T1** | LOCATION 权限已授予；设备定位服务开启 | 1. 点 Geolocation Manual Tests 区 `Get Current Position` 按钮 2. 观察 manualResult | ① 返回 `{ coords: { latitude, longitude, ... }, timestamp }` 数值合理（Wi-Fi/网络定位）② 无 fix 时超时 reject——记录形态即可 | ~~watchPosition 流式回推是已知架构限制~~ **已过时**：emit/Channel 已落地（§三十二），watchPosition 流式回传真机验证通过（2026-08-27 收到位置 fix 回调） |
 | plugin | haptics | vibrate 效果 | 触觉反馈 — 三种效果 ✅ | **T1** | 设备有振动马达 | 1. 点 `Haptics (vibrate/impact/notification/selection)` 按钮（内部依次调 4 个命令）2. 观察 manualResult | ① 各命令 resolve ② 有马达设备产生对应振动模式 | **desktop 形态（2026-08-27 MateBook Pro）**：4 命令（vibrate/impact_feedback/notification_feedback/selection_feedback）全部真实调到 vibrator，被拒 `Device operation failed.`（PC 无马达）；错误如实上报、无假成功，降级路径正确。**mobile 形态（2026-08-29 Mate 70）✅ 通过**：4 命令均产生震动（手机有马达，对比 desktop 形态 BusinessError 801 无马达）。PC 无马达时 BusinessError 801→测试 skip（路由链已验证） |
-| plugin | nfc | scan/write | NFC 扫描/写入 ✅ | **T1** | 设备支持 NFC；备一张可写 NFC 标签 | 1. 点 `NFC isAvailable + scan` 按钮 2. 观察 manualResult | ① is_available 返回布尔 ② scan 当前明确 reject（未实现，设计决策）③ 报错信息含能力说明 | **desktop 形态（2026-08-27 MateBook Pro）**：is_available 真实查询 `nfcController.isNfcAvailable()` 返回 false（PC 无 NFC 读卡器）；scan 按设计决策 reject（tag 发现需 Ability 级 ACTION_TAG_DISCOVERED intent 集成），报错含能力说明，属预期行为。**mobile 形态（2026-08-29 Mate 70）✅ 通过**：手机「设置→NFC」开关打开后 `isNfcAvailable` 返回 true（修复前 `NFC SA not started yet` 是系统设置 NFC 关闭，非代码缺陷）。scan/write 属下一轮；Plugin 基类 emit/Channel 已落地（§三十二）但 nfc scan 尚未接入；本轮验 is_available |
+| plugin | nfc | scan/write | NFC 扫描/写入（三按钮）⏳ | **T1** | 设备支持 NFC；备一张可写 NFC 标签（desktop 形态无 NFC 硬件，可验 clean-reject） | 1. 点 `NFC isAvailable` 按钮 2. 点 `NFC scan (贴标签)` 后贴一张标签 3. 点 `NFC write (贴标签写入文本)` 后贴同一张标签 4. 观察 manualResult | ① is_available 返回布尔 ② scan resolve 返回 `{id,kind,records}`（非 NDEF 标签 records 为空数组）③ write resolve（写入 NDEF 文本记录，NFC Tools 等可读回）④ 无 NFC 硬件时 is_available=false、scan/write reject `NFC unavailable: Device does not have NFC capabilities` | **2026-09-11 scan/write 已实现**：`tag.on('readerMode')` 前台读卡模式（API11+；NFC_TAG 权限已声明、ACL 已加 `nfc:allow-write`），Android Session 语义对齐——pending invoke 持续到贴标签、keepSessionAlive/tag 存储、先扫后写（write 带 kind）、techLists AND-OR 后置过滤、非 NDEF 标签走 NdefFormatable.format 回退、读写后 resetConnection。**desktop 形态（2026-09-11 HAD-W32，uinput 注入三按钮实测）**：is_available→`{"available":false}`、scan/write→reject `NFC unavailable: Device does not have NFC capabilities`——clean-reject 链路全通过、无崩溃（PC 无 NFC 读卡器，硬件路径不可测）。**mobile 形态（2026-08-29 Mate 70）**：is_available 开 NFC 后返回 true。**贴标签 scan/write 真机验证待 Mate 70 + 可写标签补验** |
 | plugin | huawei-account | login | 华为账号一键登录 | **T1** | 设备已登录华为账号；AppGallery Connect 配置完成 | 1. 点 `Huawei Account (login/silent/logout)` 按钮 2. 完成一键登录授权 3. 观察 manualResult | ① resolve 返回 { openId, unionId, ... } ② silent_login 免弹窗返回 ③ logout 后 silent_login reject | **AccountBridgePlugin 漏注册缺陷已修复验证通过（2026-08-28）**：在 huawei-account 插件 `.setup()` 闭包 register_plugin（仿 tray-icon 模式）后，错误从 `not installed for 'api_lib'` 变成真实 Account Kit 业务错误 `1001502003:Invalid clientId or profile`（AGConnect 配置缺失，app_id 为空）。bridge 链路完整：`[bridge] call_raw: ohos.account/login` → ArkTS `controller.executeRequest` → Account Kit SDK 返回 1001502003 → catch logError → 回传 Rust → 前端 runCallback。**前端显示修复**：原 `onMessage('huawei-account flow attempted')` 未推 manualResult，现补 `onMessage(manualResult)`，UI 可见 `❌ login() reject：1001502003...` + `silent_login reject：1001502003...` + `(logout 已调用)`。要弹登录界面需：AppGallery Connect 注册 com.tauri.api + 开通 Account Kit + 下载 agconnect-services.json 放 entry_desktop/resources/rawfile/ + 设备登录华为账号 + 重建部署（环境前置，非代码缺陷）。零自动覆盖为已知缺口 |
 
 ---
@@ -697,7 +697,172 @@
 
 ---
 
-## 三十五、手动用例统计汇总
+## 三十五、OHOS — Stronghold 插件（密钥保险库）手动用例
+
+> **背景**: 2026-09-09 接入 examples/api 的 IOTA Stronghold 密钥保险库插件（`tauri-plugin-stronghold`，纯 Rust 原生、无 bridge；`stronghold-runtime` 2.0.1 适配版走私仓源替换，见 [[ohos-stronghold-revival-plan]]）。上游快照加密用 scrypt work factor 19——debug 构建单次 save/load 各约 107s（上游密码加固设计，非 OHOS 缺陷；release 按上游设计 ~1s），故快照读写归手动档；内存态操作与 BIP39→SLIP10→Ed25519 过程链由自动用例覆盖。插件走插件级命令（`plugin:stronghold|*`），不涉自定义 app command / build.rs 四处。
+>
+> **自动测试**: `stronghold.ts`（initialize+store 增删查 auto / 过程链 auto / 快照三连 manual-console，OHOS 以外平台 skip）。
+>
+> **手动入口**: TestRunner「Stronghold (密钥保险库) Manual Tests」区三按钮（Snapshot Save / Reload Verify / Wrong Password），结果区有 ⏳ 进行中提示。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| plugin | stronghold | snapshot-roundtrip | ✅ 快照保存+重载回读一致 | **T0** | 应用已安装（OHOS 构建须 SODIUM_LIB_DIR 指向预编译 libsodium，见插件 README OHOS Build） | 1. TestRunner 点「Snapshot Save」，结果区先显示 ⏳（release ~1-2s／debug ~107s）2. 记录结果区显示的写入值（`manual-roundtrip = manual-secret-<ts>`）3. 点「Reload Verify」等待回读 | ① save 输出「✅ 快照已保存（save() 耗时 …s）」② reload 输出的回读值与保存时写入值逐字一致 ③ 全程无 panic/报错，应用无卡死 | **已验证（2026-09-09，HAD-W32 release HAP）**：Save ✅ → Reload Verify 回读同值（经 loadClient 从快照解密恢复）；快照落盘 `haps/entry_desktop/files/stronghold-manual.hold`（295B），save/load 各 ~1-2s（release；debug 为 ~107s）。首轮 Reload 曾回读 null——测试代码误用 createClient（上游 `create_client` 对同名客户端静默覆盖为空、不报错，读持久态必须 `loadClient`），修复 helper 后通过，插件本身无缺陷。同语义链路另见插件仓 `tests/ohos_e2e.rs`（HAD-W32，323.51s PASS） |
+| plugin | stronghold | wrong-password | ✅ 错密码加载必拒 | **T1** | 上一用例已保存快照 | 1. 点「Wrong Password」，结果区先显示 ⏳（release ~1s／debug ~107s） | ① load 以错误密码 reject，结果区显示「✅ 错密码被拒绝（预期）」② 报错为快照解密失败（非命令错误/非超时） | **已验证（2026-09-09，HAD-W32 release HAP）**：✅ 被拒，报错来自快照解密失败——`Stronghold::new` 读盘解密在 initialize 即 reject。判据成立：快照真用 argon2 派生密钥加密。注意时序：须先点过 Snapshot Save（快照不存在时 load 无从解密、不会失败） |
+| plugin | stronghold | persistence | ✅ 杀进程重启后数据仍在 | **T1** | 已完成「Snapshot Save」 | 1. 确认已保存快照 2. `hdc shell aa force-stop com.tauri.api`（或系统多任务划掉）后重新打开应用 3. 点「Reload Verify」，等待回读（release ~1s／debug ~107s） | ① 重启后 reload 仍回读与保存时一致的值 ② 无「回读为 null」类结果 | **已验证（2026-09-09，HAD-W32 release HAP）**：aa force-stop → aa start 重启 → Reload Verify 回读同值；重启前后 `haps/entry_desktop/files/stronghold-manual.hold`（295B）与盐文件 `stronghold-salt.txt`（32B）均完好。证明快照真落盘（相对路径经插件 OHOS AppData 解析）且跨进程持久 |
+
+---
+
+## 三十六、OHOS 窗口能力手动按钮（Window Manual Buttons）手动用例
+
+> **背景**: 本节合并 `doc/ohos-window-test-buttons.md` A 区（有手动按钮的窗口能力）全部用例，使本文件成为窗口手动测试的唯一完整清单（该文档转为历史参考）。合并时已剔除其过时结论：① "不要跑 Run All（sizeChange 事件风暴 appfreeze）" 已过时——serializeOp 队列修复后全量套件可安全运行（2026-09-15 真机 296✅/0❌/2⏭️，THREAD_BLOCK=0）；② 多 UIAbility 两按钮 "⏸️ deferred" 已过时——multi-uiability-windows Phase 1-5 落地后可用（见 36.6）。
+>
+> **测试入口**: `examples/api` 应用 → Tests 页面（TestRunner）底部 **Manual Tests** 区各分区。每个按钮点完后在按钮下方 `manualResult` 显示操作结果 + 预期判据。
+>
+> **已由既有章节覆盖的按钮**（不重复设例，按下表跳转）：
+>
+> | 按钮 | 已覆盖章节 |
+> |------|-----------|
+> | Create Transparent+Borderless | §十 T0（透明无边框 Float 子窗口，同一能力） |
+> | vibrancy: Blur / Acrylic / clearEffects / build-time Blur | §十九（4 例，2026-08-31 全验证） |
+> | setFocus（OHOS Window Ops 区） | §十八（setFocus 子窗口 raiseToAppTop 层级验证） |
+> | on_new_window: Allow (window.open) | §十一 T0（Create real OS window 同路径） |
+> | Toggle IgnoreCursor (3s) / setIgnoreCursorEvents (3s toggle) / Overlay Ignore Cursor | §二十八（穿透 2 例） |
+> | window-state save/restore（Window Operations & Persisted-Scope 区） | §二十一（窗口位置记忆与恢复，含重启恢复） |
+>
+> **测试顺序建议**: ① 顶部通用区（Window DPI / currentMonitor / isFocused）确认基础读取 → ② 安全项（Set Title / Set Theme / Window ID / set_bounds）→ ③ 子窗口族（Create Decorated Window → 装饰按钮 36.7 → Set BG 36.4 → setOuterPosition / setInnerSize → ✕ 关闭）→ ④ 光标族（36.8）→ ⑤ 多 UIAbility 两按钮（36.6，建议最后做——留下的实例窗口须用其标题栏 ✕ 清理）→ ⑥ Set Min Size 组放最末并紧接 Reset Min Size（历史卡死风险提示，见该行备注）。
+
+### 36.1 顶部通用区
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | geometry-read | 尺寸/位置/DPI | Window DPI — inner/outer 尺寸与位置读取 | **T0** | 应用已启动 | 1. 点击 "Window DPI (resize/drag to verify)" 2. 拖动/缩放主窗口后再次点击 3. 对比两次输出 | ① manualResult 显示 innerSize / outerSize / innerPosition / outerPosition / scaleFactor 五项 ② 拖动后 position 变化、缩放后 size 变化 ③ outerSize ≥ innerSize | inner/outer 语义双侧闭环（2026-08-20 修复）：setter `set_inner_size` 补偿标题栏高度、getter `inner_position` 补 decor_height；scaleFactor 对应 hidumper Scale（本机 ≈2） |
+| core | geometry-read | 显示器信息 | currentMonitor — 分辨率/缩放/位置 | **T1** | 应用已启动 | 1. 点击 "currentMonitor" 按钮 2. 查看输出 | ① 返回 size（DisplayManager 物理像素，本机 3120×2080）+ scaleFactor + position + name ② 非空 monitor 对象 | 与 §二十七 refresh-rate 探针同源显示器体系；JS Monitor API 无 refreshRate 属上游全平台语义（Rust `video_modes()` 字段未暴露） |
+| core | focus | 读取 | isFocused — 前台聚焦读取 | **T0** | 应用已启动 | 1. 点击 "isFocused (should be true)" 按钮 | 返回 `true`（点击按钮时 app 必在前台）；若 false 记录现象 | isFocused 读 app 级 HAS_FOCUS 位（主窗口专属读回）；子窗口无独立焦点读回 API |
+| core | focus | 事件 | Watch onFocusChanged — 聚焦变化事件 | **T1** | 应用已启动 | 1. 点击 "Watch onFocusChanged" 开启监听 2. 切后台再回前台 3. 点击 "Stop watching focus" | ① 监听期间事件数 > 0 ② 事件含 focused=true/false 翻转 | 停止后显示 Total events；与 §二十七 start-resumed 的 SHOWN→Resumed 转发同源 |
+
+### 36.2 Mouse Events（OHOS desktop / 2in1）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | mouse-events | 光标读取 | Get Cursor Position — 光标坐标读取 | **T1** | 应用已启动（desktop 形态） | 1. 移动鼠标到某位置 2. 点击 "Get Cursor Position" | 返回当前光标 X/Y 坐标，移动鼠标后再点数值变化 | `cursorPosition` API → tao → pointer |
+| core | mouse-events | 实时流 | Start Mouse Tracking — 鼠标事件实时流 | **T1** | 应用已启动 | 1. 点击 "Start Mouse Tracking" 2. 在绿色虚线区域内移动/点击/滚动/双指缩放 3. 点击 "Stop Mouse Tracking" | mouseEvents 列表实时刷新：type（move/click/scroll/pinch-zoom）+ 坐标 + button | 触摸板双指缩放产生 pinch-zoom（列表紫色高亮）；仅 desktop/2in1 分区 |
+
+### 36.3 Window Decorations & Transparency
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | decorations | 主窗开关 | Toggle Decorations — 主窗口装饰开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Decorations (main window)" 2. 观察标题栏显隐与 isDecorated 读数 3. 再点恢复 | ① isDecorated 读数翻转（before→after 显示在结果区）② 标题栏视觉随读数变化；若读数翻转但主窗无视觉变化，记录现象（OHOS 主窗为系统管理窗） | 主窗口 setDecorations；结果区显示 `isDecorated: X → Y` |
+| core | decorations | 无装饰子窗 | Create Borderless Window — 纯无边框子窗口 | **T1** | 应用已启动 | 1. 点击 "Create Borderless Window (decorations=false)" 2. 观察子窗口 3. Ctrl+W 关闭 | ① 弹出无标题栏/无拖拽区/无关闭按钮的子窗口 ② 仅深色内容区 + "🖼️ Borderless Window" 文字 ③ 该窗口成为 Set BG 按钮靶窗 | decorations=false（不透明变体）；透明+无边框变体见 §十 T0；无 ✕ 按钮须 Ctrl+W 关闭 |
+| core | decorations | 有装饰子窗 | Create Decorated Window — 带标题栏子窗口（装饰按钮靶窗） | **T0** | 应用已启动 | 1. 点击 "Create Decorated Window (title bar)" 2. 观察标题栏 + 三按钮 3.（可选）点标题栏 □ 最大化再 ❐ 还原 4. 点 ✕ 关闭 | ① FloatPage 自绘标题栏 + 最小化/最大化/关闭按钮 ② 标题显示 "🪟 Decorated Test Window"（setTitle API15+）③ □/❐ 最大化/还原正常且**还原位置不漂移** ④ ✕ 关闭走 CloseRequested→destroy ⑤ 该窗口成为 36.7 装饰按钮靶窗 | 子窗口最大化三连修复（2026-08-27）：`maximizeSupported:true` + recover `moveTo` 回原位 + isMaximized 跳过 startMoving；OHOS 子窗口无系统装饰，decorations 控制的是 FloatPage 自绘按钮渲染 |
+
+### 36.4 Window Background Color
+
+> 先创建子窗口（Create Borderless / Create Decorated），再点 BG 按钮改**该子窗口**背景色。按钮经 label 直调 `plugin:window\|set_background_color`（@tauri-apps/api `Window.setBackgroundColor` 不传 label 的上游 bug 会误作用主窗口）。双层语义=窗口层 `setWindowBackgroundColor` + webview 层 ArkWeb `backgroundColor`（对齐 Rust `WebviewWindow::set_background_color`）；测试子窗口页面背景已透明化（init script），否则不透明 CSS 盖色。2026-08-27 真机 Set BG Red 验证通过。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| core | background-color | 不透明 | Set BG Red — 子窗口背景变红 | **T0** | 已创建子窗口（36.3） | 1. 点击 "Set BG Red (opaque)" 2. 观察子窗口背景 | 子窗口背景变红（[255,0,0,255] 全不透明） | 结果区显示靶窗 label 与 RGBA |
+| core | background-color | 半透明 | Set BG Blue — 半透明背景 | **T1** | 同上 | 1. 点击 "Set BG Blue (alpha=128)" | 子窗口背景呈半透明蓝（透出背后内容偏蓝） | [0,0,255,128] |
+| core | background-color | 全透明 | Set BG Green — 全透明背景 | **T1** | 同上 | 1. 点击 "Set BG Green (alpha=0)" | 子窗口背景全透明（内容区不可见） | [0,255,0,0] alpha=0 |
+| core | background-color | 重置 | Reset BG — 恢复默认背景 | **T1** | 已设过背景色 | 1. 点击 "Reset BG (null)" | 子窗口背景恢复默认（不透明白） | value=null 走重置分支 |
+
+### 36.5 OHOS Window Ops — 几何/状态
+
+> setOuterPosition / setInnerSize / 装饰按钮组（36.7）作用在**最后创建的 Float 子窗口**（需先 Create）。Toggle Maximize / Minimize / Fullscreen / Hide-Show 作用在主窗口（getCurrentWindow）。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | window-ops | 位置设置 | setOuterPosition — 子窗口位置移动 | **T0** | 已创建子窗口（36.3） | 1. 点击 "setOuterPosition (toggle 100/400)" 2. 观察子窗口移动 3. 再点一次（100↔400 toggle） | ① 子窗口左上角移动到 (100,100) 或 (400,400) ② manualResult 显示 before→after 读数与目标一致 | 结果区显示 `outerPosition (x,y) → (x,y) target` |
+| ohos | window-ops | 尺寸设置 | setInnerSize — 子窗口缩放与还原 | **T0** | 已创建子窗口 | 1. 点击 "setInnerSize (half size, restore)" 2. 观察缩放与自动还原 | ① 子窗口内容区缩到一半（下限 400×300）② 约 0.7s 后读数回显 ③ 自动还原原尺寸 | 内部 setSize→读回→还原三段；结果区显示 before→after |
+| ohos | window-ops | 最大化 | Toggle Maximize — 主窗口最大化开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Maximize" 2. 再点还原 | ① 主窗口最大化铺满屏幕 ② isMaximized 读数翻转 ③ 还原后无底部白条 | 作用主窗口；子窗口最大化用其标题栏 □（36.3）；OHOS 用 FOLLOW_APP_IMMERSIVE_SETTING 避免 recover 白条 |
+| ohos | window-ops | 最小化 | Minimize (2s restore) — 最小化自动恢复 | **T1** | 应用已启动 | 1. 点击 "Minimize (2s restore)" 2. 等待 2 秒 | ① 主窗口最小化 ② 2 秒后 `unminimize()` 自动恢复前台 | 与 §二十一 minimize 用例互补（彼为任务栏点击恢复路径，此为 API 自动恢复路径）。系统标题栏最小化为**每窗 session 级对称**（2026-09-16 6.5 修正定性：只隐藏被点窗自身，焦点回落其他窗；此前"按 app 聚合"观察系套件残留窗叠加态特例） |
+| ohos | window-ops | 全屏 | Toggle Fullscreen — 沉浸全屏开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Fullscreen" 2. 再点（或 Esc）还原 | ① 进入沉浸布局：隐藏系统标题栏/Dock/应用菜单栏 ② isFullscreen 读数翻转 ③ 还原完整 | `WindowManager.setFullscreen` 双路径（桌面 maximize(ENTER_IMMERSIVE)+隐藏标题栏/Dock；手机沉浸式）；2026-08-27 三处分裂统一修复（tao 镜像位/菜单栏 inline/菜单回调） |
+| ohos | window-ops | 可见性 | Hide/Show (2s restore) — 主窗口隐藏恢复 | **T0** | 应用已启动 | 1. 点击 "Hide/Show (2s restore)" 2. 等待 2 秒 | ① 主窗口隐藏（app 退后台）② 2 秒后自动恢复前台（`startAbility(instanceKey='main')` 复用实例，不爆发新窗口） | show 路径经 specified+onAcceptWant 实例路由（Phase 5 二次修订后）；hide/show 不对称问题三已修 |
+| ohos | window-ops | 置顶 | Toggle AlwaysOnTop — 跨应用置顶 | **T1** | 应用已启动 | 1. 点击 "Toggle AlwaysOnTop (partial)" 2. 切到其他 app（如文件管理器）观察主窗口 | ① isAlwaysOnTop 读数翻转 ② 置顶期间主窗口跨应用常驻最前（不被其他 app 遮挡） | `setWindowTopmost` API14+（WINDOW_TOPMOST 权限）；按钮标注 (partial)——视觉遮挡判定为准 |
+
+### 36.6 OHOS Window Ops — 多 UIAbility 实例（startAbility）
+
+> **状态更新（2026-09-15）**: 旧文档 "⏸️ deferred：多 UIAbility 建窗未移植" 定性已过时——multi-uiability-windows Phase 1-5 落地后两按钮均可用。desktop 形态 launchType 现为 **specified**（Phase 5 修订；多实例行为与 standard 一致已实证），按钮提示文字里 "Requires launchType: standard" 为旧文案。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | multi-uiability | 实例创建 | Create UIAbility Instance Window — 第二实例主窗口 | **T0** | 应用已启动（desktop 形态） | 1. 点击 "Create UIAbility Instance Window" 2. 观察新窗口 3. 分别操作两窗口（拖动/聚焦/点击）验证相互独立 4. 点新窗口标题栏 ✕ 关闭 | ① 弹出**独立 UIAbility 实例主窗口**（区别于 Float 子窗：系统标题栏 + 独立生命周期 + 最近任务卡片）② 新实例加载传入的 WebviewUrl（hello.html：helloworld 文案 + 点击计数器 + 输入框；URL 经 wry 待队列在 stage 注册握手后加载，OQ5 定案）③ 实例间焦点/输入/事件不串台 ④ ✕ 关闭触发 D13 销毁链（on_window_close→Destroyed→stage unregister），主窗不受影响 | `create_ui_ability_window` → start_ui_ability（app-control bridge fire-and-forget）→ PENDING 注册表握手 → 新 EntryAbility 实例；label `test-*` 前缀匹配 ACL；spawned 为系统管理窗，resize/move 返回 1300002（no-op，预期内）；销毁链 6.1/E4 已十二轮真机验证，本用例为按钮路径手动复验 |
+| ohos | multi-uiability | 透明实例 | Create Transparent UIAbility — 透明主窗口实例 | **T1** | 应用已启动 | 1. 点击 "Create Transparent UIAbility (主窗口透明)" 2. 观察透明效果 3. 测试页内三组按钮（① setBackgroundColor 系统窗口层 ② CSS background 内容层 ③ CSS opacity 整体） 4. 点击其他窗口使实例失焦 | ① 新 UIAbility 实例主窗口透明（透出桌面/背后窗口）② 三组按钮分别改对应层 ③ **失焦后变不透明白**（inactive container color，预期行为非缺陷） | `builder.transparent(true)` → want.parameters['tauri_transparent'] → registerUIAbilityStage(transparent=true) → setWindowContainerColor('#00000000','#FFFFFFFF')（active 透明/inactive 白） |
+
+### 36.7 OHOS Window Ops — 装饰按钮（Float 子窗口生效）
+
+> 需先 Create Decorated Window（36.3）。closable 是唯一被 FloatPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable/resizable 写入 LocalStorage 但 FloatPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 FloatPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 FloatPage 消费的 flag |
+| ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | FloatPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
+| ohos | decoration-flags | 可最小化 | Toggle Minimizable — 最小化 flag | **T1** | 同上 | 1. 点击 "Toggle Minimizable" | isMinimizable 读数翻转（state-only） | 同上（无最小化按钮） |
+| ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag | **T1** | 同上 | 1. 点击 "Toggle Resizable" | isResizable 读数翻转（state-only） | 真正禁用子窗 resize 需走 enableDrag(false)；本 flag 层为 API 拦截语义 |
+| ohos | decoration-flags | 可聚焦 | setFocusable(false) — 拒绝键盘焦点（自验式） | **T0** | 已创建子窗口；**主窗口当前持有焦点**（先点主窗口空白处） | 1. 点击 "setFocusable(false) (3s)" 2. **3 秒内点击子窗口一次** 3. 等自动判定 | ① ✅ PASS：主窗口焦点保持（子窗拒绝焦点点击）② ❌ FAIL：3 秒内主窗焦点丢失（子窗仍抢走焦点） | setWindowFocusable **无视觉变化**（语义=不接受键盘焦点，2026-08-27 A/B 实测定案）；按钮自验（轮询主窗 isFocused 3s 后判定）；程序化 setFocus() 不能用于验证（raiseToAppTop 只抬 z-order 不转移焦点） |
+
+### 36.8 OHOS Window Ops — 光标
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | cursor | 可见性 | setCursorVisible(false) — 光标全局隐藏 | **T0** | 应用已启动 | 1. 点击 "setCursorVisible(false) (3s)" 2. 移动鼠标观察光标 3. 等 3 秒 | ① 光标隐藏（移动鼠标也不见）② 3 秒后自动恢复可见 | `pointer.setPointerVisible` **全局** API（非窗口级，遗留语义问题六）；修复史：bridge facade 迁移曾丢 Rust 调用成 no-op，2026-08-27 恢复（plugin-window set-cursor-visible action + tao facade） |
+| ohos | cursor | 图标 | Cycle CursorIcon — 光标样式循环 | **T1** | 应用已启动 | 1. 连续点击 "Cycle CursorIcon" 多次 2. 移动鼠标观察样式 | 光标样式循环 9 种：default → hand → crosshair → text → wait → copy → not-allowed → grab → zoom-in | `pointer.setPointerStyleSync`；每点一次切下一个 |
+
+### 36.9 OHOS Window Ops — 自动测试补充区
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | window-misc | 窗口 ID | Window ID — getCurrentWindow label | **T1** | 应用已启动 | 1. 点击 "Window ID (getCurrentWindow)" | label 非空字符串（主窗口 "main"） | 验证 getCurrentWindow 解析 |
+| ohos | window-misc | 关闭事件 | CloseRequested — 子窗口关闭事件 | **T0** | 应用已启动 | 1. 点击 "CloseRequested (close sub-window)" | manualResult 显示 `onCloseRequested fired ✓ → PASS`（自动建临时子窗 → 关闭 → 事件回投） | 按钮内部：create close-test-* 透明子窗 → 监听 → 300ms 后 close → 600ms 判定 |
+| ohos | window-misc | 光标锁定 | setCursorGrab — 光标锁定窗口 | **T0** | 应用已启动（API ≥ 22 设备） | 1. 点击 "setCursorGrab(true) 5s (Lock to window)" 2. 5 秒内移动鼠标尝试移出窗口 3.（可选）锁定期间点击其他窗口 4. 等 5 秒自动解锁 | ① 光标被限制在窗口内**无法移出**（窗口内仍可移动）② 点击其他窗口触发失焦自动解锁（光标立即恢复自由）③ 5 秒后自动解锁 | `OH_WindowManager_LockCursor/UnlockCursor` NDK C API 22+（LOCK_WINDOW_CURSOR normal 权限已声明）；dlopen 弱加载，<22 设备降级 NotSupported |
+| ohos | window-misc | 窗口事件 | Watch Window Events — 事件监听 | **T1** | 应用已启动 | 1. 点击 "Watch Window Events" 开启监听 2. 切后台再回来（推荐触发方式）3. 点击 "Stop Watch Window Events" | ① 事件数 > 0 ② Types 含 `Focus=...`（拖动窗口另产生 Moved） | 监听 Resized/Moved/FocusChanged；停止时显示 Total + Types 汇总 |
+| ohos | window-misc | set_bounds | set_bounds round-trip — webview 几何往返 | **T1** | 应用已启动 | 1. 点击 "set_bounds round-trip (webview)" | `set_bounds_test → set_ok=true` → ✓ PASS | webview 层 set position+size 往返（多 webview 场景 naturalLayout 标记） |
+| ohos | window-misc | 窗口标题 | Set Title — 主窗口标题设置 | **T0** | 应用已启动 | 1. 点击 "Set Title (main window)" 2. 查看主窗口标题栏（可再点循环） | 主窗口标题栏文字循环：🪟 Tauri OHOS 测试标题 → Hello 华为账号 → Tauri OpenHarmony | `setWindowTitle` API15+（标题栏+任务栏可见）；图标不可改（窗口层无运行时 API，module.json5 静态配置） |
+| ohos | window-misc | 最小尺寸 | Set Min Size — 最小尺寸限制 | **T1** | 应用已启动；**放在本组最后测，测完紧接 Reset** | 1. 点击 "Set Min Size 1600×1200 (main window)" 2. 拖拽窗口边缘尝试缩小 | ① 拖拽不能使窗口小于 1600×1200（logical）② 无冻结 | ⚠️ LogicalSize × scale(≈2.0) ≈ 3200×2400px > 屏 3120×2080，按钮自带"可能卡死"历史警告（sizeChange 风暴时期）；serializeOp 队列修复后预期安全；若仍冻结 force-stop 重启后点 Reset Min Size 清除。`setWindowLimits` API11+ |
+| ohos | window-misc | 尺寸上下限 | Set Min+Max — 四值同下修复验证 | **T1** | 应用已启动 | 1. 点击 "Set Min+Max (1600×1200 / 2400×1800 px)" 2.（可选）hilog 搜 WindowManager `setWindowLimits` | ① hilog 两次调用：setMinSize 后 `min=1600×1200 max=0×0`；setMaxSize 后 **min 保留** `min=1600×1200 max=2400×1800`（修复前第二次 min=0×0 丢失）② 拖拽缩不小于 min、放不大于 max | tao set_min/max_inner_size "四值同下"修复；PhysicalSize 直传 px 避免 scale 换算超屏 |
+| ohos | window-misc | 重置限制 | Reset Min Size — 恢复自由缩放 | **T1** | 已设过 Min Size | 1. 点击 "Reset Min Size (null)" 2. 拖拽窗口边缘缩小 | 窗口可缩到 < 1600×1200（min 设 1×1，系统下限 760×570 接管） | setWindowLimits 无 reset 接口（0=不改变非清除），min=1 让系统下限接管 |
+| ohos | window-misc | 窗口主题 | Set Theme — 深浅色切换 | **T0** | 应用已启动 | 1. 连续点击 "Set Theme (toggle Light/Dark/System)" | 窗口深浅色循环：Light 浅色 → Dark 深色 → System 跟随系统设置 | `setColorMode`：LIGHT / DARK / NOT_SET（系统跟随） |
+| ohos | window-misc | 用户注意力 | Request User Attention — 系统通知 | **T0** | 应用已启动 | 1. 点击 "Request User Attention (notification)" 2. 首次弹授权框点"允许" 3. 再点一次 | 右下角弹出 "Tauri App / 请查看应用窗口" 系统通知 | notificationManager.publish + requestEnableNotification 授权重试（1600004）；OHOS 不区分 Critical/Informational 统一发通知 |
+| ohos | window-misc | IME 位置 | Set IME Position — 输入法光标上报 | **T0** | 应用已启动 | 1. 点击 "Set IME Position (200,400)"（按钮自动注入并聚焦输入框） | manualResult 显示 `updateCursor 返回: OK ✅ → PASS` + 上报 CursorInfo left/top（物理像素） | `inputMethod.getController().updateCursor` API10+；按钮自验（注入 input + `get_ime_position_result` 回读真实结果）；无聚焦输入框时报 12800009 client detached（按钮已自动聚焦规避）；ArkWeb HTML input 走系统 IMF，webview 场景完全可用（2026-08-19 A/B 实测） |
+
+---
+
+## 三十七、OHOS 多 UIAbility 窗口（multi-uiability-windows）手动用例
+
+> **背景**: multi-uiability-windows 专项（openspec）Phase 1-6 落地后的系统级多实例场景手动复验。§36.6 两按钮是**创建入口**（Create UIAbility Instance Window / Create Transparent UIAbility），本节用例以其产出的实例窗为前置，覆盖自动套件无法触达的系统交互面（标题栏最小化/任务卡片/tray/桌面图标）。全部场景 2026-09-16 前已在 6.5/5.4/6.3 专项真机验证，本节为用户可独立复验的入口与判据。
+>
+> **测试顺序建议**: 先点 "Create UIAbility Instance Window"（36.6）建立双窗态 → 依次执行 37.1-37.6 → 收尾用实例窗标题栏 ✕ 关闭全部实例窗（主窗存活为最后判据）。若中途状态混乱，`aa force-stop` 后裸重启恢复单窗净态。
+
+### 37.1 每窗最小化与恢复（E2）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | multi-uiability | 最小化 | 系统标题栏最小化 — 每窗 session 级对称 | **T0** | 主窗 + 1 个实例窗均可见（36.6 创建） | 1. 在实例窗内点击计数器按钮 N 次 2. 点击实例窗**系统标题栏**最小化按钮 3. 观察主窗 4. 从任务卡片/任务栏点击该实例任务恢复 5. 观察计数器 | ① 仅被点的实例窗隐藏，主窗保持可见且自然获得焦点 ② 恢复后 webview 状态保留（计数器仍显示 N）③ 不产生新实例（活任务恢复不经 onNewWant/onAcceptWant 路由） | 6.5 E2 定性：`setVisibilityMinimizeSession` 单 persistentId 每窗对称；主窗标题栏最小化同语义（焦点回落实例窗）。6.2 曾误读"按 app 聚合"，系套件残留窗叠加态特例已修正 |
+| ohos | multi-uiability | 任务卡片 | 任务卡片切换 — 焦点往返与内容保持 | **T0** | 主窗 + 实例窗均可见 | 1. 点击实例窗使其聚焦 2. 任务卡片/任务栏点击主窗任务 3. 再点实例窗任务 4. 重复往返 2-3 轮 | ① 焦点随卡片切换到目标窗 ② 每窗内容不变（主窗 TestRunner / 实例窗 hello.html）③ 全程无新实例 | 6.5 E3a；恢复链=NotifySessionForeground→OnRenderToForeground→SHOWN，webview 状态跨周期保留 |
+
+### 37.2 输入与焦点隔离（E3）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | multi-uiability | 输入路由 | 实例窗输入 — IME 双向差分 | **T1** | 主窗 + 实例窗均可见 | 1. 点击实例窗 hello.html 输入框，键盘输入若干字符 2. 点击主窗任意输入区，再输入若干字符 3. 检查两窗输入内容 | ① 第一步的字符只出现在实例窗输入框 ② 第二步的字符只出现在主窗 ③ 两窗均无对方输入的串台字符 | Phase 4.3 已自动+真机双验（per-webview OnBlur/OnFocus 对+IME 事件按 windowId 路由），本例为手动复验入口 |
+
+### 37.3 恢复目标与二次拉起（OQ6/Phase 5 路由）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | multi-uiability | tray 恢复 | tray 点击恢复 — 目标恒为主实例 | **T0** | tray 已初始化（§一）；主窗与实例窗并存 | 1. 最小化主窗与实例窗（各自标题栏）2. 点击系统托盘的 app 图标 | ① 主实例恢复前台 ② 实例窗保持最小化状态不受影响 ③ 无新实例 | OQ6/E12 定案：tray/statusbar 走裸 want 经 onAcceptWant 固定路由 `tauri-primary`；hideAbility 系 ability 级亦只作用主实例 |
+| ohos | multi-uiability | 二次拉起 | 桌面图标二次启动 — 单实例守护 | **T1** | 主窗 + 实例窗并存 | 1. 桌面图标/任务栏再次启动 app（非测试按钮路径） | ① 无新窗口产生 ② 主实例置前（不新开、不腐蚀实例窗） | specified+onAcceptWant 路由（Phase 5 D4b 守护纵深）；与 §十三 Single-Instance 互补（彼为无实例态的冷启/热启行为） |
+
+### 37.4 级联语义（B3/OQ2 生产决策）
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|---------|------|
+| ohos | multi-uiability | 级联销毁 | Float 挂主实例 — 实例销毁不连坐 | **T1** | 已 Create Decorated Window（36.3）+ 1 个实例窗 | 1. 关闭实例窗（其系统标题栏 ✕）2. 观察 Float 子窗与主窗 | ① Float 子窗存活（挂主实例 stage，不随实例销毁）② 主窗存活 ③ 实例窗走 Destroyed 干净销毁 | B3 零代码实验定案（6.3）：Float 恒挂 primary stage；per-instance Float=feasible-but-not-implemented（实验证实非 primary stage 可建 Float 且 child 级联销毁，生产维持挂 primary 避免连坐） |
+
+---
+
+## 三十八、手动用例统计汇总
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -752,8 +917,10 @@
 | OHOS — Accessibility 插件（fontScale/屏幕阅读器） | 0 | 3 | **3** |
 | OHOS — Screenshot 插件（截图预览/色块取色/canvas snapshot） | 2 | 1 | **3** |
 | OHOS — Continuation 插件（接续边界/源端保存/双设备往返） | 0 | 3 | **3** |
+| OHOS — Stronghold 插件（快照往返/错密码/重启持久） | 1 | 2 | **3** |
 | Key Repeat Detection（key-synthesis 长按/点按） | 2 | 2 | **4** |
-| **合计** | **98** | **81** | **179** |
+| OHOS — 窗口能力手动按钮（§三十六，ohos-window-test-buttons A 区合并） | 20 | 21 | **41** |
+| OHOS 多 UIAbility 窗口（§三十七，multi-uiability-windows 系统级场景） | 3 | 3 | **6** |
+| **合计** | **120** | **106** | **226** |
 
-> **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。2026-09-15 新增 5 例：§四 Dialog.open (directory)（#99，T0）、§九 预关闭探针（#103，T0）+ danger-mode exit（#100，T0）/ restart（#101，T0）、§二十一 隐私模式（#115，T1），合计 98 T0 / 81 T1 / 179。2026-09-28 新增 1 例：§九 应用层退出确认 Exit Confirm（#103 之上的应用 UX，T1）；移除 1 例：§九 预关闭探针开启态 T0（裸拦截测试由 Exit Confirm 按钮用例取代，关键判据/权限信息已并入该行备注），合计 97 T0 / 82 T1 / 179。
-
+> **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。2026-09-09 新增 §三十五 Stronghold（1 T0 + 2 T1，快照 scrypt debug ~107s/次归手动档），原 §三十五 统计汇总顺延为 §三十六，合计 95 T0 / 82 T1 / 177；同日三例真机验证通过（HAD-W32 release HAP，release 下快照读写 ~1-2s）。15 新增 5 例：§四 Dialog.open (directory)（#99，T0）、§九 预关闭探针（#103，T0）+ danger-mode exit（#100，T0）/ restart（#101，T0）、§二十一 隐私模式（#115，T1），合计 98 T0 / 81 T1 / 179。2026-09-15 新增 §三十六（ohos-window-test-buttons.md A 区"有手动按钮的窗口能力"整体合并入本文件，41 例 = 20 T0 + 21 T1，grep 实核；已由既有章节覆盖的 6 组按钮以交叉引用表列出不计例：透明+无边框→§十、vibrancy→§十九、setFocus→§十八、on_new_window Allow→§十一、IgnoreCursor→§二十八、window-state→§二十一），原统计汇总顺延为 §三十七，合计 115 T0 / 103 T1 / 218（grep 行数实核一致）。合并时剔除源文档两条过时结论（"Run All 触发事件风暴勿跑"已随 serializeOp 修复过时；多 UIAbility 两按钮 "deferred" 已随 multi-uiability-windows Phase 1-5 落地可用）。2026-09-16 新增 §三十七（multi-uiability-windows 系统级场景 6 例 = 3 T0 + 3 T1：每窗最小化/任务卡片切换/IME 差分/tray 恢复目标/二次拉起守护/Float 级联语义；§36.6 两按钮为创建入口不重复计例），原统计汇总顺延为 §三十八，合计 118 T0 / 106 T1 / 224（grep 行数实核一致）。同日修正 §36.5 最小化备注（"按 app 聚合"误读按 6.5 每窗对称定性更正）与 §36.6 实例窗加载页（hello.html，OQ5 定案，非 MainPage）。2026-09-28 新增 1 例：§九 应用层退出确认 Exit Confirm（#103 之上的应用 UX，T1）；移除 1 例：§九 预关闭探针开启态 T0（裸拦截测试由 Exit Confirm 按钮用例取代，关键判据/权限信息已并入该行备注），合计 97 T0 / 82 T1 / 179。2026-09-28 rebase 并轨：上游 2026-09-15/09-28 五例（#99/#100/#101/#103/#115）与本文 §三十六（20 T0/21 T1）、§三十七（3 T0/3 T1）分谱系并轨，合计 120 T0 / 106 T1 / 226（上游表格行 98/81 为陈旧值，已按逐行 grep 实数修正）。

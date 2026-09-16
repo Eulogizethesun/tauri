@@ -98,6 +98,31 @@ pub struct NewWindowDenyState {
   pub last_url: Mutex<Option<String>>,
 }
 
+/// Exit-prevention guard for the OHOS RunEvent test instrumentation.
+///
+/// The `ExitRequested` handler in lib.rs calls `prevent_exit()` on every exit
+/// request under `cfg(target_env = "ohos")` to exercise that API (test-only
+/// code — that's how the `prevent_exit` manual test drives the event). The
+/// process-plugin exit experiment (`VITE_PROCESS_TESTS` builds) disables this
+/// guard before invoking `plugin:process|exit` so the handler does not
+/// swallow the event; the `restart` leg clears it too, purely defensively —
+/// post-#82-14 it never fires `ExitRequested` (see below). Post-#82-14
+/// layering, `exit` fires `ExitRequested` but nothing terminates the process
+/// on OHOS, and `restart` goes through the `ohos.process` bridge
+/// (`appRecovery.restartApp`, API 12+) without firing `ExitRequested` at
+/// all. The guard is per-process and defaults back on at every boot.
+/// Default: enabled (keep exercising `prevent_exit`).
+#[cfg(target_env = "ohos")]
+pub static EXIT_PREVENT_GUARD: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(true);
+
+#[command]
+#[cfg(target_env = "ohos")]
+pub fn set_exit_prevention(enabled: bool) {
+  EXIT_PREVENT_GUARD.store(enabled, Ordering::SeqCst);
+  log::info!("[set_exit_prevention] enabled={}", enabled);
+}
+
 #[command]
 pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> tauri::Result<()> {
   let state = app.state::<NewWindowDenyState>();
@@ -914,9 +939,11 @@ pub fn create_decorated_window<R: tauri::Runtime>(
 
 /// Test command: create a window in a new UIAbility instance via `startAbility`.
 ///
-/// Requires `launchType: "standard"` in module.json5. The new instance's main
-/// window is system-managed (resize/move return 1300002); it loads the app's
-/// default page (MainPage), not the WebviewUrl passed here.
+/// Requires `launchType: "specified"` + EntryAbilityStage onAcceptWant routing
+/// (tauri-window-N keys) in module.json5. The new instance's main window is
+/// system-managed (resize/move return 1300002); it loads the WebviewUrl passed
+/// here via wry's pending_ops queue once the instance registers its stage
+/// (openspec multi-uiability-windows OQ5 — not via want.parameters.url).
 #[cfg(target_env = "ohos")]
 #[command]
 pub fn create_ui_ability_window<R: tauri::Runtime>(
@@ -960,6 +987,77 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
     "[create_ui_ability_window] webview_acquired={}, label={}, main_exists={}, all_labels={:?}",
     webview_acquired, window_id, main_exists, all_labels
   );
+
+  // 3.7 evidence (openspec multi-uiability-windows): fire deep-link get_current +
+  // get_current_window_id from the spawned instance's webview once it settles.
+  // commands inject the CALLING window, so these must resolve this window's
+  // pre-allocated UIAbility id (>0) and lazy-take ITS OWN INITIAL_WANT_URI
+  // partition (design.md D9), visible as "[deep-link] get_current_for_window(label=...,
+  // id=N)" in hilog. Must go through __TAURI_INTERNALS__.invoke — a raw fetch to
+  // tauri://localhost/ is served the index.html asset, not routed through the IPC
+  // handler (verified on device 2026-09-14). Retried on a detached thread because
+  // the spawned webview finishes loading asynchronously (build() is non-blocking
+  // on OHOS).
+  let probe_window = _window.clone();
+  // 4.3 evidence (openspec multi-uiability-windows, design.md D5): tao now keys
+  // GainedFocus/LostFocus by the originating UIAbility window id, and tauri
+  // emits tauri://focus / tauri://blur through emit_to_window — which delivers
+  // ONLY to EventTarget::Window{label}/WebviewWindow{label} (kind "Any" would
+  // NOT receive them). The focus probe installs listeners in BOTH the spawned
+  // window and the main window: switching focus must fire blur on the window
+  // losing focus and focus on the window gaining it, and the pre-Phase-4
+  // phantom shape (main logging blur-then-focus while the spawned window takes
+  // focus, because both events were hardcoded to window 0) must be gone.
+  let main_probe_window = app.get_webview_window("main");
+  std::thread::spawn(move || {
+    const PROBE_DELAYS_MS: [u64; 3] = [1500, 3000, 5000];
+    let js = r#"(function(){
+      function log(m){ console.log('[deep-link-probe] ' + m) }
+      try {
+        window.__TAURI_INTERNALS__.invoke('get_current_window_id')
+          .then(function(r){ log('window_id=' + JSON.stringify(r)) })
+          .catch(function(e){ log('wid-err: ' + e) });
+        window.__TAURI_INTERNALS__.invoke('plugin:deep-link|get_current')
+          .then(function(r){ log('deep_link=' + JSON.stringify(r)) })
+          .catch(function(e){ log('dl-err: ' + e) });
+      } catch (e) { log('no-internals: ' + e) }
+    })()"#;
+    let focus_js = r#"(function(){
+      function log(m){ console.log('[focus-probe] ' + m) }
+      if (window.__FOCUS_PROBE_INSTALLED__) { return; }
+      window.__FOCUS_PROBE_INSTALLED__ = true;
+      try {
+        var label = window.__TAURI_INTERNALS__.metadata.currentWindow.label;
+        log('installing focus listeners for label=' + label);
+        ['tauri://focus','tauri://blur'].forEach(function(ev){
+          window.__TAURI_INTERNALS__.invoke('plugin:event|listen', {
+            event: ev,
+            target: { kind: 'Window', label: label },
+            handler: window.__TAURI_INTERNALS__.transformCallback(function(){
+              log((ev === 'tauri://focus' ? 'FOCUS' : 'BLUR') + ' label=' + label);
+            })
+          }).then(function(id){ log('listener installed: ' + ev + ' id=' + id) })
+            .catch(function(e){ log('listen-err ' + ev + ': ' + e) });
+        });
+      } catch (e) { log('no-internals: ' + e) }
+    })()"#;
+    for delay in PROBE_DELAYS_MS {
+      std::thread::sleep(std::time::Duration::from_millis(delay));
+      // A failed eval (webview not yet loaded, or window already closed by the
+      // time a later round fires) must not abort the remaining retries.
+      if let Err(e) = probe_window.eval(js) {
+        log::warn!("[create_ui_ability_window] deep-link probe eval failed: {:?}", e);
+      }
+      if let Err(e) = probe_window.eval(focus_js) {
+        log::warn!("[create_ui_ability_window] spawned focus probe eval failed: {:?}", e);
+      }
+      if let Some(main) = &main_probe_window {
+        if let Err(e) = main.eval(focus_js) {
+          log::warn!("[create_ui_ability_window] main focus probe eval failed: {:?}", e);
+        }
+      }
+    }
+  });
 
   Ok(CreateUIAbilityWindowResult {
     label: window_id.clone(),
@@ -1045,6 +1143,28 @@ pub fn transparent_test_start(window_id: String) -> tauri::Result<()> {
   Ok(())
 }
 
+/// Test hook (openspec multi-uiability-windows test-plan §3): returns the calling
+/// window's pre-allocated UIAbility window id. Resolves the webview label through
+/// the same registry deep-link uses (design.md D9), so a page can read back its
+/// own instance id — the primary window and never-spawned labels resolve to 0.
+#[cfg(target_env = "ohos")]
+#[derive(serde::Serialize)]
+pub struct CurrentWindowIdResult {
+  pub label: String,
+  pub window_id: i64,
+}
+
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn get_current_window_id<R: tauri::Runtime>(
+  window: tauri::Window<R>,
+) -> tauri::Result<CurrentWindowIdResult> {
+  let label = window.label().to_string();
+  let window_id = openharmony_ability::window_id_for_label(&label);
+  log::info!("[get_current_window_id] label={} -> id={}", label, window_id);
+  Ok(CurrentWindowIdResult { label, window_id })
+}
+
 /// Diagnostic result returned by create_ui_ability_window for automated tests.
 #[cfg(target_env = "ohos")]
 #[derive(serde::Serialize)]
@@ -1071,7 +1191,10 @@ pub fn create_ui_ability_windows_x3<R: tauri::Runtime>(
 
   let mut results = Vec::new();
   for i in 1..=3 {
-    let window_id = format!("uiability-x3-{}-{}", std::time::SystemTime::now()
+    // "test-" prefix matches the run-app capability window patterns ([test-*]) so
+    // the spawned instance's webview is allowed to invoke commands (the x3 IPC
+    // trigger below depends on it).
+    let window_id = format!("test-x3-{}-{}", std::time::SystemTime::now()
       .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), i);
     log::info!("[x3] Creating UIAbility instance #{}: {}", i, window_id);
 
