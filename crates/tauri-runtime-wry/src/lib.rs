@@ -4706,12 +4706,15 @@ fn handle_event_loop<T: UserEvent>(
         let recv = rx.try_recv();
         let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
 
-        // OHOS: mark ExitRequested as sent to prevent the LoopDestroyed path
-        // from firing a duplicate.
-        #[cfg(target_env = "ohos")]
-        exit_state.0.store(true, Ordering::SeqCst);
-
         if !should_prevent {
+          // OHOS: mark ExitRequested as sent to prevent the LoopDestroyed path
+          // from firing a duplicate — only on the actual-exit path. When the
+          // user prevents this exit, exit_state stays false, so the next
+          // teardown trigger (window close / pre-close probe / LoopDestroyed
+          // fallback) still dispatches ExitRequested instead of being deduped
+          // away for the rest of the process lifetime (review R34).
+          #[cfg(target_env = "ohos")]
+          exit_state.0.store(true, Ordering::SeqCst);
           // OHOS: unlike the old comment claimed, ControlFlow::Exit IS consumed
           // here — the tao OHOS backend maps it (after each MainEvent dispatch)
           // to its pending-exit flag, which dispatches LoopDestroyed and then
@@ -4879,8 +4882,10 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   // `inner` and moves `label`.
   if let Some(window_wrapper) = removed {
     // Destroy the OS window through tao (OHOS): Float windows call
-    // destroyWindow, the main window terminates the UIAbility — see
-    // `WindowExtOpenHarmony::close`. Without it the OS Float window stays on
+    // destroyWindow; the main (UIAbility) window is system-managed — the
+    // bridge's destroy-window handler rejects window id 0, so for it this is
+    // a rejected fire-and-forget and the OS window remains until the system
+    // closes it. Without this call the OS Float window stays on
     // screen → ghost windows that diverge from Rust's records.
     //
     // Recursion safety: close → ArkTS destroyWindow → FloatPage
@@ -5231,6 +5236,13 @@ You may have it installed on another user account, but it is not available for t
 
     if cfg!(target_os = "macos") {
       log::warn!("WebKit webview runtime not found, attempting to create webview anyway.");
+    } else if cfg!(target_env = "ohos") {
+      // ArkWeb is an always-present system component on OpenHarmony; the probe's
+      // `Err` only reflects the version CAPI export being absent on devices below
+      // API 20. Match the macOS precedent for system-provided WebView runtimes.
+      log::warn!(
+        "ArkWeb engine version unavailable (device below API 20); ArkWeb is an always-present system component, attempting to create webview anyway."
+      );
     } else {
       return Err(Error::WebviewRuntimeNotInstalled);
     }

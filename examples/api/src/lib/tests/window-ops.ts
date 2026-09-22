@@ -29,6 +29,41 @@ async function createFloatWindow(label: string): Promise<Window> {
   return w;
 }
 
+/// issue#97 验收口径是「精确相等、零容差」。轮询只消除 resize-inner 异步桥
+/// 往返的时序抖动（单次固定 delay 在慢路径下会读到旧值），不放松断言：
+/// 超时即 fail，报错带历次读值。
+async function readBackEquals(
+  read: () => Promise<{ width: number; height: number }>,
+  w: number,
+  h: number,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const seen: string[] = [];
+  const start = Date.now();
+  for (;;) {
+    const cur = await read();
+    if (cur.width === w && cur.height === h) return;
+    seen.push(`${cur.width}×${cur.height}`);
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`${label}: 期望 ${w}×${h}，${timeoutMs}ms 内读回 ${seen.join(' → ')}`);
+    }
+    await delay(200);
+  }
+}
+
+/// 主窗口 resize 仅在自由悬浮形态（PC/2in1）生效；手机全屏主窗是系统级
+/// no-op（见 doc/ohos-window-test-mapping.md 窗口大小调整行）。outerSize≈
+/// 显示器视为全屏形态，跳过主窗尺寸用例（与 maximize 用例的 alreadyMax
+/// 早退同策；代价是 PC 最大化状态下也会跳过）。
+async function mainWindowResizable(): Promise<boolean> {
+  const win = getCurrentWindow();
+  const mon = await currentMonitor();
+  if (!mon) return true; // 无显示器信息时按可 resize 尝试
+  const outer = await win.outerSize();
+  return !(outer.width >= mon.size.width * 0.95 && outer.height >= mon.size.height * 0.95);
+}
+
 /// 诚实测试：只断言能从 JS 真实观测到的效果。
 /// - setInnerSize：主窗口严格读回（resize 触发尺寸回调，读回可靠）。
 /// - setOuterPosition：smoke（不抛错）。moveWindowTo 只改位置、不触发我们监听的
@@ -97,25 +132,113 @@ export const windowOpsTests: TestCase[] = [
     name: 'window.setInnerSize actually resizes (main window)',
     category: 'auto',
     async fn() {
-      const { PhysicalSize } = await import('@tauri-apps/api/dpi');
+      if (!(await mainWindowResizable())) return;
+      const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
       const win = getCurrentWindow();
       const orig = await win.innerSize();
-      // 目标取原值一半，确保差距足够大（避免容差漏洞）
-      const targetW = Math.max(400, Math.floor(orig.width / 2));
-      const targetH = Math.max(300, Math.floor(orig.height / 2));
-      await win.setSize(new PhysicalSize(targetW, targetH));
-      await delay(800);
-      const after = await win.innerSize();
-      // 严格断言：读回值必须比 orig 更接近 target。no-op 时 after=orig，不满足。
-      const closerW = Math.abs(after.width - targetW) < Math.abs(orig.width - targetW) - 1;
-      const closerH = Math.abs(after.height - targetH) < Math.abs(orig.height - targetH) - 1;
-      assert(
-        closerW && closerH,
-        `setSize(${targetW}×${targetH}) 未生效: innerSize ${orig.width}×${orig.height} → ${after.width}×${after.height}`
+      const sf = await win.scaleFactor();
+      // demo 主窗在 desktop cfg 下带 min_inner_size(600,400)（src-tauri lib.rs），
+      // tao 建窗即换算成物理像素下发 setWindowLimits；不清掉的话小目标会被
+      // 钳制（参考 PC density 1.9 → 最小 1140×760）。测完还原。
+      await win.setMinSize(null);
+      // set-limits 是 fire-and-forget 桥调用（系统调用完成不早于 ack 有保证），
+      // 等 600ms 让解除先落地再 resize——否则小目标可能被旧 min 抢先钳住
+      // （setWindowLimits 完成顺序 vs resize 在系统内无顺序保证）。
+      await delay(600);
+      try {
+        // 目标取原值一半，下限用 issue#97 的人工验证基准 1000×700
+        const targetW = Math.max(1000, Math.floor(orig.width / 2));
+        const targetH = Math.max(700, Math.floor(orig.height / 2));
+        // issue#97 验收口径：精确相等、零容差。读回源是系统 drawableRect
+        // 快照（inner_size → inner_rect_for），不是 tao 自己算的值。
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackEquals(
+          () => win.innerSize(),
+          targetW,
+          targetH,
+          `setSize(${targetW}×${targetH}) 精确读回 (scaleFactor=${sf})`,
+        );
+        // issue#97 场景「连续两次 set」：中间设一个不同值并确认落地，最终
+        // 读回必须是第二次的值（防止连续 set 被合并/丢失）。
+        const midW = targetW + 100;
+        const midH = targetH + 80;
+        await win.setSize(new PhysicalSize(midW, midH));
+        await readBackEquals(() => win.innerSize(), midW, midH, `setSize(${midW}×${midH}) 精确读回`);
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackEquals(
+          () => win.innerSize(),
+          targetW,
+          targetH,
+          `连续两次 setSize 后读回 (期望 ${targetW}×${targetH}, scaleFactor=${sf})`,
+        );
+      } finally {
+        // 还原尺寸与 demo 的最小尺寸约束（lib.rs: min_inner_size(600,400) 逻辑像素；
+        // 先还原尺寸再恢复约束，orig 本来就满足约束不会引发再钳制）
+        await win.setSize(new PhysicalSize(orig.width, orig.height));
+        await delay(400);
+        await win.setMinSize(new LogicalSize(600, 400));
+      }
+    },
+  },
+  {
+    // issue#97 验收 3：save/restore 零漂移（shrinking-main-window 永久回归保护）。
+    // 会话内代理：读 inner → 写回同值 → 再读，5 轮全部精确相等。跨重启的
+    // window-state 循环 JS 无法重启 UIAbility，仍按 issue97-verify-plan.md §F
+    // 人工执行；本用例保护同一漂移机制（读侧 drawableRect ↔ 写侧 resize-inner）。
+    name: 'window.setInnerSize save/restore zero drift (5 rounds)',
+    category: 'auto',
+    async fn() {
+      if (!(await mainWindowResizable())) return;
+      const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
+      const win = getCurrentWindow();
+      const orig = await win.innerSize();
+      // 同用例一：清掉 600×400 逻辑最小约束，否则 1000×700 会被钳制
+      await win.setMinSize(null);
+      await delay(600); // 同用例一：等 fire-and-forget 的解除先落地
+      try {
+        const targetW = 1000, targetH = 700; // issue#97 人工验证基准
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackEquals(
+          () => win.innerSize(),
+          targetW,
+          targetH,
+          `setSize(${targetW}×${targetH}) 精确读回 (scaleFactor=${await win.scaleFactor()})`,
+        );
+        for (let i = 1; i <= 5; i++) {
+          const cur = await win.innerSize(); // save
+          await win.setSize(new PhysicalSize(cur.width, cur.height)); // restore
+          await readBackEquals(
+            () => win.innerSize(),
+            targetW,
+            targetH,
+            `第 ${i} 轮 save/restore 漂移: ${cur.width}×${cur.height} 写回后期望恒为 ${targetW}×${targetH}`,
+          );
+        }
+      } finally {
+        // 还原（不还原会经 window-state 插件跨轮投毒：下一轮 orig=1000×700，
+        // 用例一的原值一半目标会低于最小约束）
+        await win.setSize(new PhysicalSize(orig.width, orig.height));
+        await delay(400);
+        await win.setMinSize(new LogicalSize(600, 400));
+      }
+    },
+  },
+  {
+    // issue#97 场景 2：Float 子窗口（decor=0，chrome 构造性为 0）精确读回。
+    // 沿用 core.ts 的 float 窗口惯例：不主动销毁，留给手动 Close All 清理；
+    // label 用 test- 前缀（cmd.rs 惯例：非 test- 前缀会注入 STATUS_SCRIPT 轮询）。
+    name: 'float window setInnerSize exact readback (decor=0)',
+    category: 'auto',
+    async fn() {
+      const { PhysicalSize } = await import('@tauri-apps/api/dpi');
+      const w = await createFloatWindow('test-size-' + Date.now());
+      await w.setSize(new PhysicalSize(760, 1100));
+      await readBackEquals(
+        () => w.innerSize(),
+        760,
+        1100,
+        `float setSize(760×1100) 精确读回 (scaleFactor=${await w.scaleFactor()})`,
       );
-      // 还原
-      await win.setSize(new PhysicalSize(orig.width, orig.height));
-      await delay(400);
     },
   },
   {

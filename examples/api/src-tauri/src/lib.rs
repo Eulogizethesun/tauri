@@ -710,7 +710,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         log::info!("OHOS platform initialized successfully"); // No logger initialized on OHOS yet
       }
 
-      #[cfg(desktop)]
+      // Auto-test fixtures; both OHOS device forms run the suite, so the
+      // gate is any(desktop, target_env = "ohos") — iOS/Android stay without
+      // the fixture, matching the upstream desktop-only gate (review R42).
+      #[cfg(any(desktop, target_env = "ohos"))]
       std::thread::spawn(|| {
         let server = match tiny_http::Server::http("localhost:3003") {
           Ok(s) => s,
@@ -761,9 +764,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 
       // WebSocket echo fixture for plugin-websocket tests (port 3004).
       // Echoes Text/Binary frames back to the sender. tungstenite 0.24 builds
-      // on OHOS-desktop (no TLS deps in default features); same pattern as the
-      // HTTP echo server above (port 3003) which already works under cfg(desktop).
-      #[cfg(desktop)]
+      // for the OHOS target (no TLS deps in default features); same
+      // any(desktop, target_env = "ohos") gate as the HTTP echo server above
+      // (port 3003).
+      #[cfg(any(desktop, target_env = "ohos"))]
       std::thread::spawn(|| {
         let listener = match std::net::TcpListener::bind("localhost:3004") {
           Ok(l) => l,

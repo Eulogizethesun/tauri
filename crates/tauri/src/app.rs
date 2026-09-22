@@ -87,6 +87,26 @@ impl ExitRequestApi {
   /// Prevents the app from exiting.
   ///
   /// **Note:** This is ignored when using [`AppHandle#method.restart`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** an `ExitRequested` event with `code: None` is
+  ///   preventable only through the PC/2-in-1 pre-close probe
+  ///   (`UIAbility.onPrepareToTerminateAsync`), which requires the app to
+  ///   declare `ohos.permission.PREPARE_APP_TERMINATE` (normal, system_grant;
+  ///   already included in the tauri-cli open-harmony template) in its entry
+  ///   `module.json5` — older projects or custom `module.json5` files need to
+  ///   add it. The probe is an API 15+ (HarmonyOS 5.0.3+) interface: on
+  ///   older systems the framework has no such callback, so it is never
+  ///   invoked and the exit proceeds silently with no interception chance.
+  ///   On API 15–18 it only executes on PC and 2-in-1 devices (Tablet is
+  ///   additionally covered from API 19); when the permission is missing or
+  ///   the device form factor is not supported, the system skips the
+  ///   callback entirely, so the exit proceeds and `prevent_exit` is never
+  ///   invoked for it. The last-window teardown
+  ///   path also emits `code: None`, but by then the system has already
+  ///   committed to destroying the UIAbility window stage — calling
+  ///   `prevent_exit` there cannot keep the app alive.
   pub fn prevent_exit(&self) {
     if self.code != Some(RESTART_EXIT_CODE) {
       self.tx.send(ExitRequestedEventAction::Prevent).unwrap();
@@ -199,6 +219,15 @@ pub enum RunEvent {
   /// Event loop is exiting.
   Exit,
   /// The app is about to exit
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** `code: None` events come from the PC/2-in-1
+  ///   pre-close probe — the only preventable source, requiring
+  ///   `ohos.permission.PREPARE_APP_TERMINATE` — and from last-window
+  ///   teardown, which is not preventable because the window stage
+  ///   destruction is already committed — see
+  ///   [`ExitRequestApi::prevent_exit`] for details.
   #[non_exhaustive]
   ExitRequested {
     /// Exit code.
@@ -574,6 +603,15 @@ impl<R: Runtime> AppHandle<R> {
   }
 
   /// Exits the app by triggering [`RunEvent::ExitRequested`] and [`RunEvent::Exit`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** `exit_code` is not propagated to the process exit
+  ///   status — the teardown terminates the ability with a hardcoded `0`
+  ///   through the app-control bridge, so the process always exits with code
+  ///   0. The requested code is still delivered on the
+  ///   [`RunEvent::ExitRequested`] event, and `App::run_return` likewise
+  ///   always returns 0.
   pub fn exit(&self, exit_code: i32) {
     if let Err(e) = self.runtime_handle.request_exit(exit_code) {
       log::error!("failed to exit: {}", e);
@@ -588,6 +626,15 @@ impl<R: Runtime> AppHandle<R> {
   /// so we skip them and directly restart the process.
   ///
   /// If you want to trigger them reliably, use [`Self::request_restart`] instead
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** the actual restart is always performed on the main
+  ///   thread (directly, or through the event loop when triggered from another
+  ///   thread); see [`crate::process::restart`] for the platform semantics —
+  ///   the focus requirement (background restarts fail with 16000053 and end
+  ///   as exit-without-restart) and the park-without-timeout after a
+  ///   successful request.
   pub fn restart(&self) -> ! {
     if self.event_loop.lock().unwrap().main_thread_id == std::thread::current().id() {
       log::debug!("restart triggered on the main thread");
@@ -615,6 +662,14 @@ impl<R: Runtime> AppHandle<R> {
   }
 
   /// Restarts the app by triggering [`RunEvent::ExitRequested`] with code [`RESTART_EXIT_CODE`] and [`RunEvent::Exit`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** the actual restart is performed on the main thread
+  ///   through the event loop; see [`crate::process::restart`] for the
+  ///   platform semantics — the focus requirement (background restarts fail
+  ///   with 16000053 and end as exit-without-restart) and the
+  ///   park-without-timeout after a successful request.
   pub fn request_restart(&self) {
     self
       .manager

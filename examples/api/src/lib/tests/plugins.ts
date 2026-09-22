@@ -375,6 +375,144 @@ export const pluginTests: TestCase[] = [
       }
     },
   },
+  // #118 checklist V5, issue #113 (OHOS readImage) — on-device verification:
+  // (1) two consecutive readImage calls with no write in between sanity-check
+  // that the ArkTS readImageFromClipboard finally { pm?.release() } does not
+  // poison the next read (R28 proved at source level that pasteboard getData
+  // deep-copies, so release is harmless — this confirms it on a real device);
+  // (2) the 4x4 pattern is alpha-diagnostic: row1 (non-trivial rgb + 50%
+  // alpha) catches the premul-label defect — straight data mislabeled
+  // PREMUL gets unpremultiplied at PNG encode, clamping rgb UP
+  // ((200,100,50)@128 → (255,199,100)); row3 (alpha=0) catches alpha
+  // dropping (alpha would come back as 255).
+  // Explicit 10s timeout: each read is a bridge round-trip plus PNG
+  // encode/decode.
+  //
+  // On-device finding (HAD-W32, API 23, 2026-09-20 run 1, 0/255 rgb
+  // pattern): alpha round-tripped byte-exact for all 16 pixels
+  // (255/128/64/0), rgb under alpha>0 exact, and rgb under alpha=0 came
+  // back ZEROED. Source-attributed root cause: the bridge's
+  // writeImageToClipboard created the PixelMap without alphaType, so OHOS
+  // labeled straight-alpha data PREMUL and SkPngEncoder unpremultiplied at
+  // encode (alpha=0 → rgb zeroed; 0/255 values clamp back identically).
+  // Fixed in ClipboardPlugin.ets by passing alphaType: UNPREMUL. rgb under
+  // alpha=0 stays don't-care here (robust against other pasteboard
+  // sources) — only the alpha byte is asserted there (semanticMismatch).
+  // Run 1's hexdump is preserved in
+  // faultlogs/v5-readimage-run1-20260920-report.md.
+  {
+    name: '@tauri-apps/plugin-clipboard-manager.writeImage(4x4 alpha)+readImage x2 [V5 #113]',
+    category: 'side-effect',
+    timeout: 10000,
+    async fn() {
+      const { writeImage, readImage } = await import('@tauri-apps/plugin-clipboard-manager');
+      const rgba = new Uint8Array([
+        255,0,0,255,    0,255,0,255,    0,0,255,255,    255,255,0,255,
+        200,100,50,128, 50,200,100,128, 100,50,200,128, 13,77,201,128,
+        255,0,0,64,     0,255,0,64,     0,0,255,64,     255,255,0,64,
+        255,0,0,0,      0,255,0,0,      0,0,255,0,      255,255,0,0,
+      ]);
+      const { Image } = await import('@tauri-apps/api/image');
+      const img = await Image.new(rgba, 4, 4);
+      // Returns '' when byte-identical, else an attributable message: which
+      // read, first differing byte index, that pixel's expected vs actual
+      // (r,g,b,a), alpha-only vs rgb-also classification, and a hexdump of
+      // the first 64 actual bytes (4 bytes = 1 pixel per group).
+      const firstMismatch = (label: string, expected: Uint8Array, actual: Uint8Array): string => {
+        const groups: string[] = [];
+        for (let j = 0; j + 3 < actual.length && j < 64; j += 4) {
+          groups.push(
+            actual[j].toString(16).padStart(2, '0') +
+            actual[j + 1].toString(16).padStart(2, '0') +
+            actual[j + 2].toString(16).padStart(2, '0') +
+            actual[j + 3].toString(16).padStart(2, '0')
+          );
+        }
+        const hexdump = groups.join(' ');
+        if (actual.length !== expected.length) {
+          return `${label}: length mismatch — expected ${expected.length} bytes (4x4 rgba), got ${actual.length}; actual first ${groups.length * 4} bytes: ${hexdump}`;
+        }
+        for (let i = 0; i < expected.length; i++) {
+          if (expected[i] !== actual[i]) {
+            const px = i - (i % 4); // first byte of the pixel containing byte i
+            const e = [expected[px], expected[px + 1], expected[px + 2], expected[px + 3]];
+            const a = [actual[px], actual[px + 1], actual[px + 2], actual[px + 3]];
+            const alphaOnly = a[3] !== e[3] && a[0] === e[0] && a[1] === e[1] && a[2] === e[2];
+            const pixel = px / 4; // 0..15, row = Math.floor(pixel / 4), col = pixel % 4 (width 4)
+            return (
+              `${label}: first differing byte at index ${i} (pixel ${pixel}: row ${Math.floor(pixel / 4)}, col ${pixel % 4}); ` +
+              `expected rgba(${e.join(',')}) but got rgba(${a.join(',')}); ` +
+              (alphaOnly
+                ? 'alpha only differs (alpha dropped or quantized — e.g. row3 a=0 coming back as 255)'
+                : 'rgb also differs (premultiply suspected — e.g. row1 rgb coming back ~128 — or the two reads diverged)') +
+              `; actual first ${groups.length * 4} bytes: ${hexdump}`
+            );
+          }
+        }
+        return '';
+      };
+      // V5② semantic comparison against the source pattern: the alpha byte
+      // must round-trip exactly for every pixel, and rgb must be exact
+      // wherever the source alpha > 0. rgb under source-alpha=0 pixels is
+      // don't-care — the OHOS pipeline zeroes it (see header comment).
+      const semanticMismatch = (label: string, actual: Uint8Array): string => {
+        if (actual.length !== rgba.length) {
+          return `read ${label} vs source (semantic): length mismatch — expected ${rgba.length} bytes (4x4 rgba), got ${actual.length}`;
+        }
+        for (let p = 0; p < actual.length; p += 4) {
+          const pixel = p / 4;
+          if (actual[p + 3] !== rgba[p + 3]) {
+            return (
+              `read ${label} vs source (semantic): pixel ${pixel} (row ${Math.floor(pixel / 4)}, col ${pixel % 4}) alpha differs — ` +
+              `expected ${rgba[p + 3]}, got ${actual[p + 3]} (V5② alpha round-trip failure)`
+            );
+          }
+          if (
+            rgba[p + 3] > 0 &&
+            (actual[p] !== rgba[p] || actual[p + 1] !== rgba[p + 1] || actual[p + 2] !== rgba[p + 2])
+          ) {
+            return (
+              `read ${label} vs source (semantic): pixel ${pixel} (row ${Math.floor(pixel / 4)}, col ${pixel % 4}) rgb differs under alpha=${rgba[p + 3]} — ` +
+              `expected rgba(${rgba[p]},${rgba[p + 1]},${rgba[p + 2]},${rgba[p + 3]}), ` +
+              `got rgba(${actual[p]},${actual[p + 1]},${actual[p + 2]},${actual[p + 3]}) ` +
+              `(premultiply round-trip or channel swap suspected)`
+            );
+          }
+        }
+        return '';
+      };
+      try {
+        await writeImage(img);
+        // Two consecutive reads, NO write in between — if the ArkTS finally
+        // { pm?.release() } poisoned the pasteboard entry, read #2 would fail
+        // or diverge from read #1.
+        const read1 = await readImage();
+        const read2 = await readImage();
+        // The OHOS bridge can swallow an ArkTS reject into a null resolve —
+        // guard so the failure names which read returned nothing.
+        if (!read1) throw new Error('read #1: readImage() resolved null/undefined (ArkTS reject swallowed by bridge?)');
+        if (!read2) throw new Error('read #2: readImage() resolved null/undefined (ArkTS reject swallowed by bridge?)');
+        const rgba1 = await read1.rgba();
+        const rgba2 = await read2.rgba();
+        // (a) V5① first: the two consecutive reads must be byte-identical
+        // (release-poisoning detector). Ordered first so a source-pattern
+        // deviation can never mask the consecutive-read verdict.
+        const m1 = firstMismatch('read #2 vs read #1', rgba1, rgba2);
+        assert(m1 === '', m1);
+        // (b) V5②: read #1 vs source, semantically — alpha byte-exact for
+        // every pixel, rgb exact wherever source alpha > 0.
+        const m2 = semanticMismatch('#1', rgba1);
+        assert(m2 === '', m2);
+        // (c) read #2 gets the same semantic treatment, so the verdict holds
+        // for the second consecutive read too.
+        const m3 = semanticMismatch('#2', rgba2);
+        assert(m3 === '', m3);
+      } catch (e) {
+        if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        throw e;
+      }
+    },
+  },
   // writeImage with { rgba, width, height } object — verifies visit_map → JsImage::Rgba
   {
     name: '@tauri-apps/plugin-clipboard-manager.writeImage(rgba-object)',
@@ -542,9 +680,15 @@ export const pluginTests: TestCase[] = [
     // OHOS (issue Eulogizethesun/tauri#99): 2in1 uses MIXED selectMode,
     // Phone uses FOLDER (API 26+). Verify the picker opens and a folder path
     // comes back (previously: "Folder picker is not implemented on mobile").
+    // NOTE: manual-category fn is never executed by runTests (test-runner.ts
+    // marks manual as skip without calling fn) — the real verification is the
+    // TestRunner button "Dialog.open (directory)" (manualDialogOpenDirectory),
+    // which self-asserts null-or-non-empty-string. See manual_tests.md §四.
     name: '@tauri-apps/plugin-dialog.open (directory, OHOS)',
     category: 'manual',
-    async fn() {},
+    async fn() {
+      console.log('[dialog.open manual] Use the "Dialog.open (directory)" button in the TestRunner Dialog manual section');
+    },
   },
   {
     name: '@tauri-apps/plugin-dialog.save',
@@ -661,16 +805,17 @@ export const pluginTests: TestCase[] = [
     },
   },
   // Scheduled notification — OHOS routes through reminderAgentManager
-  // (issue Eulogizethesun/tauri#114) with a foreground-timer fallback when the
-  // AGC agent-reminder entitlement is missing. Both paths must register the
-  // notification in pending(); the fired popup is verified visually.
+  // (issue Eulogizethesun/tauri#114); since the foreground-timer fallback was
+  // removed (review R40) a publishReminder failure rejects instead of
+  // resolving. Entitled devices register the notification in pending(); the
+  // fired popup is verified visually.
   {
     name: '@tauri-apps/plugin-notification.notify(schedule at)',
     category: 'side-effect',
     // 60s: on devices without the AGC agent-reminder entitlement the
     // publishReminder 1700002 rejection is SLOW — observed 15s (run 1) and
-    // >30s (run 2) on the reference PC before the foreground-timer fallback
-    // resolves the invoke. Breadcrumbs below pinpoint any future hang.
+    // >30s (run 2) on the reference PC before the rejection arrives.
+    // Breadcrumbs below pinpoint any future hang.
     timeout: 60000,
     async fn() {
       const { isPermissionGranted, sendNotification, pending, cancel } =
@@ -687,14 +832,23 @@ export const pluginTests: TestCase[] = [
       if (!granted) skip('notification permission disabled — enable notifications for this app to run this test');
       const id = Math.floor(Math.random() * 2_000_000_000) + 1;
       console.log(`[schedule-test] sending id=${id}`);
-      await sendNotification({
-        id,
-        title: 'OHOS scheduled notification',
-        body: 'fires ~3s after scheduling (reminderAgentManager, #114)',
-        schedule: {
-          at: { date: new Date(Date.now() + 3000), repeating: false, allowWhileIdle: false },
-        },
-      });
+      try {
+        await sendNotification({
+          id,
+          title: 'OHOS scheduled notification',
+          body: 'fires ~3s after scheduling (reminderAgentManager, #114)',
+          schedule: {
+            at: { date: new Date(Date.now() + 3000), repeating: false, allowWhileIdle: false },
+          },
+        });
+      } catch (e) {
+        // R40: no foreground-timer fallback anymore — devices without the
+        // AGC agent-reminder entitlement (1700002) or with notifications
+        // disabled mid-run (1700001) reject.
+        const msg = String(e);
+        if (/170000[12]/.test(msg)) skip(`schedule rejected on this device (entitlement/notification switch): ${msg}`);
+        throw e;
+      }
       console.log('[schedule-test] sendNotification resolved');
       const pendingList = await pending();
       console.log(`[schedule-test] pending=${JSON.stringify(pendingList.map((p) => p.id))}`);

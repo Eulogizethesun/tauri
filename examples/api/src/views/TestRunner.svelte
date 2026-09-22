@@ -201,6 +201,29 @@
     }
   }
 
+  // ─── Content Protection (#115 window privacy mode; manual_tests.md §二十一) ───
+  // Toggle button so the ON state can be held while screenshotting (the auto case
+  // cycles true→300ms→false, too short to capture; DevTools console needs the
+  // devtools feature build). tao failure path is fire-and-forget: invoke resolves
+  // Ok even when the window manager rejects (e.g. 201 no permission) — hilog is
+  // the only failure evidence.
+  let contentProtectionOn = $state(false);
+  async function manualContentProtection() {
+    await wrapManual('content_protection', async () => {
+      try {
+        contentProtectionOn = !contentProtectionOn;
+        await invoke('set_content_protection', { enabled: contentProtectionOn });
+        manualResult = contentProtectionOn
+          ? 'set_content_protection(true) → OK. 窗口已进入隐私模式:现在系统截屏,本窗口区域应为黑色(屏幕实时显示不受影响)。'
+          : 'set_content_protection(false) → OK. 隐私模式已关闭:截屏应恢复窗口正常内容。';
+      } catch (e) {
+        contentProtectionOn = false;
+        manualResult = `set_content_protection failed: ${e}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
   // ─── Manual Tests ───
   async function manualIsFocused() {
     await wrapManual('isFocused', async () => {
@@ -1957,6 +1980,36 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
+  // #99 (Eulogizethesun/tauri#99): open({ directory: true }) on OHOS —
+  // 2in1 maps to DocumentSelectMode.MIXED, Phone to FOLDER (API 26+).
+  // Self-verifying: cancel resolves null; a pick resolves a non-empty
+  // string (DocumentViewPicker URIs, typically file://docs/storage/...).
+  // On 2in1, selecting only FILES must also resolve null (#124 drops
+  // non-directory URIs). A throw (e.g. the old "Folder picker is not
+  // implemented on mobile") is a FAIL.
+  async function manualDialogOpenDirectory() {
+    await wrapManual('dialog.open (directory)', async () => {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      let picked;
+      try {
+        picked = await open({ directory: true });
+      } catch (e) {
+        manualResult = `✗ FAIL: open(directory: true) threw: ${e}\n(expected no throw; a "Folder picker is not implemented on mobile" recurrence is a regression)`;
+        onMessage(manualResult);
+        return;
+      }
+      if (picked === null) {
+        manualResult = 'open(directory: true) → null\n[cancel; or on 2in1 MIXED only files were selected and #124 dropped them — both are valid outcomes]';
+      } else if (typeof picked === 'string' && picked.length > 0) {
+        const uriLike = /^file:\/\//.test(picked);
+        manualResult = `open(directory: true) → "${picked}"\n✓ non-empty string${uriLike ? ' (file:// URI, matches the DocumentViewPicker return shape)' : ' (no file:// prefix — verify the return shape manually)'}\nManual check: the path matches the folder you just picked → PASS; mismatch → FAIL.`;
+      } else {
+        manualResult = `✗ FAIL: expected null or a non-empty string, got ${typeof picked}: ${JSON.stringify(picked)}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
   // ─── OHOS Adapter Manual Tests ───
   async function manualOhosPrint() {
     await wrapManual('webview.print', async () => {
@@ -3365,6 +3418,9 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualShowHide}>Hide/Show (2s restore)</button>
         <button class="btn" onclick={manualSetFocus}>setFocus</button>
         <button class="btn" onclick={manualAlwaysOnTop}>Toggle AlwaysOnTop (partial)</button>
+        <button class="btn" onclick={manualContentProtection}>
+          {contentProtectionOn ? 'Content Protection: ON → 点击关闭 (#115)' : 'Content Protection: OFF → 点击开启 (#115 截屏变黑)'}
+        </button>
       </div>
       <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 多 UIAbility 实例 (startAbility)</h5>
       <div class="flex gap-2 flex-wrap">
@@ -3506,6 +3562,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     <div class="flex gap-2 flex-wrap mt-2">
       <button class="btn" onclick={manualDialogOpen}>Dialog.open (single)</button>
       <button class="btn" onclick={manualDialogOpenMultiple}>Dialog.open (multiple)</button>
+      <button class="btn" onclick={manualDialogOpenDirectory}>Dialog.open (directory)</button>
       <button class="btn" onclick={manualDialogSave}>Dialog.save</button>
     </div>
     <div class="flex gap-2 flex-wrap mt-2">

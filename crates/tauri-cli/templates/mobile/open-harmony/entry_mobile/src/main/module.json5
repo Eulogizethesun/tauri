@@ -19,7 +19,6 @@
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "launchType": "singleton",
-        "recoverable": true,
         "skills": [
           {
             "entities": [

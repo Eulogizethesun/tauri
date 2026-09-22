@@ -64,8 +64,35 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 ///
 /// ## OpenHarmony
 ///
-/// There is no process relaunch on OHOS: this function exits with code 0 and
-/// lets the OS restart the app through the ability lifecycle.
+/// Restarts via the official `ApplicationContext.restartApp` (API 12+) through
+/// the app-control MainThreadSync bridge, which kills all of the app's
+/// processes and relaunches the current UIAbility. A bare process exit does
+/// NOT relaunch the app on OHOS (verified on device), so `exit(0)` is only the
+/// fallback used when the bridge call fails.
+///
+/// The bridge call needs the N-API `Env` of the app's main thread, so this
+/// function **must be called from the main thread** — the `Env` is retrieved
+/// from a thread-local and is unavailable on worker threads. When called from
+/// a worker thread the bridge call fails and the `exit(0)` fallback runs: the
+/// app exits and is NOT restarted. Prefer [`crate::AppHandle::restart`] or
+/// [`crate::AppHandle::request_restart`], which route the actual restart
+/// through the main-thread event loop regardless of the calling thread.
+///
+/// After `restartApp` is accepted this function never returns: it parks the
+/// calling thread waiting for the ability runtime to kill the process — there
+/// is no timeout fallback, because a racing local exit could interfere with
+/// the restart handshake. `restartApp` also requires the app to be focused:
+/// called from the background it fails with error 16000053 ("The ability is
+/// not on the top of the UI"; retrying within 3s fails with 16000064), which
+/// surfaces here as a bridge error and ends as exit-without-restart.
+///
+/// Two triage notes for the background-failure path (both verified on
+/// device): the `exit(0)` fallback leaves a `cppcrash` SIGABRT record in the
+/// system faultlogger — appspawn redirects a main-thread `exit` to `abort`,
+/// so the designed degradation looks like a crash to anyone triaging
+/// faultlogs — and the numeric error code never appears in device logs: AMS
+/// logs `restartApp, is not foreground` and the bridge error carries the
+/// message "Not top ability" instead.
 ///
 /// # Examples
 ///
