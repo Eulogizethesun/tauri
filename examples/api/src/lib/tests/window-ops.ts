@@ -105,6 +105,10 @@ export const windowOpsTests: TestCase[] = [
   {
     name: 'window.createUIAbilityWindow (webview registered + new instance IPC)',
     category: 'auto',
+    // UIAbility spawn (startAbility handshake + instance load) varies 1-2.5s
+    // (slower on a fresh install); with the 3s settle delay below the total
+    // walks past the runner's 5s default. Same for the racy-attrs repro below.
+    timeout: 10000,
     async fn() {
       // "test-" prefix matches the run-app capability window patterns ([test-*])
       // so the spawned instance's webview is allowed to invoke commands.
@@ -137,6 +141,11 @@ export const windowOpsTests: TestCase[] = [
   {
     name: 'window.createUIAbilityWindowRacyAttrs (issue-7 repro)',
     category: 'auto',
+    // 3s replay settle + 0.8s resize settle + spawn: 4.9s-5.9s observed —
+    // the 5s runner default left a 33ms margin on 2026-09-28 run h and tipped
+    // over on the fresh-install run i. 15s keeps the assertions intact while
+    // absorbing spawn variance.
+    timeout: 15000,
     async fn() {
       const label = 'test-uia-racy-' + Date.now();
       const result = await invoke<{

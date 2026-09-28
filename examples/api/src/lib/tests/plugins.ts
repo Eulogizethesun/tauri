@@ -11,6 +11,23 @@ function isMissing(e: unknown): boolean {
   return m.includes('not found') || m.includes('not implemented') || m.includes('command not found') || m.includes('not allowed by ACL') || m.includes('not supported');
 }
 
+/**
+ * OHOS pasteboard reads require the restricted READ_PASTEBOARD permission
+ * (user_grant, signing-profile-ACL-gated). Without the grant the pasteboard
+ * service rejects even the app's own just-written data and getData() resolves
+ * empty, so readImage surfaces "clipboard does not contain an image" right
+ * after a successful writeImage. Same degradation contract as the readText
+ * round-trip test (empty read ⇒ honest skip, not a failed round-trip); with
+ * the grant (and on desktop) the byte-exact assertions still hold.
+ */
+async function isOhosClipboardReadDenied(e: unknown): Promise<boolean> {
+  if (!String((e as Error)?.message ?? e).includes('does not contain an image')) {
+    return false;
+  }
+  const { platform } = await import('@tauri-apps/plugin-os');
+  return platform() === 'ohos';
+}
+
 /** Unique suffix to avoid cross-test state collision (store/db/snapshot names). */
 let _seq = 0;
 function uniq(prefix: string): string {
@@ -398,6 +415,9 @@ export const pluginTests: TestCase[] = [
         assert(backRgba.length > 0, `readback rgba should be non-empty, got length ${backRgba.length}`);
       } catch (e) {
         if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        if (await isOhosClipboardReadDenied(e)) {
+          skip('readImage observed an empty pasteboard (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        }
         throw e;
       }
     },
@@ -536,6 +556,9 @@ export const pluginTests: TestCase[] = [
         assert(m3 === '', m3);
       } catch (e) {
         if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        if (await isOhosClipboardReadDenied(e)) {
+          skip('readImage observed an empty pasteboard (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        }
         throw e;
       }
     },

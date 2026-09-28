@@ -172,16 +172,11 @@ pub fn set_ohos_app(app: &openharmony_ability::OpenHarmonyApp) {
   if let Err(e) = app.register_plugin(openharmony_ability_plugin_url::UrlBridgePlugin) {
     log::error!("[WRY] failed to register UrlBridgePlugin: {}", e);
   }
-  // Register the Rust-side app-control bridge plugin (id="ohos.app-control"). tao's
-  // OHOS loop teardown dispatches terminate (terminateSelf) through it via
-  // AppControlExt. The ArkTS
-  // counterpart (AppControlPlugin) is already in EntryAbility's bridgePlugins
-  // list, but without this Rust-side declaration configurePlugins never installs
-  // it and every terminate/restart call fails with "not installed". Symmetric
-  // with the Webview/Window/Url registrations above.
-  if let Err(e) = app.register_plugin(openharmony_ability_plugin_app_control::AppControlBridgePlugin) {
-    log::error!("[WRY] failed to register AppControlBridgePlugin: {}", e);
-  }
+  // NOTE: the Rust-side app-control bridge plugin (id="ohos.app-control") is
+  // registered by tauri core (crates/tauri/src/ohos.rs::init), which covers
+  // tao's exit chain and process::restart. It used to be registered here as
+  // well; after the 2026-09-28 upstream merge both sites ran and the second
+  // registration failed with "already registered" on every startup.
   // Set up the synchronous webview-cookie bridge (ohos.webview-cookie): main-
   // thread cookies_for_url calls (setup closures, sync command handlers) fetch
   // through ArkTS fetchCookieSync instead of silently returning empty. The
@@ -2558,13 +2553,13 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_content_protected(&self, protected: bool) -> Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      // No OHOS screen-capture-protection window flag; unified unsupported error.
-      let _ = protected;
-      return Err(ohos_unsupported("setContentProtection"));
-    }
-    #[cfg(not(target_env = "ohos"))]
+    // OHOS: dispatched like every other platform — tao implements
+    // setContentProtection (bridge set_window_privacy_mode, API 15+, tao
+    // window.rs set_content_protection; see also the WindowMessage dispatch
+    // arm for SetContentProtected). An earlier gate returned
+    // ohos_unsupported("setContentProtection") from this spot, which failed
+    // the window.setContentProtection demo test (#115) on devices where the
+    // operation works.
     send_user_message(
       &self.context,
       Message::Window(
