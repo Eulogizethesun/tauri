@@ -64,8 +64,35 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 ///
 /// ## OpenHarmony
 ///
-/// There is no process relaunch on OHOS: this function exits with code 0 and
-/// lets the OS restart the app through the ability lifecycle.
+/// Restarts via the official `ApplicationContext.restartApp` (API 12+) through
+/// the app-control MainThreadSync bridge, which kills all of the app's
+/// processes and relaunches the current UIAbility. A bare process exit does
+/// NOT relaunch the app on OHOS (verified on device), so `exit(0)` is only the
+/// fallback used when the bridge call fails.
+///
+/// The bridge call needs the N-API `Env` of the app's main thread, so this
+/// function **must be called from the main thread** — the `Env` is retrieved
+/// from a thread-local and is unavailable on worker threads. When called from
+/// a worker thread the bridge call fails and the `exit(0)` fallback runs: the
+/// app exits and is NOT restarted. Prefer [`crate::AppHandle::restart`] or
+/// [`crate::AppHandle::request_restart`], which route the actual restart
+/// through the main-thread event loop regardless of the calling thread.
+///
+/// After `restartApp` is accepted this function never returns: it parks the
+/// calling thread waiting for the ability runtime to kill the process — there
+/// is no timeout fallback, because a racing local exit could interfere with
+/// the restart handshake. `restartApp` also requires the app to be focused:
+/// called from the background it fails with error 16000053 ("The ability is
+/// not on the top of the UI"; retrying within 3s fails with 16000064), which
+/// surfaces here as a bridge error and ends as exit-without-restart.
+///
+/// Two triage notes for the background-failure path (both verified on
+/// device): the `exit(0)` fallback leaves a `cppcrash` SIGABRT record in the
+/// system faultlogger — appspawn redirects a main-thread `exit` to `abort`,
+/// so the designed degradation looks like a crash to anyone triaging
+/// faultlogs — and the numeric error code never appears in device logs: AMS
+/// logs `restartApp, is not foreground` and the bridge error carries the
+/// message "Not top ability" instead.
 ///
 /// # Examples
 ///
@@ -81,10 +108,43 @@ pub fn current_binary(_env: &Env) -> std::io::Result<PathBuf> {
 pub fn restart(env: &Env) -> ! {
   #[cfg(target_env = "ohos")]
   {
-    // The legacy TSFN-based restart helper was removed during decoupling;
-    // exiting the process triggers the OHOS ability lifecycle restart via the OS.
+    use openharmony_ability_plugin_app_control::AppControlExt;
+
     let _ = env;
-    std::process::exit(0);
+    // OHOS restart uses the official `ApplicationContext.restartApp` (API 12+)
+    // through the app-control MainThreadSync bridge: it kills all of the app's
+    // processes and relaunches the current UIAbility. A bare
+    // `std::process::exit` does NOT relaunch — verified on device, the OS keeps
+    // the process dead — so it is only the failure fallback.
+    let restart_error: Option<String> = (|| -> Result<(), String> {
+      let app_guard = crate::ohos::APP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      let app = app_guard
+        .as_ref()
+        .ok_or_else(|| "OpenHarmonyApp not initialized".to_string())?;
+      let env_cell = crate::ohos::openharmony_ability::get_main_thread_env();
+      let env_ref = env_cell.borrow();
+      let env = env_ref
+        .as_ref()
+        .ok_or_else(|| "main thread N-API Env not available".to_string())?;
+      app
+        .restart(env)
+        .map_err(|e| format!("restartApp bridge call failed: {e}"))
+    })()
+    .err();
+
+    if let Some(e) = restart_error {
+      log::error!("[tauri] OHOS restartApp failed: {e} — falling back to process exit");
+      std::process::exit(0);
+    }
+
+    // restartApp accepted: the ability runtime is killing and relaunching this
+    // process. Never return — let the runtime perform the teardown (a racing
+    // local exit could interfere with the restart handshake).
+    loop {
+      std::thread::sleep(std::time::Duration::MAX);
+    }
   }
 
   #[cfg(not(target_env = "ohos"))]

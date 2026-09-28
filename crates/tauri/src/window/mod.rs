@@ -1915,11 +1915,35 @@ impl<R: Runtime> Window<R> {
   }
 
   /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** a `window.close()` call made by the web page itself
+  ///   (JS) is a no-op on the main window — ArkWeb delivers page close
+  ///   requests through the Web `onWindowExit` event, which the framework
+  ///   only registers for script-opened new-window dialogs (`window.open`
+  ///   targets). This API (and the JS `getCurrentWindow().close()`) does emit
+  ///   [`crate::RunEvent::CloseRequested`] and honors `prevent_close`.
   pub fn close(&self) -> crate::Result<()> {
     self.window.dispatcher.close().map_err(Into::into)
   }
 
   /// Destroys this window. Similar to [`Self::close`] but does not emit any events and force close the window instead.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** like on desktop, `destroy` skips
+  ///   [`crate::RunEvent::CloseRequested`] and tears the window down
+  ///   directly. For the main window only the Rust-side lifecycle runs — the
+  ///   OS-level ability window is system-managed and an in-app destroy is
+  ///   rejected by the bridge (only sub-windows are destroyed OS-level).
+  ///   When the last window closes, the app cannot be kept alive: the
+  ///   `ExitRequested` event fires after the system has already committed to
+  ///   destroying the UIAbility window stage, so `prevent_exit` cannot revert
+  ///   it (the cancellable exception is the PC / 2-in-1 pre-close probe — see
+  ///   [`crate::ExitRequestApi::prevent_exit`]); there is no "app keeps
+  ///   running with zero windows" form on this platform, and window-level
+  ///   `prevent_close` is the equivalent capability.
   pub fn destroy(&self) -> crate::Result<()> {
     self.window.dispatcher.destroy().map_err(Into::into)
   }

@@ -536,6 +536,21 @@ pub fn get_ohos_version_info() -> serde_json::Value {
   })
 }
 
+/// Toggles window content protection (issue Eulogizethesun/tauri#115 smoke
+/// test). Exposed as a demo command because @tauri-apps/api/window has no
+/// `setContentProtection` — on OHOS this reaches
+/// `OH_WindowManager_SetWindowPrivacyMode` (window excluded from screenshot/
+/// recording/casting); the visual effect is verified manually.
+#[command]
+pub fn set_content_protection<R: tauri::Runtime>(
+  window: tauri::WebviewWindow<R>,
+  enabled: bool,
+) -> Result<(), String> {
+  window
+    .set_content_protected(enabled)
+    .map_err(|e| e.to_string())
+}
+
 static UA_WINDOW_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[command]
@@ -1542,6 +1557,55 @@ pub fn cookie_test<R: tauri::Runtime>(
   Ok(())
 }
 
+/// Main-thread cookie round-trip for issue #110 device verification.
+///
+/// Sync (non-`async fn`) commands execute on the OHOS main thread, so calling
+/// the synchronous `cookies_for_url`/`cookies` APIs here exercises the
+/// `ohos.webview-cookie` sync bridge (ArkTS `fetchCookieSync`) — the path that
+/// used to silently return empty. `set_cookie` on OHOS is fire-and-forget, so
+/// the read is a separate command and the JS test waits in between.
+#[command]
+pub fn cookie_test_main_thread_set<R: tauri::Runtime>(
+  window: tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+  use tauri::webview::Cookie;
+
+  let cookie = Cookie::build(("tauri_test_cookie_mt", "value456"))
+    .domain("example.com")
+    .path("/")
+    .build();
+  window.set_cookie(cookie)
+}
+
+#[command]
+pub fn cookie_test_main_thread_read<R: tauri::Runtime>(
+  window: tauri::WebviewWindow<R>,
+) -> Result<serde_json::Value, String> {
+  let url = url::Url::parse("https://example.com").map_err(|e| e.to_string())?;
+
+  let cookies_for_url = window
+    .cookies_for_url(url)
+    .map_err(|e| e.to_string())?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+  let cookies_all = window
+    .cookies()
+    .map_err(|e| e.to_string())?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+  let found = cookies_for_url
+    .iter()
+    .any(|c| c.starts_with("tauri_test_cookie_mt="));
+
+  Ok(serde_json::json!({
+    "test_cookie_found": found,
+    "cookies_for_url": cookies_for_url,
+    "cookies_all": cookies_all,
+  }))
+}
+
 /// Manual test: set a cookie for httpbin.org on the main webview cookie store
 /// and open a child window to https://httpbin.org/cookies so the user can
 /// visually verify the cookie is sent to the server and persists on reload.
@@ -2017,4 +2081,17 @@ pub async fn fault_injection_clear() -> tauri::Result<()> {
     .await
     .map_err(|e| anyhow::anyhow!("clear_fault_rules: {e}"))?;
   Ok(())
+}
+
+/// Toggles the app-level "confirm before exit" behavior (product feature
+/// layered on the #103 pre-close interception, distinct from the raw
+/// prevention test above): implicit closes are prevented and the page gets
+/// a `confirm-exit-requested` event to show its confirmation dialog.
+/// Explicit exits (process.exit / app.exit) are unaffected — the confirmed
+/// path simply exits explicitly.
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn set_exit_confirmation(enabled: bool) {
+  crate::EXIT_CONFIRM_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
+  log::info!("[cmd] set_exit_confirmation: enabled={}", enabled);
 }

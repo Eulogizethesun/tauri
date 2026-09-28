@@ -173,6 +173,10 @@ tray-icon = { version = "0.24", default-features = false, features = [
 openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }
 openharmony-ability-derive = { path = "../../../openharmony-ability/crates/derive" }
 openharmony-ability-plugin-menu = { path = "../../../openharmony-ability/crates/plugin-menu" }
+# App-control MainThreadSync bridge (ProcessManager.exit /
+# ApplicationContext.restartApp) used by the exit/restart chain (issues
+# Eulogizethesun/tauri#100/#101).
+openharmony-ability-plugin-app-control = { path = "../../../openharmony-ability/crates/plugin-app-control" }
 napi-ohos = "1"
 napi-derive-ohos = "1"
 futures-executor = "0.3"

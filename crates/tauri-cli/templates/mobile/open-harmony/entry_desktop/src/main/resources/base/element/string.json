@@ -15,6 +15,10 @@
     {
       "name": "reason_print",
       "value": "Print documents"
+    },
+    {
+      "name": "reason_read_pasteboard",
+      "value": "Read clipboard content"
     }
   ]
 }

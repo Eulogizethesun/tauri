@@ -72,6 +72,18 @@ pub fn init() -> openharmony_ability::OpenHarmonyApp {
   // default-features=false and no `wry` feature must still compile on OHOS).
   #[cfg(feature = "wry")]
   tauri_runtime_wry::set_ohos_app(&ohos_app);
+  // Register the Rust-side app-control bridge plugin (id="ohos.app-control").
+  // tao's exit chain (ControlFlow::Exit → LoopDestroyed → terminate →
+  // ProcessManager.exit) and process::restart (ApplicationContext.restartApp)
+  // both call it through the MainThreadSync bridge; without this Rust-side
+  // declaration the ArkTS configurePlugins flow never installs it and every
+  // terminate/restart fails with "Bridge plugin 'ohos.app-control' is not
+  // installed for '<module>'" (found during issue #100 device verification).
+  if let Err(e) =
+    ohos_app.register_plugin(openharmony_ability_plugin_app_control::AppControlBridgePlugin)
+  {
+    log::error!("[tauri] failed to register AppControlBridgePlugin: {e}");
+  }
   ohos_app
 }
 
