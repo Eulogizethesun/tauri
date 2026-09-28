@@ -2083,21 +2083,15 @@ pub async fn fault_injection_clear() -> tauri::Result<()> {
   Ok(())
 }
 
-/// Toggles the implicit-exit prevention used to exercise the PC/2in1
-/// pre-close interception (issue Eulogizethesun/tauri#103).
-///
-/// When enabled, the RunEvent::ExitRequested handler calls prevent_exit()
-/// for implicit exits (code == None): clicking the window close button /
-/// taskbar "退出" / tray exit fires onPrepareToTerminateAsync → this probe —
-/// and the app STAYS ALIVE (the close is genuinely cancelled). When disabled
-/// (default) system-initiated closes terminate normally. Explicit exits
-/// (process.exit / app.exit, code == Some) are never prevented.
-///
-/// Verification flow (manual, PC form): enable → click X → window stays;
-/// disable → click X → app exits.
+/// Toggles the app-level "confirm before exit" behavior (product feature
+/// layered on the #103 pre-close interception, distinct from the raw
+/// prevention test above): implicit closes are prevented and the page gets
+/// a `confirm-exit-requested` event to show its confirmation dialog.
+/// Explicit exits (process.exit / app.exit) are unaffected — the confirmed
+/// path simply exits explicitly.
 #[cfg(target_env = "ohos")]
 #[command]
-pub fn test_set_prevent_exit(enabled: bool) {
-  crate::PREVENT_IMPLICIT_EXIT.store(enabled, std::sync::atomic::Ordering::SeqCst);
-  log::info!("[cmd] test_set_prevent_exit: enabled={}", enabled);
+pub fn set_exit_confirmation(enabled: bool) {
+  crate::EXIT_CONFIRM_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
+  log::info!("[cmd] set_exit_confirmation: enabled={}", enabled);
 }

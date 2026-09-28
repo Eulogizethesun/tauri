@@ -82,7 +82,7 @@ fn main() {
         "set_content_protection",
         "test_create_pdf",
         "set_download_test_mode",
-        "test_set_prevent_exit",
+        "set_exit_confirmation",
         "create_ui_ability_window",
         "create_transparent_ui_ability_window",
         "transparent_test_start",

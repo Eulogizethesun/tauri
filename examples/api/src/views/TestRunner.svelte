@@ -201,6 +201,24 @@
     }
   }
 
+  // ─── Exit Confirmation (app-level UX over the #103 pre-close; manual_tests.md §九) ───
+  // Toggles EXIT_CONFIRM_MODE: implicit closes (✕) are prevented and the page
+  // (App.svelte, main window) shows a "确认退出？" dialog via plugin:dialog
+  // ask; 确定 → process.exit(0) (explicit exits are never prevented),
+  // 取消 → window stays. Distinct from the raw prevention test
+  // (test_set_prevent_exit, console-only).
+  let exitConfirmOn = $state(false);
+  async function manualExitConfirm() {
+    await wrapManual('exit_confirm', async () => {
+      exitConfirmOn = !exitConfirmOn;
+      await invoke('set_exit_confirmation', { enabled: exitConfirmOn });
+      manualResult = exitConfirmOn
+        ? 'set_exit_confirmation(true) → OK. 点窗口 ✕ → 弹「确认退出？」\n确定 → 应用退出；取消 → 窗口保留。'
+        : 'set_exit_confirmation(false) → OK. ✕ 直接关闭（默认态）。';
+      onMessage(manualResult);
+    });
+  }
+
   // ─── Content Protection (#115 window privacy mode; manual_tests.md §二十一) ───
   // Toggle button so the ON state can be held while screenshotting (the auto case
   // cycles true→300ms→false, too short to capture; DevTools console needs the
@@ -3420,6 +3438,9 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualAlwaysOnTop}>Toggle AlwaysOnTop (partial)</button>
         <button class="btn" onclick={manualContentProtection}>
           {contentProtectionOn ? 'Content Protection: ON → 点击关闭 (#115)' : 'Content Protection: OFF → 点击开启 (#115 截屏变黑)'}
+        </button>
+        <button class="btn" onclick={manualExitConfirm}>
+          {exitConfirmOn ? 'Exit Confirm: ON → 点击关闭 (确认退出？)' : 'Exit Confirm: OFF → 点击开启 (✕ 弹确认)'}
         </button>
       </div>
       <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 多 UIAbility 实例 (startAbility)</h5>

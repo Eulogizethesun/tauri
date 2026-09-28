@@ -51,14 +51,14 @@ pub fn run() {
   run_app(tauri::Builder::default(), |_app| {})
 }
 
-/// Toggle for the implicit-exit prevention test (issue
-/// Eulogizethesun/tauri#103). Off by default so system-initiated closes
-/// (X button / taskbar / tray) keep working; enable via the
-/// `test_set_prevent_exit` command to exercise the PC/2in1 pre-close
-/// interception (onPrepareToTerminateAsync → ExitRequested probe →
-/// prevent_exit genuinely cancels the close).
+/// App-level "confirm before exit" switch (product feature on top of the
+/// #103 pre-close interception). When enabled, implicit closes (window X /
+/// taskbar) are prevented and the page receives a `confirm-exit-requested`
+/// event to show its "确认退出？" dialog; explicit exits (process.exit /
+/// app.exit, code == Some) pass through untouched. Toggled from the
+/// Welcome page via the `set_exit_confirmation` command.
 #[cfg(target_env = "ohos")]
-pub(crate) static PREVENT_IMPLICIT_EXIT: std::sync::atomic::AtomicBool =
+pub(crate) static EXIT_CONFIRM_MODE: std::sync::atomic::AtomicBool =
   std::sync::atomic::AtomicBool::new(false);
 
 fn init_sentry() -> sentry::ClientInitGuard {
@@ -925,7 +925,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_create_pdf,
       cmd::set_download_test_mode,
       #[cfg(target_env = "ohos")]
-      cmd::test_set_prevent_exit,
+      cmd::set_exit_confirmation,
       #[cfg(desktop)]
       tray::simulate_tray_click,
       #[cfg(debug_assertions)]
@@ -968,22 +968,22 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
         RunEvent::ExitRequested { code, api: _api, .. } => {
           log::info!("[RunEvent] ExitRequested, code={:?}", code);
-          // Test whether prevent_exit works — but only for implicit exits
-          // (code is None, e.g. system close / all-windows-closed). Explicit
-          // exit requests (app.exit / request_restart, code is Some) are let
+          // App-level confirm-on-exit — only for implicit exits (code is
+          // None, e.g. system close / all-windows-closed). Explicit exit
+          // requests (app.exit / request_restart, code is Some) are let
           // through, same convention as the desktop guard below. NOTE: since
           // issue #103 wired the PC/2in1 pre-close interception
           // (onPrepareToTerminateAsync) to this dispatch, prevent_exit() here
           // GENUINELY cancels system-initiated closes — gated behind
-          // PREVENT_IMPLICIT_EXIT (test_set_prevent_exit command) so the
-          // demo stays closable by default.
+          // EXIT_CONFIRM_MODE (set_exit_confirmation command, TestRunner
+          // button) so the demo stays closable by default.
           #[cfg(target_env = "ohos")]
-          if code.is_none()
-            && PREVENT_IMPLICIT_EXIT.load(std::sync::atomic::Ordering::SeqCst)
-          {
-            log::info!("[RunEvent] ExitRequested: calling prevent_exit() to test");
+          if code.is_none() && EXIT_CONFIRM_MODE.load(std::sync::atomic::Ordering::SeqCst) {
+            log::info!("[RunEvent] ExitRequested: confirm mode — preventing + asking page");
             _api.prevent_exit();
-            log::info!("[RunEvent] ExitRequested: prevent_exit() called (implicit exit path)");
+            if let Err(e) = _app_handle.emit("confirm-exit-requested", ()) {
+              log::error!("[RunEvent] confirm-exit-requested emit failed: {e}");
+            }
           }
           if code.is_some() { "ExitRequested(code)" } else { "ExitRequested" }
         }
@@ -1029,8 +1029,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       // OHOS desktop (it used to fire into unstoppable teardown) — keeping
       // this unconditional guard would make the demo permanently unclosable
       // via the window close button. On OHOS the prevent path is the
-      // PREVENT_IMPLICIT_EXIT toggle in the ExitRequested arm above
-      // (test_set_prevent_exit command) instead. The guard's scenario
+      // EXIT_CONFIRM_MODE toggle in the ExitRequested arm above
+      // (set_exit_confirmation command, TestRunner button) instead. The guard's scenario
       // (zero windows + live tray loop) cannot occur on OHOS anyway — the
       // main window's close is the app-level close, which the probe cancels
       // as a whole.
