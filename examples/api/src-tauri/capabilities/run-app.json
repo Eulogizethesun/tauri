@@ -53,6 +53,8 @@
     "allow-create-decorated-window",
     "allow-create-transparent-borderless-window",
     "allow-create-ui-ability-window",
+    "allow-create-ui-ability-window-racy-attrs",
+    "allow-create-float-window-racy-attrs",
     "allow-create-ui-ability-windows-x3",
     "allow-create-transparent-ui-ability-window",
     "allow-get-current-window-id",

@@ -129,6 +129,135 @@ export const windowOpsTests: TestCase[] = [
       await smoke(() => invoke('dummy_command'), 'dummy_command (post-create alive check)');
     },
   },
+  // ─── 问题七 repro (doc/OHOS窗口遗留问题.md 问题七)：spawned UIAbility 窗口创建期属性竞态 ───
+  // decorations(false) + min_inner_size(400,300) + build 后立即 set_decorations(false)
+  // 三路下发均在 startAbility 握手完成前到达 ArkTS。bug 证据=hilog 的
+  // 'Unknown OS sub-window' warn + 窗口带系统标题栏/无尺寸下限（hilog/截图核对）；
+  // 本用例固定触发路径并诊断 min-size 下限是否生效（setSize 到下限以下再读回）。
+  {
+    name: 'window.createUIAbilityWindowRacyAttrs (issue-7 repro)',
+    category: 'auto',
+    async fn() {
+      const label = 'test-uia-racy-' + Date.now();
+      const result = await invoke<{
+        label: string;
+        webview_acquired: boolean;
+        ohos_window_id: number;
+      }>('create_ui_ability_window_racy_attrs', { windowId: label });
+      assert(
+        result.webview_acquired === true,
+        `webview not acquired: ${JSON.stringify(result)}`
+      );
+      // 等 3s 让 tao 侧排队属性在新实例 stage 注册后回放（issue-7 修复）+ webview 稳定。
+      await delay(3000);
+      // 硬断言（2026-09-17 真机定论：setWindowLimits 对编程式 resize 有夹持；
+      // 修复后 floor ENFORCED 且 outer==inner 无标题栏——doc/OHOS窗口遗留问题.md 问题七）。
+      // 尺寸语义（D2）：setWindowLimits 夹持 outer rect（win.resize 目标），
+      // innerSize = outer − 标题栏；判据用 outerSize × scaleFactor 换算物理像素
+      // 与 400×300 逻辑下限比较（首轮探针曾拿物理 innerSize 直比逻辑下限，
+      // 300×200@1.9x 也会误判 ENFORCED——已修）。
+      const { LogicalSize } = await import('@tauri-apps/api/dpi');
+      const win = await Window.getByLabel(label);
+      assert(win, `window not found by label after settle: ${label}`);
+      const before = await win.outerSize();
+      await win.setSize(new LogicalSize(300, 200));
+      await delay(800);
+      const after = await win.outerSize();
+      const inner = await win.innerSize();
+      const scale = await win.scaleFactor();
+      const floorW = Math.floor(400 * scale);
+      const floorH = Math.floor(300 * scale);
+      // ① setSize 必须产生效果（防 floor 断言假绿：若 resize 整体失效、窗口停在
+      //    原尺寸（≥下限），②会误通过）
+      assert(
+        after.width !== before.width || after.height !== before.height,
+        `setSize(300×200) had no effect: outer ${before.width}×${before.height} → ${after.width}×${after.height}`
+      );
+      // ② 400×300 逻辑下限夹持（issue-7 回归守卫：min_inner_size 创建期下发不再丢失）
+      assert(
+        after.width >= floorW - 2 && after.height >= floorH - 2,
+        `min_inner_size(400×300) floor not enforced: outer ${after.width}×${after.height} physical ` +
+          `< ${floorW}×${floorH} (scale ${scale}) — creation-time attributes lost to the ` +
+          `stage-registration race (issue 7)`
+      );
+      // ③ 无标题栏（issue-7 回归守卫：decorations(false) 创建期下发不再丢失）——
+      //    decorated 窗 inner = outer − 标题栏，borderless 则两者相等
+      assert(
+        Math.abs(after.width - inner.width) <= 2 && Math.abs(after.height - inner.height) <= 2,
+        `decorations(false) not applied: outer ${after.width}×${after.height} vs inner ` +
+          `${inner.width}×${inner.height} (title bar present — issue 7 race)`
+      );
+      console.log(
+        '[issue7-diag]',
+        `ohos_id=${result.ohos_window_id} scale=${scale} setSize(300×200 logical) → ` +
+          `outer ${after.width}×${after.height} / inner ${inner.width}×${inner.height} ` +
+          `(floor ${floorW}×${floorH} ENFORCED, borderless OK)`
+      );
+    },
+  },
+  // ─── Float 窗口创建期竞态 (doc/OHOS窗口遗留问题.md 问题七附注) ───
+  // create_os_window 为 fire-and-forget: Rust 侧预分配 id 即返回, ArkTS
+  // WindowManager.createSubWindow 链(createSubWindowWithOptions →
+  // loadContentByName → FloatPage 加载)仍在进行。build() 后立即下发的
+  // set_size(260×180) 与创建链并发, pre-fix 在窗口注册进 WindowManager.windows
+  // 前到达 → requireWindow 抛 "Unknown OS sub-window" → op 静默丢失
+  // (全轮 22 条 warn 的家族)。修复判据: PENDING_FLOAT_WINDOWS 握手排队,
+  // notifyFloatWindowRegistered(在 createSubWindow promise END)后回放。
+  // setSize 由 Rust 侧命令立即下发 —— JS 侧 setSize 赛的是 tauri IPC
+  // (window-not-found) 而非 ArkTS 注册, 复现不了本竞态(issue-7 教训)。
+  {
+    name: 'window.createFloatWindowRacyAttrs (float creation race)',
+    category: 'auto',
+    async fn() {
+      const label = 'test-float-racy-' + Date.now();
+      const result = await invoke<{
+        label: string;
+        webview_acquired: boolean;
+        ohos_window_id: number;
+      }>('create_float_window_racy_attrs', { windowId: label });
+      assert(
+        result.webview_acquired === true,
+        `webview not acquired: ${JSON.stringify(result)}`
+      );
+      // 等 2s: notify 在 ArkTS createSubWindow promise END(含 FloatPage 加载)
+      // 才发, 排队的 set_size 回放需要时间。
+      await delay(2000);
+      const win = await Window.getByLabel(label);
+      assert(win, `window not found by label after settle: ${label}`);
+      const outer = await win.outerSize();
+      const scale = await win.scaleFactor();
+      const targetW = Math.round(260 * scale);
+      const targetH = Math.round(180 * scale);
+      const buildW = Math.round(500 * scale);
+      const buildH = Math.round(400 * scale);
+      // ① 必须脱离构造尺寸 (防假绿: 若 Float resize 整体失效、窗口停在
+      //    500×400, ②会因「接近目标」判据不成立而失败, 但①给出更准确的
+      //    失败语义——resize 从未生效, 而非竞态丢失)
+      assert(
+        Math.abs(outer.width - buildW) > 8 || Math.abs(outer.height - buildH) > 8,
+        `window stuck at builder size: outer ${outer.width}×${outer.height} ≈ ` +
+          `${buildW}×${buildH} physical — the racing setSize never took effect at all`
+      );
+      // ② 立即下发的 set_size(260×180 逻辑) 在注册前到达也被排队回放
+      //    (float race 修复回归守卫; 容差 ±8 物理像素吸收取整差异)
+      assert(
+        Math.abs(outer.width - targetW) <= 8 && Math.abs(outer.height - targetH) <= 8,
+        `immediate set_size(260×180 logical) lost to float creation race: outer ` +
+          `${outer.width}×${outer.height} physical ≠ ${targetW}×${targetH} ` +
+          `(scale ${scale}) — op dropped pre-registration (问题七附注)`
+      );
+      console.log(
+        '[float-race-diag]',
+        `ohos_id=${result.ohos_window_id} scale=${scale} outer ` +
+          `${outer.width}×${outer.height} physical = 260×180 logical REPLAYED, ` +
+          `builder 500×400 overridden`
+      );
+      // 清理: destroy 走 Window::drop → unregister_pending_float(晚到 notify
+      // 无害化), 顺带覆盖 V5 观察路径
+      await win.destroy();
+      await delay(400);
+    },
+  },
   // ─── 真实读回验证（Float 子窗口） ───
   {
     name: 'window.setInnerSize actually resizes (main window)',

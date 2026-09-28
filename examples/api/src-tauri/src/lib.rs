@@ -909,6 +909,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_window,
       #[cfg(target_env = "ohos")]
+      cmd::create_ui_ability_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
+      cmd::create_float_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
       cmd::get_current_window_id,
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_windows_x3,

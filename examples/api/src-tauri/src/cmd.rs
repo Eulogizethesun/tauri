@@ -1066,6 +1066,133 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
   })
 }
 
+/// Result of create_ui_ability_window_racy_attrs (issue-7 repro command).
+#[cfg(target_env = "ohos")]
+#[derive(serde::Serialize)]
+pub struct CreateUIAbilityWindowRacyAttrsResult {
+  /// The window label passed to the command.
+  pub label: String,
+  /// Whether manager.get_webview_window(label) succeeded after build.
+  pub webview_acquired: bool,
+  /// The pre-allocated OHOS window id for this spawned instance, for hilog
+  /// correlation (0 when the label registry has no entry yet).
+  pub ohos_window_id: i64,
+}
+
+/// Issue-7 reproduction (doc/OHOS窗口遗留问题.md 问题七): creation-time window
+/// attributes on a spawned UIAbility window race the new instance's stage
+/// registration. `start_ui_ability` is fire-and-forget, and the builder's
+/// decorations / min-size plus an immediate post-build setter are dispatched
+/// right away — they reach ArkTS before `registerUIAbilityStage`, so
+/// `requireWindow` throws "Unknown OS sub-window '<id>'" and tao drops them
+/// with a warn. Fix verification (doc 问题七 checklist): the warns disappear
+/// and the window renders borderless with a 400×300 resize floor.
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  window_id: String,
+) -> tauri::Result<CreateUIAbilityWindowRacyAttrsResult> {
+  use tauri::ohos::OHOSWindowKind;
+
+  log::info!("Creating UIAbility instance window with racy attrs: {}", window_id);
+
+  let window = tauri::WebviewWindowBuilder::new(
+    &app,
+    &window_id,
+    WebviewUrl::App("hello.html".into()),
+  )
+  .title("UIAbility Racy Attrs Window")
+  .inner_size(700.0, 500.0)
+  .decorations(false)
+  .min_inner_size(400.0, 300.0)
+  .ohos_window_kind(OHOSWindowKind::UIAbility)
+  .build()?;
+
+  // The generalized form of the race (doc 问题七): a setter fired immediately
+  // after build() hits the same pre-registration window.
+  window.set_decorations(false)?;
+
+  let webview_acquired = app.get_webview_window(&window_id).is_some();
+  let ohos_window_id = openharmony_ability::window_id_for_label(&window_id);
+  log::info!(
+    "[create_ui_ability_window_racy_attrs] label={} acquired={} ohos_id={} — verify no \
+     'Unknown OS sub-window' warn in hilog and a borderless window with a 400x300 floor",
+    window_id, webview_acquired, ohos_window_id
+  );
+
+  Ok(CreateUIAbilityWindowRacyAttrsResult {
+    label: window_id,
+    webview_acquired,
+    ohos_window_id,
+  })
+}
+
+/// Result of create_float_window_racy_attrs (float creation-race repro command).
+#[cfg(target_env = "ohos")]
+#[derive(serde::Serialize)]
+pub struct CreateFloatWindowRacyAttrsResult {
+  /// The window label passed to the command.
+  pub label: String,
+  /// Whether manager.get_webview_window(label) succeeded after build.
+  pub webview_acquired: bool,
+  /// The pre-allocated OHOS window id for this Float window, for hilog
+  /// correlation (0 when the label registry has no entry yet).
+  pub ohos_window_id: i64,
+}
+
+/// Float creation-race reproduction (doc/OHOS窗口遗留问题.md 问题七附注):
+/// `create_os_window` pre-allocates the window id Rust-side and fire-and-forgets
+/// the ArkTS `WindowManager.createSubWindow` chain (createSubWindowWithOptions
+/// → loadContentByName → FloatPage load), so any window op dispatched right
+/// after `build()` — here an immediate `set_size` — reaches ArkTS before the
+/// window is registered in `WindowManager.windows`, `requireWindow` throws
+/// "Unknown OS sub-window '<id>'" and the op is silently lost (the 22-warn
+/// family). Fix verification: the pending-float handshake queues the op and
+/// replays it after `notifyFloatWindowRegistered`, so the 260×180 logical
+/// resize must stick (read back ≠ the 500×400 builder size).
+#[cfg(target_env = "ohos")]
+#[command]
+pub fn create_float_window_racy_attrs<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  window_id: String,
+) -> tauri::Result<CreateFloatWindowRacyAttrsResult> {
+  use tauri::ohos::OHOSWindowKind;
+
+  log::info!("Creating Float window with racy attrs: {}", window_id);
+
+  let window = tauri::WebviewWindowBuilder::new(
+    &app,
+    &window_id,
+    WebviewUrl::App("hello.html".into()),
+  )
+  .title("Float Racy Attrs Window")
+  .inner_size(500.0, 400.0)
+  .decorations(false)
+  .ohos_window_kind(OHOSWindowKind::Float)
+  .build()?;
+
+  // The generalized form of the race: a setter fired immediately after
+  // build() hits the same pre-registration window. Dispatched from the Rust
+  // side on purpose — a JS-side setSize would race the tauri IPC layer
+  // (window-not-found) instead of the ArkTS registration.
+  window.set_size(tauri::LogicalSize::new(260.0, 180.0))?;
+
+  let webview_acquired = app.get_webview_window(&window_id).is_some();
+  let ohos_window_id = openharmony_ability::window_id_for_label(&window_id);
+  log::info!(
+    "[create_float_window_racy_attrs] label={} acquired={} ohos_id={} — verify no \
+     'Unknown OS sub-window' warn in hilog and outer size 260x180 logical after settle",
+    window_id, webview_acquired, ohos_window_id
+  );
+
+  Ok(CreateFloatWindowRacyAttrsResult {
+    label: window_id,
+    webview_acquired,
+    ohos_window_id,
+  })
+}
+
 /// Diagnostic result returned by create_transparent_ui_ability_window for automated tests.
 #[cfg(target_env = "ohos")]
 #[derive(serde::Serialize)]

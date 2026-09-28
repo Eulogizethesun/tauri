@@ -9,7 +9,7 @@
 > - **问题四**:set_minimizable/set_maximizable/set_closable 语义错位 —— 名义控制"窗口能否最小化/最大化/关闭",实际只控制装饰按钮显隐,不拦截编程式 API,与应有语义无关
 > - **问题五**:Window 大量 Atomic 镜像位与 ArkTS 真实状态不同步 —— 单向写不回读、maximized/minimized 为僵尸字段、系统状态变化不回灌,导致 is_* 查询与实际状态脱节
 > - **问题六**:set_cursor_visible / set_ignore_cursor_events / set_cursor_icon / set_always_on_top 尚未测试 —— 前三者已 dispatch 到系统 API 但行为未验证,always_on_top 为 no-op 无 z-order API
-> - **问题七**:spawned UIAbility 窗口创建期属性竞态 —— decorations/min-max 创建期下发先于新实例 stage 注册,ArkTS `requireWindow` 抛错致属性静默丢失;主窗 id 0 与 Float 默认路径无竞态
+> - **问题七**(已修复 2026-09-17):spawned UIAbility 窗口创建期属性竞态 —— tao 侧 `PENDING_WINDOW_OPS` 队列至 stage 注册后回放,真机六项判据全过、299 例回归持平;连带发现的 Float 创建期同类竞态亦已修复并真机验证(2026-09-18,warn 23→0、300 例持平,见该节附注)
 >
 > **姊妹文档**:[多窗口特性实现文档.md](多窗口特性实现文档.md) 描述多窗口的正向实现(创建/路由/竞态);本文档专门记录正向文档未覆盖的遗留问题。
 
@@ -702,13 +702,15 @@ pub fn is_minimized(&self) -> bool {
 
 ## 问题七:spawned UIAbility 窗口创建期属性竞态 —— 创建期属性下发先于新实例 stage 注册,属性静默丢失
 
-> **状态**:已定位(2026-09-17 rebase 检视发现),修复方向已定(tao 侧排队 / ArkTS 侧缓冲二选一),待专项实现 + 真机验证。不阻塞 rebase 产物:相对 rebase 前行为**无任何回归**(见"后果"第 1 点)。
+> **状态**:已修复并真机验证(2026-09-17)。修复=方案 A(tao 侧排队):`PENDING_WINDOW_OPS` 全局队列 + `dispatch_or_queue`/`spawn_or_queue` 门控 + 事件循环 drain 回放 + `Window::drop` 清理,26 处窗口属性分发点全部收编,**零 openharmony-ability 改动**(`is_ui_ability_stage_ready` 已导出于 crate root)。真机六项判据全过、299 例回归持平。连带发现 Float 创建期同类竞态(set_visible/set_focus,已于 2026-09-18 修复并真机验证,见本节附注)。
 >
 > **关联代码**:
-> - [tao `Window::new` 创建期属性下发](../../tao/src/platform_impl/ohos/window.rs) —— `apply_window_limits`(创建期 min/max 下发)与 `set_window_decorations`(创建期 decorations 下发)
-> - [openharmony-ability `register_pending_ui_ability` / pending 注册表](../../openharmony-ability/crates/ability/src/window/mod.rs) —— D7 握手注册端
+> - [tao `PENDING_WINDOW_OPS` / `dispatch_or_queue` / `spawn_or_queue`](../../tao/src/platform_impl/ohos/window.rs) —— 修复主体:排队 + push-then-check TOCTOU 门控 + `drain_ready_pending_window_ops`/`drop_pending_window_ops`
+> - [tao 事件循环 drain 调用点](../../tao/src/platform_impl/ohos/event_loop.rs) —— 每轮 MainEvent 分发头部回放(D7 waker 唤醒后)
+> - [tao `Window::new` 创建期属性下发](../../tao/src/platform_impl/ohos/window.rs) —— `apply_window_limits`(创建期 min/max 下发)与 `set_window_decorations`(创建期 decorations 下发),均已走队列
+> - [openharmony-ability `register_pending_ui_ability` / `is_ui_ability_stage_ready`](../../openharmony-ability/crates/ability/src/window/mod.rs) —— D7 握手注册端与就绪判据(未知 id 恒 true:主窗/Float/僵尸走快路径)
 > - [ArkTS `requireWindow`](../../openharmony-ability/plugins/window/src/main/ets/WindowPlugin.ets) —— 查不到 id 时 `throw new Error("Unknown OS sub-window '<id>' ...")`
-> - [wry `pending_ops` 排队先例](../../wry/src/ohos/mod.rs) —— webview 操作按 window_id 排队至握手的既有保护(D7),窗口属性操作缺同等门控
+> - [wry `pending_ops` 排队先例](../../wry/src/ohos/mod.rs) —— 同构先例,本修复对照实现
 
 ### 现象
 
@@ -730,17 +732,44 @@ pub fn is_minimized(&self) -> bool {
 3. **静默失败**:调用方拿到 `Ok(())`,排查链路长——hilog warn 是唯一线索。
 4. **有 workaround**:注册落地后(窗口可见后)再调 `set_decorations()` / `set_min_inner_size()` 走运行时路径,完全正常。
 
-### 正确做法(两案,均需真机验证,单独立项)
+### 真机复现(2026-09-17,修复前)
 
-- **方案 A(tao 侧排队,推荐方向)**:对照 wry `pending_ops` 先例——id 仍在 pending 注册表时把窗口属性调用暂存,握手后按序回放。需 tao + openharmony-ability 两仓配合,把 D7 握手机制从"只覆盖 wry webview 操作"扩展到"覆盖窗口属性操作"。
-- **方案 B(ArkTS 侧缓冲)**:`requireWindow` 查不到时为 pending id 缓冲调用不抛错。须设计超时并区分"正在出生"与"已销毁的僵尸 id"(僵尸句柄为既有独立问题),否则会掩盖真错误、延迟错误暴露。
-- 两案均为设计级改动 + 真机回归,不随 rebase 提交搭车。
+examples/api 新增自动用例 `window.createUIAbilityWindowRacyAttrs`(#286,`create_ui_ability_window_racy_attrs` 命令):`.ohos_window_kind(UIAbility)` + `.decorations(false)` + `.min_inner_size(400,300)` + build 后立即 `set_decorations(false)`。hilog 实证(id=13):5 路下发(创建期 decorations、restore/show、set_focus、build 后 set_decorations 等)全部落在注册完成前约 40ms 窗口内,`Unknown OS sub-window '13'` × 5;下限探针 setSize(300×200) 未被夹持(min_inner_size 丢失)。两点连带证实:①竞态泛化到套件中每个 spawned UIAbility 窗口(11/12/13)创建期的 3~5 路下发;②`set-limits`(WindowPlugin.ets)不走 `requireWindow`,对未知 id **静默 no-op**(连 warn 都没有)——这解释了为何 min/max 丢失连日志痕迹都没有。
 
-### 验证清单(待专项修复后执行)
+### 修复(方案 A,2026-09-17 实现,纯 tao 侧)
 
-- [ ] `.ohos_window_kind(UIAbility)` + `.decorations(false)` build:窗口无边框(当前必带标题栏)
-- [ ] 同上 + `.min_inner_size(400,300)`:窗口拖不小(当前无约束)
-- [ ] `build()` 后立即 `set_decorations(false)`:生效(当前同窗口期丢失)
-- [ ] 主窗 id 0 带同属性:不回归(始终正常)
-- [ ] Float 窗口带同属性:不回归(不经 spawn 分支)
-- [ ] 全量 299 例回归持平
+- **队列**:`PENDING_WINDOW_OPS: LazyLock<Mutex<HashMap<i64, Vec<PendingWindowOp>>>>`(键=OHOS 窗口 id,值=boxed `FnOnce` 闭包 FIFO),对照 wry `pending_ops` 同构。
+- **门控**:`Window::dispatch_or_queue(op)` —— `is_ui_ability_stage_ready(id)` 为 true 直接执行;false 则**先 push 后复查**(TOCTOU:注册恰在检查与 push 之间落地时,D7 waker 已发过、不会再有唤醒,必须当场 drain 该 id;条目可能已有更早排队的操作,故整条 FIFO 回放)。就绪判据对未知 id 恒 true(主窗 id 0、Float、僵尸 id 全走快路径,行为与修前逐字一致),只有 pending spawned UIAbility 握手期读到 false。
+- **回放**:事件循环每轮 `MainEvent` 分发头部 `drain_ready_pending_window_ops()`——就绪 id 收集于队列锁内、回放于锁外;触发链=注册翻转→D7 waker(锁外)→TSFN NonBlocking→`MainEvent::UserEvent`。
+- **收编点**:26 处 `runtime.spawn` 窗口属性分发改走 `spawn_or_queue`(future 未 poll 即惰性,调用时参数已捕获);`set_inner_size` UIAbility 路径的 decor-watch `tx.send` 亦以 boxed 闭包入队。**刻意不改**的 3 处:`start_ui_ability` 派发本身(入队即死锁——队列等注册、注册等派发)、decor watcher 任务启动(本地任务自举)、`set_cursor_visible`(全局光标,无窗口 id)。
+- **清理**:`Window::drop` 调 `drop_pending_window_ops(id)`,丢弃未回放操作(与修前"派发失败即丢"等义,不泄漏)。
+- **零 openharmony-ability 改动**:就绪判据 `is_ui_ability_stage_ready` 已导出于 crate root;锁序单向(tao 队列锁→ability 注册表锁,ability 侧从不回调 tao),注册翻转与唤醒分置锁内外,无死锁面。
+- **happens-before 保证**:ArkTS 主线程先插 `uiAbilityStages` 再调 NAPI `registerUiAbilityStage` 翻转就绪 → 回放的 bridge 调用到达 ArkTS 时注册必已可见,`requireWindow` 必命中。
+- 方案 B(ArkTS 侧缓冲)废弃:须区分"正在出生"与"僵尸 id"且掩盖真错误;A 完胜。
+
+### 验证(2026-09-17,HAD-W32 真机)
+
+- [x] `.ohos_window_kind(UIAbility)` + `.decorations(false)` build:无边框——outer==inner(760×570,无标题栏 inset),零 warn
+- [x] 同上 + `.min_inner_size(400,300)`:下限夹持——setSize(300×200 逻辑) 被夹至 759×569 物理(scale≈1.9);连带定论 setWindowLimits **对编程式 resize 有夹持**
+- [x] `build()` 后立即 `set_decorations(false)`:生效(入队回放,零 warn)
+- [x] 主窗 id 0 不回归:全量套件 299✅/0❌/2⏭(301 例)持平修前基线
+- [x] Float 窗口不回归:快路径行为不变,warn 集合与修前逐条一致(见附注);D11 Float 用例 ✅
+- [x] 全量回归:299✅/0❌/2⏭;#286 已硬化为 3 条硬断言(setSize 必须生效、400×300 逻辑下限夹持、outer==inner)——修前该用例"通过"是因竞态静默失败(仅 hilog warn),硬断言后任何复发直接红
+
+真机证据(修后 hilog):window 13 register_pending→注册 67ms 窗口内**零** warn(修前同窗 5 条);spawned 窗口 11/12/13 全部零丢失;`[issue7-diag] scale=1.9 setSize(300×200) → outer 760×570 / inner 760×570 (floor 759×569 ENFORCED, borderless OK)`。
+
+### 附注:Float 创建期同类竞态(修复中发现,已修复并真机验证 2026-09-18)
+
+验证中推翻了本节"后果 1"里"默认 Float 路径不受影响"的旧判断——对 Float 的**创建后立即下发**确实也撞同类竞态。机制不同:Float 子窗口经 `create_os_window`(TSFN fire-and-forget)创建,Rust 侧同步拿到 id 即返回,而 ArkTS createSubWindow+插件注册表登记异步完成;tauri 创建管线紧随的 `set_visible(true)`/`set_focus()` 到达时注册表尚无此 id。证据:每轮套件固定 22 条 warn(windows 1-10、14 各 2 条,均无 `register_pending` 记录=非 spawn 路径,系套件默认 Float 测试窗)。影响低:Float 创建即可见(丢失的 `set_visible(true)` 幂等),`set_focus` 仅失焦一次不丢功能,创建期属性(尺寸/位置/decorations)经 `WindowCreateParams` 同步传递不受影响。
+
+**修复设计(2026-09-17 定稿,子 agent 对抗复核通过;2026-09-18 按此实施)**:机制前提——Float 的窗口 id 由 Rust 侧预分配(`create_os_window` crates/ability/src/window/mod.rs:88 `NEXT_WINDOW_ID`),与 UIAbility 的 `next_window_id()` 同构,故可镜像 D7 pending 注册表模式。方案:①ability 仓新增 `PENDING_FLOAT_WINDOWS` 注册表(PendingFloat{waker};**条目存在=待定,settle 即移除**——有意偏离 PendingAbility 的"翻转 registered 标志后条目滞留",Float 无后续 join 语义,移除使注册表自洁),`create_os_window` 在 **tsfn lookup 之后、tsfn.call 之前** `register_pending_float(id)`(先注册后派发,TSFN 未初始化早退不泄漏);②新 NAPI `notify_float_window_registered`(锁内移除+取 waker、锁外 wake);③**能力握手(复核 V1,必改)**:新 NAPI `enable_float_pending_tracking()`,ProcessInitializer 注册 TSFN 前调用,`create_os_window` 仅在标志置位时才 register——防版本偏斜:新 .so+陈旧 HAR(ohpm 缓存陷阱场景)下无 notify 会致全量 Float 永久门控、严格劣于现状;握手使旧 HAR 行为与今天完全一致(新 HAR+旧 .so 时 ArkTS `typeof` 探测跳过 notify,亦安全);④tao Float 分支 `set_float_window_waker(id, waker)`,且**对 unknown id 仍 wake()**(复核 V2,必改——有意偏离 `set_ui_ability_waker` 的丢 waker 语义:WindowManager 同步前置 throw 会让 notify-fail 抢在 waker 设置前到达,PENDING_WINDOW_OPS 是真实消费者,不唤醒则空闲 park 的 loop 永不回放);⑤`dispatch_or_queue`/drain 判据换组合 `is_window_ready = is_ui_ability_stage_ready && is_float_ready`(双表 unknown→true,主窗 0/僵尸/UIAbility id 快路径不变);⑥ArkTS 侧 ProcessInitializer TSFN 回调包 `.then(notify).catch(notify-fail)`,notify 挂 **promise 末端**(复核 V10:若 windows.set 后立即 notify,回放 op 与 create 链残余 resize/moveWindowTo/showWindow 无序竞跑,会复活"几何被默认值覆盖"类缺陷)。**wry 零改动**(复核确认:Float webview 操作按 webview id 字符串寻址走 `WebviewSurface.entries`,create 经 `onComponentRootRegistered` 拉模式 defer,不碰 requireWindow,无此竞态)。已排除:死锁(锁序单向,wake 均锁外)、双表 id 冲突(单调计数器一次定格用途,条目集不相交)、其他创建调用点(单点收口 tao window.rs:522;WindowPlugin create-os-window bridge action 为死代码,且其注册键是系统窗口 id 另一 id 空间)。**实施偏差(有意)**:V4 超龄 pending warn 未实现(promise 挂死仅剩 register 单行可观测,容忍);tao replay/drop 日志由 debug 提为 info(证据三联 register→notify→replay 需在 hilog 默认 INFO 级可见);`enable_float_pending_tracking` 的 Rust 日志行实际不可见(ProcessInitializer 期 log→hilog 桥未初始化,握手生效以 `register_pending_float` 出现为判据,无害)。**附带发现(既有,非本竞态引入)**:loadContentByName 失败时 FloatPage 永不 aboutToAppear → componentRoot 永不注册 → wry 侧 deferred create 与 pending_ops 永久滞留(独立低概率泄漏,待观察)。
+
+**实施落点(2026-09-18)**:ability 仓 `crates/ability/src/window/mod.rs`(注册表+`register/unregister_pending_float`/`set_float_window_waker`/`is_float_window_ready`/`is_window_ready`/`notify_float_window_registered`/`enable_float_pending_tracking` NAPI×2+5 条单测);ArkTS `native_ability/.../type.ets`(Module 增可选成员×2)+`ProcessInitializer.ets`(握手调用+TSFN 回调 promise 末端 settle,成功失败均 notify);tao `window.rs`(Float 分支挂 waker、`dispatch_or_queue`/drain 判据换 `is_window_ready`、`Drop` 补 `unregister_pending_float`);examples/api 新增 `create_float_window_racy_attrs` 命令(四处注册:cmd.rs/lib.rs/build.rs/run-app.json)+ window-ops.ts 硬断言用例(#287,Rust 侧 build 后立即 `set_size(260×180 逻辑)`,settle 后读回 outerSize 双断言:①必须脱离构造尺寸 500×400(防 resize 整体失效假绿)②必须≈260×180×scale(竞态丢失即红))。
+
+**真机验证(2026-09-18,HAD-W32,四层判据全过)**:
+- **RED 先行证明**(旧 har+新 .so,即 V1 版本偏斜组合):用例真实命中竞态而非环境问题——`| 287 | ... | ❌ | 3008ms | window stuck at builder size: outer 950×760 |`(=500×400×1.9,立即 set_size 被丢),hilog 同毫秒链:`[create_float_window_racy_attrs] ... →(+5ms) resize_window failed for window 14: Unknown OS sub-window '14'`;唯一 ❌=本用例,299 基线无回归。
+- **V1 降级语义**:陈旧 ArkTS 下握手 0 次(`enable_float_pending_tracking` 从未武装)、warn 23 条与修前逐字同量、Float 窗全部可用、299✅——新 .so+旧 har 不产生任何门控挂死,行为与修复前完全一致。
+- **GREEN 终验**(新 har+新 .so):套件 **300✅/0❌/2⏭**(299 基线+新用例);`Unknown OS sub-window` warn **23→0**;证据三联毫秒级闭环:`register_pending_float: id=14(.881) → notify_float_window_registered: id=14 registered=true(.920) → replaying 3 queued window op(s) for window 14(.931)`(3=竞态 set_size+2 管线 ops);全程 15 条 replay(每个 Float 窗 2-3 个排队 op 全回放);console `[float-race-diag] outer 494×342 physical = 260×180 logical REPLAYED, builder 500×400 overridden`(494=260×1.9);UIAbility #285/#286(issue-7 守卫)在 300 内保持 ✅。
+- **单测(设备侧执行,2026-09-18)**:注册表语义 5 条(gate/settle/unknown-ready/幂等 unregister+晚 notify no-op/UIAbility pending 同样门控组合判据)逐条 ok;ability 全量 **80✅/0❌**、tao 全量 **71✅/0❌**(hdc 推送手工配方;`--lib` 门控——tao examples 未 cfg 门控 OHOS 属存量问题)。**未注入失败路径**(无廉价注入点):notify(false) 走 ArkTS `.catch` 同一 settle 调用+单测覆盖语义,V5 drop 竞态由 info 级 drop 日志留观测。
+
+证据文件(examples/api/):`hilog-float-red-green1.log`(RED 两轮+首 GREEN)、`hilog-float-final.log`(终验)、`float-race-run1-report.md`(ACL 挡板轮)/`float-race-red-report.md`(RED)/`float-race-green-report.md`+`float-race-final-report.md`(GREEN×2);UT 日志:`openharmony-ability/ut-ability-device.log`、`tao/ut-tao-device.log`。

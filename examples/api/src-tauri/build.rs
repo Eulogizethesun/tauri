@@ -55,6 +55,8 @@ fn main() {
         "create_decorated_window",
         "create_transparent_borderless_window",
         "create_ui_ability_window",
+        "create_ui_ability_window_racy_attrs",
+        "create_float_window_racy_attrs",
         "get_current_window_id",
         "create_ui_ability_windows_x3",
         "create_transparent_ui_ability_window",
