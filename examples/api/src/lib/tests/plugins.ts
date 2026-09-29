@@ -317,7 +317,7 @@ export const pluginTests: TestCase[] = [
   // @tauri-apps/plugin-clipboard-manager
   // category 'auto' (was 'side-effect'). On OHOS the write path works; reads
   // are permission-gated by the restricted READ_PASTEBOARD permission
-  // (平台限制 #1) and the bridge resolves with an empty string when the
+  // (platform limitation #1) and the bridge resolves with an empty string when the
   // grant is absent — skip honestly on an empty read instead of failing the
   // round-trip. With the grant (and on desktop) the round-trip assertion
   // holds.
@@ -733,7 +733,7 @@ export const pluginTests: TestCase[] = [
     // NOTE: manual-category fn is never executed by runTests (test-runner.ts
     // marks manual as skip without calling fn) — the real verification is the
     // TestRunner button "Dialog.open (directory)" (manualDialogOpenDirectory),
-    // which self-asserts null-or-non-empty-string. See manual_tests.md §四.
+    // which self-asserts null-or-non-empty-string. See manual_tests.md §4.
     name: '@tauri-apps/plugin-dialog.open (directory, OHOS)',
     category: 'manual',
     async fn() {

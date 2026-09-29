@@ -1079,13 +1079,13 @@ pub struct CreateUIAbilityWindowRacyAttrsResult {
   pub ohos_window_id: i64,
 }
 
-/// Issue-7 reproduction (doc/OHOS窗口遗留问题.md 问题七): creation-time window
+/// Issue-7 reproduction (doc/OHOS窗口遗留问题.md issue 7): creation-time window
 /// attributes on a spawned UIAbility window race the new instance's stage
 /// registration. `start_ui_ability` is fire-and-forget, and the builder's
 /// decorations / min-size plus an immediate post-build setter are dispatched
 /// right away — they reach ArkTS before `registerUIAbilityStage`, so
 /// `requireWindow` throws "Unknown OS sub-window '<id>'" and tao drops them
-/// with a warn. Fix verification (doc 问题七 checklist): the warns disappear
+/// with a warn. Fix verification (doc issue-7 checklist): the warns disappear
 /// and the window renders borderless with a 400×300 resize floor.
 #[cfg(target_env = "ohos")]
 #[command]
@@ -1109,7 +1109,7 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
   .ohos_window_kind(OHOSWindowKind::UIAbility)
   .build()?;
 
-  // The generalized form of the race (doc 问题七): a setter fired immediately
+  // The generalized form of the race (doc issue 7): a setter fired immediately
   // after build() hits the same pre-registration window.
   window.set_decorations(false)?;
 
@@ -1141,7 +1141,7 @@ pub struct CreateFloatWindowRacyAttrsResult {
   pub ohos_window_id: i64,
 }
 
-/// Float creation-race reproduction (doc/OHOS窗口遗留问题.md 问题七附注):
+/// Float creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
 /// `create_os_window` pre-allocates the window id Rust-side and fire-and-forgets
 /// the ArkTS `WindowManager.createSubWindow` chain (createSubWindowWithOptions
 /// → loadContentByName → FloatPage load), so any window op dispatched right
@@ -2195,7 +2195,7 @@ pub fn create_ohos_test_webview<R: tauri::Runtime>(
     // plus the two fetch probes (external https / intercepted subresource)
     // to the webview console (visible in hilog as ARKWEB-CONSOLE). This lets
     // us verify the https-scheme rewrite without DevTools (release build has
-    // no devtools feature). Covers manual_tests.md §二十六 cases:
+    // no devtools feature). Covers manual_tests.md §26 cases:
     // page-load / secure-context / external-https / subresource.
     builder = builder.initialization_script(
       r#"window.addEventListener('DOMContentLoaded', () => {
@@ -2210,13 +2210,13 @@ pub fn create_ohos_test_webview<R: tauri::Runtime>(
         } catch(e) {
           console.log('[https-scheme] crypto.subtle unavailable: ' + e);
         }
-        // Probe 1 (§二十六 external-https): external https must NOT be intercepted.
+        // Probe 1 (§26 external-https): external https must NOT be intercepted.
         // no-cors: a normal network fetch resolves with an opaque response;
         // rejection means the request never completed through the default stack.
         fetch('https://example.com', { mode: 'no-cors' })
           .then(r => console.log('[https-scheme] external fetch resolved: type=' + r.type + ' status=' + r.status))
           .catch(e => console.log('[https-scheme] external fetch REJECTED: ' + e));
-        // Probe 2 (§二十六 subresource): same-origin fetch under the rewritten
+        // Probe 2 (§26 subresource): same-origin fetch under the rewritten
         // https://tauri.localhost origin — must be served by onInterceptRequest
         // + custom_protocol, not the network stack.
         fetch('https://tauri.localhost/index.html')
@@ -2241,7 +2241,7 @@ pub fn create_ohos_test_webview<R: tauri::Runtime>(
   #[cfg(not(target_env = "ohos"))]
   let _ = &webview_window;
 
-  // §二十六 drag-overlay: log DragDrop events to hilog so the Enter→Over→Drop→Leave
+  // §26 drag-overlay: log DragDrop events to hilog so the Enter→Over→Drop→Leave
   // sequence (and dropped paths) is verifiable without DevTools. drag_drop_handler
   // is wired by default (drag_drop_handler_enabled=true), events surface as
   // WindowEvent::DragDrop on this window.

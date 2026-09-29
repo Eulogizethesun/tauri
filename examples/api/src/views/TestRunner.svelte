@@ -83,15 +83,15 @@
     pressedKeys.clear();
   }
 
-  // driver 盲调用 + side-effect 复放按 design 放最后（S2 覆盖率套件）。
-  // 门控：仅覆盖率验证构建（cov-build.sh VITE_COVERAGE_TESTS=true）注入覆盖率批次；
-  // VITE_AUTOTEST（自动跑测试）不注入，普通 demo 保持 283 用例标准集。
-  // api-gap 批（S10）压轴：含 app 隐显 / 设置页跳转等破坏性操作，必须在所有批次之后。
-  // risk-supplement 批（2026-09-04）附于 windowOps 之后、覆盖率批次之前：
-  // fs watcher / shell 子进程三个风险点补测，OHOS 以外平台 skip，
-  // 追加在尾部以保持既有 #1-#293 编号稳定。
-  // stronghold 批（2026-09-09）同样附于覆盖率批次之前：仅内存态操作
-  // （store/过程链），快照 scrypt（~107s/次）归手动按钮，编号稳定性同上。
+  // driver blind-invocation + side-effect replay go last by design (S2 coverage suite).
+  // Gating: only coverage-verification builds (cov-build.sh with VITE_COVERAGE_TESTS=true) inject the coverage batch;
+  // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 283-case set.
+  // The api-gap batch (S10) runs last: it contains destructive ops (app hide/show, settings-page jumps) and must come after all other batches.
+  // The risk-supplement batch (2026-09-04) sits after windowOps and before the coverage batch:
+  // the three risk-point follow-ups (fs watcher / shell subprocess), skipped on platforms other than OHOS,
+  // appended at the tail to keep the existing #1-#293 numbering stable.
+  // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
+  // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
   const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...riskSupplementTests, ...strongholdTests, ...coverageTests];
   const webview = getCurrentWebview();
@@ -133,23 +133,23 @@
     }
   }
 
-  // ─── process exit/restart 实验阶段（自杀性，不进 runAll）───
-  // 仅 VITE_PROCESS_TESTS 构建启用（export VITE_PROCESS_TESTS=true 后经
-  // run-tests.sh 走 cargo tauri ohos build，前端构建继承该变量）。
-  // process exit/restart 会杀掉测试进程本身，不能作为套件用例（run-tests.sh
-  // 的报告轮询 / 后续用例全被中断）；改为跨进程状态机：
-  //   boot 1（无 phase）: runAll 完成后 arm 'exit-launched' → invoke exit(0)
-  //     （exit → app.exit → ExitRequested；上游 #82-14 分层后事件循环在 OHOS
-  //      不再派发 terminateSelf，进程不会被终止，本腿仅验证事件链是否触发；
-  //      仅当 8s 观察窗内进程被外部终止（hdc kill / 崩溃）才会出现 boot 2，
-  //      观察窗过后 phase 复位，之后重启只会回到 boot 1）
+  // ─── process exit/restart experiment phase (self-terminating; excluded from runAll) ───
+  // Enabled only in VITE_PROCESS_TESTS builds (after export VITE_PROCESS_TESTS=true,
+  // run-tests.sh goes through cargo tauri ohos build and the front-end build inherits the variable).
+  // process exit/restart kills the test process itself, so it cannot be a suite case (run-tests.sh's
+  // report polling and every later case would be interrupted); use a cross-process state machine instead:
+  //   boot 1 (no phase): after runAll completes, arm 'exit-launched' → invoke exit(0)
+  //     (exit → app.exit → ExitRequested; after upstream #82-14 layering the event loop no longer
+  //      dispatches terminateSelf on OHOS, so the process is not terminated — this leg only verifies whether the event chain fires;
+  //      boot 2 only appears if the process is terminated externally within the 8s observation window (hdc kill / crash);
+  //      after the window the phase resets, and later restarts land back on boot 1)
   //   boot 2（exit-launched）: arm 'restart-launched' → invoke restart()
-  //     （OHOS 上 restart 走 ohos.process 桥 appRecovery.restartApp（API 12+），
-  //      不经过 ExitRequested/restart_on_exit；进程被硬杀，OS 自动重启 → boot 3）
-  //   boot 3（restart-launched）: restart 之后的重启（OS 自动 or 手动拉起，
-  //     「是否自动重启」的判定靠外部 pidof/hilog 时间线，本端只记录并清状态）
-  // 跨进程状态落 appCacheDir/process-phase.json（fs 落盘，进程死亡后仍在；
-  // localStorage 跨进程重启的持久性未验证，不用）。
+  //     (on OHOS, restart goes through the ohos.process bridge's appRecovery.restartApp (API 12+),
+  //      not through ExitRequested/restart_on_exit; the process is hard-killed and the OS restarts it → boot 3)
+  //   boot 3 (restart-launched): the restart after restart (OS-automatic or manual relaunch;
+  //     deciding "was it an automatic restart" relies on an external pidof/hilog timeline; this side only records and clears state)
+  // Cross-process state lives in appCacheDir/process-phase.json (persisted via fs, surviving process death;
+  // localStorage's persistence across process restarts is unverified, so it is not used).
   const delayMs = (ms) => new Promise((r) => setTimeout(r, ms));
   async function processPhasePath() {
     return await join(await appCacheDir(), 'process-phase.json');
@@ -168,16 +168,16 @@
   }
 
   // Auto-run on first mount — ONLY in the main window, and only in autotest
-  // builds (VITE_AUTOTEST / VITE_COVERAGE_TESTS，由 run-tests.sh / cov-build.sh
-  // 设置)。普通 demo 构建（cargo tauri ohos run）不自动跑，手动点 Run All。
+  // builds (VITE_AUTOTEST / VITE_COVERAGE_TESTS, set by run-tests.sh / cov-build.sh
+  // respectively). Plain demo builds (cargo tauri ohos run) do not auto-run; click Run All manually.
   // Test sub-windows (clipboard/zoom/https-scheme tests created via
   // create_ohos_test_webview) load the same index.html, so their onMount
   // would also fire runAll() and spawn a flood of auto-test sub-windows,
   // polluting keyboard-interaction verification (Ctrl+C / Ctrl+= intercept).
   // Gate on the main window label so sub-windows stay static.
-  // Vite 把构建期 env 变量以字符串形式烙进 bundle：显式 "false" 若走
-  // Boolean("false") 会被当成 true，导致想关 autotest 反而全量自跑。
-  // 只认 "true"/"1"（run-tests.sh / cov-build.sh 的实际取值）。
+  // Vite bakes build-time env variables into the bundle as strings: an explicit "false" routed through
+  // Boolean("false") would become true, so trying to turn autotest off would instead make it fully self-run.
+  // Only "true"/"1" are honored (the actual values used by run-tests.sh / cov-build.sh).
   const envFlag = (v) => v === 'true' || v === true || v === '1';
   let listenId = 0;
   onMount(async () => {
@@ -185,14 +185,14 @@
     const isAutotest = envFlag(import.meta.env.VITE_AUTOTEST) || envFlag(import.meta.env.VITE_COVERAGE_TESTS);
     const isProcessTest = envFlag(import.meta.env.VITE_PROCESS_TESTS);
     if (isMainWindow && isAutotest && isProcessTest) {
-      // process exit/restart 实验启动序列（见上方状态机注释）
+      // process exit/restart experiment launch sequence (see the state-machine comment above)
       const phase = await readProcessPhase();
       if (phase === 'exit-launched') {
         onMessage('[process] 本次启动为 exit(0) 之后（上一进程在 8s 观察窗内终止——终止路径是 exit 链还是外部原因，需 pidof/hilog 时间线判定）');
         await writeProcessPhase('restart-launched');
-        // restart 在 OHOS 走 ohos.process 桥（appRecovery.restartApp，API 12+），
-        // 不经过 ExitRequested，prevent_exit 守卫与本腿无关；此调用仅为与
-        // boot 1 对称的防御性清位（无副作用，每 boot 默认恢复 true）
+        // On OHOS, restart goes through the ohos.process bridge (appRecovery.restartApp, API 12+),
+        // not through ExitRequested, so the prevent_exit guard is irrelevant to this leg; this call only clears the flag defensively, symmetric with
+        // boot 1 (no side effects; every boot restores true by default)
         await invoke('set_exit_prevention', { enabled: false });
         onMessage('[process] invoking plugin:process|restart（ohos.process 桥 appRecovery.restartApp，API 12+ 门控）...');
         let restartRejected = false;
@@ -211,13 +211,13 @@
       } else if (phase === 'restart-launched') {
         onMessage('[process] 本次启动为 restart() 之后（OS 自动重启 or 手动拉起，判定见外部 pidof/hilog 时间线）');
         await writeProcessPhase(null);
-        // 实验结束；报告已在 boot 1 生成并拉取，不再自动 runAll
+        // Experiment over; the report was already generated and pulled at boot 1, so no auto runAll
       } else {
         await runAll();
         onMessage('[process] runAll 完成，invoking plugin:process|exit（code 0 → ExitRequested；#82-14 分层后事件循环不再派发终止，预期进程存活）...');
         await writeProcessPhase('exit-launched');
-        // 关闭 app 自身的 prevent_exit 测试插桩（lib.rs ExitRequested handler
-        // 默认对每次退出请求调 prevent_exit），否则 exit 被测试代码拦下
+        // Turn off the app's own prevent_exit test instrumentation (lib.rs's ExitRequested handler
+        // calls prevent_exit on every exit request by default), otherwise the test code would intercept the exit
         await invoke('set_exit_prevention', { enabled: false });
         await invoke('plugin:process|exit', { code: 0 });
         await delayMs(8000);
@@ -288,11 +288,11 @@
     }
   }
 
-  // ─── Exit Confirmation (app-level UX over the #103 pre-close; manual_tests.md §九) ───
+  // ─── Exit Confirmation (app-level UX over the #103 pre-close; manual_tests.md §9) ───
   // Toggles EXIT_CONFIRM_MODE: implicit closes (✕) are prevented and the page
-  // (App.svelte, main window) shows a "确认退出？" dialog via plugin:dialog
-  // ask; 确定 → process.exit(0) (explicit exits are never prevented),
-  // 取消 → window stays. Distinct from the raw prevention test
+  // (App.svelte, main window) shows a "confirm exit?" dialog via plugin:dialog
+  // ask; confirm → process.exit(0) (explicit exits are never prevented),
+  // cancel → the window stays. Distinct from the raw prevention test
   // (test_set_prevent_exit, console-only).
   let exitConfirmOn = $state(false);
   async function manualExitConfirm() {
@@ -306,7 +306,7 @@
     });
   }
 
-  // ─── Content Protection (#115 window privacy mode; manual_tests.md §二十一) ───
+  // ─── Content Protection (#115 window privacy mode; manual_tests.md §21) ───
   // Toggle button so the ON state can be held while screenshotting (the auto case
   // cycles true→300ms→false, too short to capture; DevTools console needs the
   // devtools feature build). tao failure path is fire-and-forget: invoke resolves
@@ -400,7 +400,7 @@
     });
   }
 
-  // Full pass-through test on a Float overlay sub-window (manual_tests.md §二十八).
+  // Full pass-through test on a Float overlay sub-window (manual_tests.md §28).
   // The 3s-toggle smoke above only exercises the TSFN bridge on the main window;
   // T0/T1 require an overlay ABOVE the main window so click/hover pass-through is
   // observable. setIgnoreCursorEvents DOES pass label (unlike setBackgroundColor),
@@ -1211,7 +1211,7 @@ Expected behavior:
   // the main window (windowId=0), whose background is masked by the XComponent
   // content layer. We invoke the command directly with the sub-window's label so
   // it targets the correct Float sub-window. Upstream bug — should be fixed in
-  // @tauri-apps/api. See ohos-window-test-mapping.md row "窗口背景色".
+  // @tauri-apps/api. See ohos-window-test-mapping.md row "window background color".
   async function manualSetBackgroundColor(color, label) {
     await wrapManual(`setBackgroundColor(${label})`, async () => {
       if (!lastCreatedWindowLabel) {
@@ -1299,8 +1299,8 @@ Expected behavior:
   }
 
   // ─── OHOS Window Operations Manual Tests ───
-  // 窗口位置/大小/最大化/最小化/全屏/可见性/聚焦/置顶/装饰按钮/光标
-  // 主窗口上 D 组 setDecorationFlags 为 no-op，但 is*() 状态仍翻转。
+  // Window position/size/maximize/minimize/fullscreen/visibility/focus/always-on-top/decoration buttons/cursor
+  // On the main window, the D-group setDecorationFlags is a no-op, but the is*() state still flips.
   let ohosWinState = $state('');
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1334,7 +1334,7 @@ Expected behavior:
       ohosWinState = `innerSize ${orig.width}×${orig.height} → ${after.width}×${after.height} target ${tw}×${th} [on ${lastCreatedWindowLabel}]`;
       manualResult = `setInnerSize(${tw}×${th}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected: 子窗口内容区变为 ${tw}×${th}。\n实际: ${after.width}×${after.height}。\n若尺寸变化 → PASS。`;
       onMessage(manualResult);
-      await win.setSize(new PhysicalSize(orig.width, orig.height)); // 还原
+      await win.setSize(new PhysicalSize(orig.width, orig.height)); // restore
       await delay(400);
     });
   }
@@ -1374,7 +1374,7 @@ Expected behavior:
     });
   }
 
-  // 主窗口 Hide/Show — hide=hideAbility,show=startAbility(instanceKey='main' 复用)
+  // Main-window Hide/Show — hide=hideAbility, show=startAbility (reuses instanceKey='main')
   async function manualShowHide() {
     await wrapManual('showHide', async () => {
       const win = getCurrentWindow();
@@ -1409,7 +1409,7 @@ Expected behavior:
     });
   }
 
-  // 装饰按钮组:作用在最后创建的 Float 子窗口(主窗口 no-op)
+  // Decoration button group: acts on the most recently created Float sub-window (no-op on the main window)
   async function manualSetClosable() {
     await wrapManual('setClosable', async () => {
       if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
@@ -1552,9 +1552,9 @@ Expected behavior:
     });
   }
 
-  // ─── 补充手动测试:自动测试覆盖但无按钮的窗口能力 ───
+  // ─── Supplemental manual tests: window capabilities covered by autotest but without buttons ───
 
-  // 1. 窗口 ID — getCurrentWindow().label
+  // 1. Window ID — getCurrentWindow().label
   async function manualWindowId() {
     await wrapManual('windowId', async () => {
       const win = getCurrentWindow();
@@ -1565,7 +1565,7 @@ Expected behavior:
     });
   }
 
-  // 2. 窗口销毁 — 建临时子窗口 → onCloseRequested → 关闭 → 看是否收到
+  // 2. Window destroy — create a temporary sub-window → onCloseRequested → close it → check whether the event arrives
   async function manualCloseRequested() {
     await wrapManual('closeRequested', async () => {
       const id = 'close-test-' + Date.now();
@@ -1583,7 +1583,7 @@ Expected behavior:
     });
   }
 
-  // 3. 多窗口 — window.open (Allow 模式)
+  // 3. Multi-window — window.open (Allow mode)
   async function manualOnNewWindow() {
     await wrapManual('on_new_window:Allow', async () => {
       await invoke('set_deny_new_window', { deny: false });
@@ -1622,7 +1622,7 @@ Expected behavior:
     });
   }
 
-  // 5. 窗口事件 — toggle 监听 Resized/Moved/FocusChanged
+  // 5. Window events — toggle listening for Resized/Moved/FocusChanged
   async function toggleWinEventWatch() {
     if (winEventWatchActive) {
       winEventUnlistens?.forEach((un) => { try { un?.(); } catch {} });
@@ -1644,16 +1644,16 @@ Expected behavior:
     }
   }
 
-  // 6. 窗口状态持久化 — window-state save+restore
-  // NOTE: 不调 setSize 改尺寸 — 主窗口尺寸变化会触发 OnSizeChange 事件风暴导致
-  // appfreeze(THREAD_BLOCK_6S,OHOS 既有适配问题)。只验证 filename + save + restore
-  // 不报错(插件层功能),尺寸 round-trip 由自动测试(子进程/CI)覆盖。
+  // 6. Window state persistence — window-state save+restore
+  // NOTE: do not call setSize to change the size — a main-window size change triggers an OnSizeChange event storm that causes
+  // an appfreeze (THREAD_BLOCK_6S, a pre-existing OHOS adaptation issue). Only verify that filename + save + restore
+  // do not error (plugin-level function); the size round-trip is covered by autotest (subprocess/CI).
   async function manualWindowState() {
     await wrapManual('window-state', async () => {
       const fname = await windowStateFilename();
       const win = getCurrentWindow();
       const size = await win.innerSize();
-      // save 当前尺寸(不改尺寸)→ restore → 验证不报错
+      // save the current size (without changing it) → restore → verify no error
       await saveWindowState(StateFlags.SIZE);
       await restoreStateCurrent(StateFlags.SIZE);
       await new Promise((r) => setTimeout(r, 200));
@@ -1663,7 +1663,7 @@ Expected behavior:
     });
   }
 
-  // 7. set_bounds — webview 层 set position+size round-trip
+  // 7. set_bounds — set position+size round-trip at the webview layer
   async function manualSetBounds() {
     await wrapManual('set_bounds', async () => {
       const report = await invoke('set_bounds_test');
@@ -1673,7 +1673,7 @@ Expected behavior:
     });
   }
 
-  // 8. 窗口标题 — 直接在主窗口设(主窗口标题栏可见,Float 子窗口 setDecorations 无效)
+  // 8. Window title — set it on the main window directly (the main window's title bar is visible; setDecorations does not work on Float sub-windows)
   async function manualSetTitle() {
     await wrapManual('setTitle', async () => {
       const win = getCurrentWindow();
@@ -1688,51 +1688,51 @@ Expected behavior:
   }
   let manualTitleIdx = $state(0);
 
-  // 9. 窗口大小限制 — 主窗口设最小 1600×1200
+  // 9. Window size limits — set a 1600×1200 minimum on the main window
   async function manualSetMinSize() {
     await wrapManual('setMinSize', async () => {
       const win = getCurrentWindow();
       // setMinSize → tao set_min_inner_size → setWindowLimits(min, 0, 0, 0)
-      // ⚠️ LogicalSize 会乘 scale_factor 转 px;设备 scale≈2.0 → 1600×1200 logical = 3200×2400 px > 屏幕 3120×2080
-      // 超屏幕会触发 resize → sizeChange 风暴 → appfreeze。改用 PhysicalSize 直接传 px 避免转换。
+      // ⚠️ LogicalSize is multiplied by scale_factor into px; device scale ≈ 2.0 → 1600×1200 logical = 3200×2400 px > the 3120×2080 screen
+      // exceeding the screen triggers a resize → sizeChange storm → appfreeze. Use PhysicalSize to pass px directly and avoid the conversion.
       await win.setMinSize(new LogicalSize(1600, 1200));
       manualResult = `setMinSize(LogicalSize 1600×1200) dispatched on main window.\n\n⚠️ scale≈2.0 → 实际 px ≈ 3200×2400 > 屏幕 3120×2080,可能卡死。\n若未卡死:拖拽窗口不能小于 1600×1200 logical → PASS。\n卡死 → force-stop 重启,点 Reset Min Size 清除。`;
       onMessage(manualResult);
     });
   }
 
-  // 取消最小尺寸限制 — setWindowLimits 传 0 = "不改变",不是清除(无 reset 接口)
-  // 要恢复自由缩放,设 min=1(让系统下限 760×570 接管)
+  // Clear the minimum size limit — setWindowLimits with 0 means "no change", not clear (there is no reset API)
+  // to restore free resizing, set min=1 (letting the system floor of 760×570 take over)
   async function manualResetMinSize() {
     await wrapManual('resetMinSize', async () => {
       const win = getCurrentWindow();
       // setMinSize(1,1) → tao set_min_inner_size(Some(1,1)) → setWindowLimits(1,1,0,0)
-      // min=1 让系统下限接管(760×570),比 1600×1200 小,恢复自由缩放
+      // min=1 lets the system floor take over (760×570), which is smaller than 1600×1200, restoring free resizing
       await win.setMinSize(new LogicalSize(1, 1));
       manualResult = `Reset: setMinSize(1×1) dispatched — min 设为 1×1 logical。\n系统下限 760×570 接管,窗口可缩到 760×570(比 1600×1200 小)。\n拖拽窗口边缘缩小验证 → 若能缩到 < 1600×1200 → PASS。`;
       onMessage(manualResult);
     });
   }
 
-  // 同时设 min + max — 验证 tao set_min/max_inner_size "四值同下" 修复。
-  // 修复前: setMaxSize 会把之前 setMinSize 的 min 清零(max 那次写 min=0);修复后 min 保留。
+  // Set min + max together — verifies the tao set_min/max_inner_size "all four values in one call" fix.
+  // Pre-fix: setMaxSize zeroed the min set by an earlier setMinSize (the max call wrote min=0); post-fix the min is preserved.
   async function manualSetMinAndMaxSize() {
     await wrapManual('setMinAndMaxSize', async () => {
       const win = getCurrentWindow();
-      // PhysicalSize 直接传 px,避免 LogicalSize × scale(≈2.0) 超屏幕卡死。
-      // 屏幕 3120×2080 px;min 1600×1200 < max 2400×1800 < 屏幕,安全。
+      // PhysicalSize passes px directly, avoiding LogicalSize × scale (≈2.0) exceeding the screen and freezing.
+      // Screen is 3120×2080 px; min 1600×1200 < max 2400×1800 < screen, safe.
       await win.setMinSize(new PhysicalSize(1600, 1200));
-      // setMinSize → tao set_min_inner_size: 缓存 min, 读 max=0 → setWindowLimits(1600,1200,0,0)
+      // setMinSize → tao set_min_inner_size: caches min, reads max=0 → setWindowLimits(1600,1200,0,0)
       await win.setMaxSize(new PhysicalSize(2400, 1800));
-      // setMaxSize → tao set_max_inner_size: 缓存 max, 读 min
-      //   修复前: setWindowLimits(0,0,2400,1800) ← min 丢!
-      //   修复后: setWindowLimits(1600,1200,2400,1800) ← min 保留 ✓
+      // setMaxSize → tao set_max_inner_size: caches max, reads min
+      //   pre-fix: setWindowLimits(0,0,2400,1800) ← min lost!
+      //   post-fix: setWindowLimits(1600,1200,2400,1800) ← min preserved ✓
       manualResult = `setMinSize(1600×1200 px) + setMaxSize(2400×1800 px) dispatched.\n\n验证(看 hilog tag WindowManager):\n  setWindowLimits ... OK: min=1600×1200 max=0×0      ← setMinSize\n  setWindowLimits ... OK: min=1600×1200 max=2400×1800 ← setMaxSize(min 保留=修复生效)\n修复前第二次会 min=0×0(min 丢)。\n\n拖拽验证:窗口不能缩到 < 1600×1200,不能放到 > 2400×1800。`;
       onMessage(manualResult);
     });
   }
 
-  // 10. 窗口主题 — toggle Dark/Light/System
+  // 10. Window theme — toggle Dark/Light/System
   let themeState = $state(0); // 0=Light, 1=Dark, 2=System
   async function manualSetTheme() {
     await wrapManual('setTheme', async () => {
@@ -1751,8 +1751,8 @@ Expected behavior:
   async function manualRequestUserAttention() {
     await wrapManual('requestUserAttention', async () => {
       const win = getCurrentWindow();
-      // tauri 内置 window API → tao → openharmony-ability → notificationManager
-      // UserAttentionType.Critical=1, Informational=2(OHOS 不区分,统一发通知)
+      // tauri built-in window API → tao → openharmony-ability → notificationManager
+      // UserAttentionType.Critical=1, Informational=2 (OHOS does not distinguish; the same notification is sent)
       await win.requestUserAttention(UserAttentionType.Informational);
       manualResult = 'requestUserAttention dispatched.\n\nExpected: 系统通知中心弹出 "Tauri App / 请查看应用窗口" 通知。\n首次点击会弹"是否允许发送通知"授权框,允许后再点一次。\n底层: tao → openharmony-ability → notificationManager.publish (1600004 时 requestEnableNotification)。\nIf notification appears → PASS.';
       onMessage(manualResult);
@@ -1761,10 +1761,10 @@ Expected behavior:
 
   async function manualSetImePosition() {
     await wrapManual('setImePosition', async () => {
-      // 聚焦 HTML input → updateCursor 上报光标位置 → 回读 ArkTS 侧真实结果
-      // 链路: invoke → tao set_ime_position → openharmony-ability →
+      // Focus an HTML input → updateCursor reports the cursor position → read back the real ArkTS-side result
+      // Chain: invoke → tao set_ime_position → openharmony-ability →
       //   inputMethod.getController().updateCursor(CursorInfo{left,top,width,height})
-      // 前置条件:窗口内有聚焦的编辑框(HTML input 即可,ArkWeb 走系统输入法框架)
+      // Precondition: a focused edit box in the window (an HTML input suffices; ArkWeb goes through the system IME framework)
       const inp = document.createElement('input');
       inp.type = 'text';
       inp.placeholder = 'IME test input (auto-focused)';
@@ -1775,13 +1775,13 @@ Expected behavior:
         inp.focus();
         await delay(600);
         await invoke('set_ime_position_test', { x: 200, y: 400 });
-        await delay(800); // updateCursor promise 异步结算,等结果落盘再回读
+        await delay(800); // the updateCursor promise settles asynchronously; wait for the result to be written before reading back
         const raw = await invoke('get_ime_position_result');
         const r = JSON.parse(raw);
         if (r.code === -1 && String(r.message).includes('not supported')) {
           manualResult = '⏭️ 非 OHOS 平台(stub 返回 not supported)→ SKIP';
         } else if (r.ts < startTs) {
-          // 回读到陈旧记录:本次 promise 未在等待窗口内结算(或同步抛出)
+          // read back a stale record: this round's promise did not settle within the wait window (or threw synchronously)
           manualResult = `已聚焦输入框并上报光标位置 (200,400)。\n` +
             `结果未就绪:回读到陈旧记录(ts=${r.ts} 早于本次按压,code=${r.code} ${r.message})→ 重试一次;持续出现则 FAIL`;
         } else {
@@ -1792,7 +1792,7 @@ Expected behavior:
       } catch (e) {
         manualResult = `invoke/解析失败: ${e}\n(链路未走完,不能作为能力判定依据)`;
       } finally {
-        // 无论成败都移除注入的输入框(否则聚焦 input 残留 DOM 影响后续 IME 行为)
+        // Remove the injected input regardless of outcome (otherwise a focused input left in the DOM affects later IME behavior)
         inp.blur();
         inp.remove();
       }
@@ -2627,7 +2627,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
-  // Notification action button (onAction emit/Channel, manual_tests.md §三十二 ③④).
+  // Notification action button (onAction emit/Channel, manual_tests.md §32 ③④).
   // One button covers warm-start (background → tap action) and cold-start
   // (kill app → tap action relaunches it). The listener stays registered so
   // the callback survives backgrounding.
@@ -2672,7 +2672,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
-  // Notification received callback (onNotificationReceived, manual_tests.md §三十).
+  // Notification received callback (onNotificationReceived, manual_tests.md §30).
   // Registers a listener, sends a notification, waits up to 15s for the callback.
   // OHOS PLATFORM LIMITATION (verified in source, NOT a timing issue): there is no
   // three-party-accessible subscription API for "notification received" events —
@@ -2851,7 +2851,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
-  // ─── Mobile Native Plugins Manual Tests (manual_tests.md §三十一) ───
+  // ─── Mobile Native Plugins Manual Tests (manual_tests.md §31) ───
   // These five plugins have no JS package dependency in examples/api — raw
   // invoke() against the plugin commands, same convention as
   // ohos-mobile-plugins.ts autotests.
@@ -3413,7 +3413,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       }
       // The path must EXIST on device (reveal_item_in_dir canonicalizes it).
       // Default is the Docs/IDEProjects directory: its parent (Docs) is revealed
-      // → FM opens "我的电脑 > 文档". A file path under Docs works the same way
+      // → FM opens "My Computer > Documents" (我的电脑 > 文档). A file path under Docs works the same way
       // (its parent dir is revealed). OHOS cannot highlight a specific file —
       // only the parent directory is opened (platform limitation).
       try {

@@ -6,7 +6,7 @@
   <title>Hello World</title>
   <style>
 
-    /* 只给这个盒子设置居中样式，不影响任何其他元素 */
+    /* Centering styles apply to this box only; no other element is affected */
     .center-box {
       display: flex;
       flex-direction: column;
@@ -14,7 +14,7 @@
       justify-content: center;
       align-items: center;
 
-      /* 让盒子占满整个屏幕，实现全屏居中 */
+      /* Make the box fill the whole screen to center it full-screen */
       position: fixed;
       top: 0;
       left: 0;
@@ -30,8 +30,8 @@
       color: #333;
     }
 
-    /* multi-uiability-windows 4.3 判据取件面：点击计数 + IME 回显。
-       事件只打 console（ARKWEB-CONSOLE），不改布局语义。 */
+    /* multi-uiability-windows 4.3 acceptance-probe surface: click counter + IME echo.
+       Events are logged to console only (ARKWEB-CONSOLE); layout semantics are unchanged. */
     .probe-row {
       display: flex;
       gap: 8px;
@@ -41,7 +41,7 @@
 </head>
 <body>
 
-  <!-- 只有这里面的内容会居中 -->
+  <!-- Only the content inside here gets centered -->
   <div class="center-box">
     <h1>Hello World</h1>
     <div class="probe-row">

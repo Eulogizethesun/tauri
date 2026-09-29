@@ -4,20 +4,20 @@ import * as path from '@tauri-apps/api/path';
 import * as fs from '@tauri-apps/plugin-fs';
 import { Command } from '@tauri-apps/plugin-shell';
 
-// 三类「纯 Rust 复用、真机未跑」风险点补测（2026-09-04）：
-//   fs watcher（notify inotify 后端）/ shell execute+spawn+stdin_write+kill
-//   （std::process 子进程，命令注册此前从未在真机执行过）。
-// （accelerator 触发链 host 注入用例 2026-09-07 曾入套件末位，2026-09-09
-//   迁出——需 host 侧按键注入配合才能 PASS，不符自动套件自包含原则，验证
-//   内容归档至 manual_tests.md「Menu」章 MenuBar Accelerator Ctrl+O 用例。）
-// process exit/restart 有自杀性（杀掉测试进程本身），不进 runAll——由
-// TestRunner 挂载阶段的 process phase 独立驱动（仅 VITE_PROCESS_TESTS 构建），
-// 见 TestRunner.svelte onMount。
-// 仅 OHOS 执行（其他平台 skip），避免污染 Windows 基线。
+// Follow-up tests for three "pure-Rust reuse, never run on device" risk points (2026-09-04):
+//   fs watcher (notify's inotify backend) / shell execute+spawn+stdin_write+kill
+//   (std::process children; these commands had never been exercised on a device before).
+// (The accelerator trigger-chain host-injection case was appended to the suite on 2026-09-07 and moved out on 2026-09-09
+//   — it needs host-side key injection to pass, which breaks the autotest suite's self-containment; the verification
+//   content is archived in manual_tests.md's "Menu" chapter, MenuBar Accelerator Ctrl+O case.)
+// process exit/restart is self-terminating (kills the test process itself), so it is excluded from runAll — the
+// process phase drives it independently at TestRunner mount time (VITE_PROCESS_TESTS builds only),
+// see TestRunner.svelte onMount.
+// Runs on OHOS only (skipped elsewhere) to keep the Windows baseline unpolluted.
 //
-// 语义与套件其余用例一致：结果级断言（事件确实收到、stdout 内容、退出码），
-// 非「不抛错」级。这三项此前在支持文档中标可用但零实测——本批给出真机定性，
-// 失败也是有效结论（宁可漏报、不可虚报）。
+// Semantics match the rest of the suite: result-level assertions (the event was really received, stdout content, exit code),
+// not just "does not throw". These three were marked supported in the docs with zero on-device testing — this batch gives an on-device verdict,
+// and a failure is still a valid conclusion (prefer under-reporting to false reporting).
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,8 +41,8 @@ async function waitFor(cond: () => boolean, ms: number): Promise<boolean> {
 
 export const riskSupplementTests: TestCase[] = [
   {
-    // watchImmediate = 无 debouncer 的 RecommendedWatcher（notify 原生事件）。
-    // 建目录 → watch → 写触发文件 → 断言收到含该路径的事件 → unwatch（资源释放）。
+    // watchImmediate = a RecommendedWatcher with no debouncer (notify's native events).
+    // mkdir → watch → write the trigger file → assert an event containing that path arrives → unwatch (resource release).
     name: 'fs watchImmediate: 文件创建事件 + unwatch',
     category: 'auto',
     timeout: 15000,
@@ -53,11 +53,11 @@ export const riskSupplementTests: TestCase[] = [
       const events: { kind?: unknown; paths?: string[] }[] = [];
       const unwatch = await fs.watchImmediate(dir, (e) => events.push(e));
       try {
-        await delay(300); // watcher 就绪
-        // 注意 writeTextFile 而非 writeFile：writeFile 的数据走 invoke body，
-        // OHOS/Android 移动路径 body 恒为 JSON（无 Raw 通道），字符串 body 会
-        // 落进 write_file_inner 的错误分支（unexpected invoke body）——传
-        // Uint8Array 或用 writeTextFile 才是移动端正确用法。
+        await delay(300); // watcher ready
+        // Note writeTextFile instead of writeFile: writeFile's payload travels in the invoke body,
+        // and the OHOS/Android mobile path always carries the body as JSON (no Raw channel), so a string body falls into
+        // write_file_inner's error branch (unexpected invoke body) — passing
+        // a Uint8Array or using writeTextFile is the correct usage on mobile.
         await fs.writeTextFile(await path.join(dir, 'trigger.txt'), 'watch-me');
         const got = await waitFor(() => events.length > 0, 8000);
         assert(got, '8s 内未收到任何 watch 事件（inotify 在应用沙箱内不可用？）');

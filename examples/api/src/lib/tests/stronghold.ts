@@ -30,7 +30,7 @@ function isMissing(e: unknown): boolean {
  * (≈107s per call on device in a debug build — by-design password hardening,
  * not an OHOS regression), so it stays out of runAll: those flows are the
  * manual buttons in TestRunner ("Stronghold Manual Tests") and the cases in
- * doc/manual_tests.md §三十五. The equivalent full-lifecycle Rust E2E lives
+ * doc/manual_tests.md §35. The equivalent full-lifecycle Rust E2E lives
  * in the plugin repo (tests/ohos_e2e.rs, verified on HAD-W32).
  */
 
