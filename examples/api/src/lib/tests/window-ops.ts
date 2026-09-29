@@ -127,7 +127,7 @@ export const windowOpsTests: TestCase[] = [
       await smoke(() => invoke('dummy_command'), 'dummy_command (post-create alive check)');
     },
   },
-  // ─── 真实读回验证（Float 子窗口） ───
+  // ─── 真实读回验证（主窗口） ───
   {
     name: 'window.setInnerSize actually resizes (main window)',
     category: 'auto',
@@ -223,6 +223,7 @@ export const windowOpsTests: TestCase[] = [
       }
     },
   },
+  // ─── 真实读回验证（Float 子窗口） ───
   {
     // issue#97 场景 2：Float 子窗口（decor=0，chrome 构造性为 0）精确读回。
     // 沿用 core.ts 的 float 窗口惯例：不主动销毁，留给手动 Close All 清理；

@@ -238,13 +238,15 @@ cp ${PROJECT_ROOT}/tauri/.claude/skills/ohos-build/templates/testtrayability/Tes
 
 `module.json5` 会被模板覆盖，需要手动补充 `TestTrayAbility` 扩展和**模板缺失的权限**。
 
-> **模板现状**（`crates/tauri-cli/templates/.../module.json5`）已内置：`INTERNET`、`SET_WINDOW_TRANSPARENT`、`WINDOW_TOPMOST`、`LOCK_WINDOW_CURSOR`、`PRINT`（desktop 带 reason/usedScene，mobile 不带）。模板**未内置**下列 5 个权限——它们只存在于本地 `gen/ohos` 生成产物中（被 gitignore，未提交、不会随 PR 上游）。重新 `tauri ohos init` 后这 5 个会被清掉，必须手动补回，否则对应功能静默失败：
+> **模板现状**（`crates/tauri-cli/templates/.../module.json5`，经 `{{#if (eq form "desktop")}}` 条件块区分两形态，2026-09-28 issue #125 起）：两形态都内置 `INTERNET`、`SET_WINDOW_TRANSPARENT`、`PREPARE_APP_TERMINATE`、`PRIVACY_WINDOW`；仅 desktop 形态内置 `WINDOW_TOPMOST`、`LOCK_WINDOW_CURSOR`、`PRINT`（带 reason/usedScene）、`PUBLISH_AGENT_REMINDER`、`READ_PASTEBOARD`（带 reason/usedScene）——后两项挪入 desktop 块的理由是手机端发布侧 AGC 特殊场景审核（手机端官方建议用 PasteButton 免权限方案），不是装机失败。模板**未内置**下列 5 个权限——它们只存在于本地 `gen/ohos` 生成产物中（被 gitignore，未提交、不会随 PR 上游）。重新 `tauri ohos init` 后这 5 个会被清掉，必须手动补回，否则对应功能静默失败：
 > - `VIBRATE` → §十三 haptics 失败
 > - `LOCATION` / `APPROXIMATELY_LOCATION` → §二十八 geolocation 失败（需 `reason` + `usedScene`，否则 ACL 校验拒绝）
 > - `CAMERA` → 相机功能失败（需 `reason` + `usedScene`）
 > - `ACCESS_BIOMETRIC` → §三十一 biometric 失败
+>
+> 另外 init 后 `entry_mobile` 会失去模板不再下发的 desktop 专属权限；demo 的手机端剪贴板（#102 readText 用例）与代理提醒测试依赖 `READ_PASTEBOARD`（需 reason/usedScene + 签名 profile acls 覆盖，否则装机 9568289）与 `PUBLISH_AGENT_REMINDER`，须一并手动补回。
 
-补充后的完整配置（`gen/ohos/entry_desktop/src/main/module.json5` 和 `gen/ohos/entry_mobile/src/main/module.json5` 都要补，mobile 的 PRINT 不带 reason/usedScene）：
+补充后的完整配置（`gen/ohos/entry_desktop/src/main/module.json5` 和 `gen/ohos/entry_mobile/src/main/module.json5` 都要补；desktop 形态模板 9 项全保留，mobile 形态除下面「模板缺失」5 项外还要补回 `PUBLISH_AGENT_REMINDER`/`READ_PASTEBOARD` 等 desktop 专属项）：
 
 ```json5
 // gen/ohos/entry_desktop/src/main/module.json5
@@ -273,14 +275,23 @@ cp ${PROJECT_ROOT}/tauri/.claude/skills/ohos-build/templates/testtrayability/Tes
       }
     ],
     "requestPermissions": [
-      // ── 模板已内置（init 后保留，无需补）──
+      // ── 模板已内置（init 后保留，无需补；desktop 形态 9 项全在）──
       { "name": "ohos.permission.INTERNET" },
       { "name": "ohos.permission.SET_WINDOW_TRANSPARENT" },
+      { "name": "ohos.permission.PREPARE_APP_TERMINATE" },
+      { "name": "ohos.permission.PRIVACY_WINDOW" },
+      // ── 模板仅 desktop 形态内置（mobile init 后被清掉，demo 手机端按需补回）──
       { "name": "ohos.permission.WINDOW_TOPMOST" },
       { "name": "ohos.permission.LOCK_WINDOW_CURSOR" },
       {
         "name": "ohos.permission.PRINT",
-        "reason": "$string:reason_print",            // ← mobile 模板无此两行，desktop 模板有
+        "reason": "$string:reason_print",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
+      { "name": "ohos.permission.PUBLISH_AGENT_REMINDER" },
+      {
+        "name": "ohos.permission.READ_PASTEBOARD",
+        "reason": "$string:reason_read_pasteboard",
         "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
       },
       // ── 模板缺失，init 后必须手动补回 ──
