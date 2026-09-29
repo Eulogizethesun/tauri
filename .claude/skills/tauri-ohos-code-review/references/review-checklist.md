@@ -89,7 +89,7 @@
   - **IDE 文件** — `.idea/`、`.vscode/`、`*.swp`
   - **环境/lock 文件** — `.env.local`、`oh-package-lock.json5`
   - **检查方法**：`git diff <base-branch> --name-only` 逐一核对上述路径模式
-- [ ] H2: `.gitattributes` 应保持 `eol=lf`（CRLF 会导致 OHOS 构建异常）→ 🟡
+- [ ] H2: `.gitattributes` 应保持 `eol=lf`（CRLF 会导致 OHOS 构建异常）→ 🟡。**例外**：upstream 本身为 CRLF 的文件（tauri 仓 `crates/tauri-runtime-wry/src/lib.rs`、`Cargo.toml`、`crates/tauri/src/app.rs`）必须以 `-text` 条目保真——否则 `* text=auto eol=lf` 在暂存时把它们重归一化成整文件 churn（真实改动被 ~190 行 EOL 噪声包裹，09-29 tauri#166 TA1 实例）。**检查方法**：改动这类文件时 diff 须只剩真实改动行；验证 blob CRLF 保真用 `git ls-files --eol` 或 `tr -dc '\r' < 文件 | wc -c`——MSYS `grep -c $'\r'` 在文本模式静默返回 0，不可信。（来源：2026-09-29 五仓 babysit 修复轮）
 - [ ] H3: openspec 文件必须归档到 `openspec/changes/`（不能散落在仓库根目录）→ 🔵
 - [ ] H4: 模板文件 `.ets.hbs` 重命名需验证 CLI template.rs 能正确处理 → 🟡
 - [ ] H5: **仅 tauri 仓**：检查 `doc/manual_tests.md` 是否归档了新手动用例（🟡）
