@@ -234,7 +234,7 @@
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
-| RunEvent（生命周期事件） | 4 | 2 | **6** |
+| RunEvent（生命周期事件） | 3 | 3 | **6** |
 
 ---
 
@@ -778,7 +778,7 @@
 | ohos | window-ops | 最大化 | Toggle Maximize — 主窗口最大化开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Maximize" 2. 再点还原 | ① 主窗口最大化铺满屏幕 ② isMaximized 读数翻转 ③ 还原后无底部白条 | 作用主窗口；子窗口最大化用其标题栏 □（36.3）；OHOS 用 FOLLOW_APP_IMMERSIVE_SETTING 避免 recover 白条 |
 | ohos | window-ops | 最小化 | Minimize (2s restore) — 最小化自动恢复 | **T1** | 应用已启动 | 1. 点击 "Minimize (2s restore)" 2. 等待 2 秒 | ① 主窗口最小化 ② 2 秒后 `unminimize()` 自动恢复前台 | 与 §二十一 minimize 用例互补（彼为任务栏点击恢复路径，此为 API 自动恢复路径）。系统标题栏最小化为**每窗 session 级对称**（2026-09-16 6.5 修正定性：只隐藏被点窗自身，焦点回落其他窗；此前"按 app 聚合"观察系套件残留窗叠加态特例） |
 | ohos | window-ops | 全屏 | Toggle Fullscreen — 沉浸全屏开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Fullscreen" 2. 再点（或 Esc）还原 | ① 进入沉浸布局：隐藏系统标题栏/Dock/应用菜单栏 ② isFullscreen 读数翻转 ③ 还原完整 | `WindowManager.setFullscreen` 双路径（桌面 maximize(ENTER_IMMERSIVE)+隐藏标题栏/Dock；手机沉浸式）；2026-08-27 三处分裂统一修复（tao 镜像位/菜单栏 inline/菜单回调） |
-| ohos | window-ops | 可见性 | Hide/Show (2s restore) — 主窗口隐藏恢复 | **T0** | 应用已启动 | 1. 点击 "Hide/Show (2s restore)" 2. 等待 2 秒 | ① 主窗口隐藏（app 退后台）② 2 秒后自动恢复前台（`startAbility(instanceKey='main')` 复用实例，不爆发新窗口） | show 路径经 specified+onAcceptWant 实例路由（Phase 5 二次修订后）；hide/show 不对称问题三已修 |
+| ohos | window-ops | 可见性 | Hide/Show (2s restore) — 主窗口隐藏恢复 | **T0** | 应用已启动 | 1. 点击 "Hide/Show (2s restore)" 2. 等待 2 秒 | ① 主窗口隐藏（窗口最小化退后台）② 2 秒后自动恢复前台，不爆发新窗口 | 窗口级操作（tao `set_visible`）：hide → `minimize_window` 桥调用（主窗 = ArkTS `win.minimize()`；PC/2in1 不走 hideAbility——StartOptions 检查不过）；show → `restore_window`（API14+，minimize 的文档化逆操作）+ `show_window`（raise）。**不经** startAbility/onAcceptWant 实例路由（那是托盘/菜单 showMainAbility 恢复路径的机制）；hide/show 不对称问题三已修（restore 即 minimize 的逆） |
 | ohos | window-ops | 置顶 | Toggle AlwaysOnTop — 跨应用置顶 | **T1** | 应用已启动 | 1. 点击 "Toggle AlwaysOnTop (partial)" 2. 切到其他 app（如文件管理器）观察主窗口 | ① isAlwaysOnTop 读数翻转 ② 置顶期间主窗口跨应用常驻最前（不被其他 app 遮挡） | `setWindowTopmost` API14+（WINDOW_TOPMOST 权限）；按钮标注 (partial)——视觉遮挡判定为准 |
 
 ### 36.6 OHOS Window Ops — 多 UIAbility 实例（startAbility）
@@ -878,7 +878,7 @@
 | Webview — DevTools | 0 | 1 | **1** |
 | Webview — Fullscreen | 1 | 0 | **1** |
 | WebView User-Agent | 1 | 2 | **3** |
-| RunEvent（生命周期事件） | 4 | 2 | **6** |
+| RunEvent（生命周期事件） | 3 | 3 | **6** |
 | Transparent（透明窗口） | 1 | 1 | **2** |
 | on_new_window（新窗口拦截） | 2 | 1 | **3** |
 | Single-Instance（单实例） | 3 | 1 | **4** |

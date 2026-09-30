@@ -1489,12 +1489,11 @@ impl<R: Runtime> App<R> {
         let event = on_event_loop_event(&app_handle, RuntimeRunEvent::Exit, &manager);
         callback(&app_handle, event);
         app_handle.cleanup_before_exit();
-        // OHOS: `Exit` only fires from system-driven teardown (LoopDestroyed);
-        // nothing dispatches a restart from the event loop — restart is served
-        // by the process plugin's `ohos.process` bridge (`appRecovery.restartApp`,
-        // API 12+). The fallback below would be a bare `exit(0)` on OHOS, which
-        // appspawn converts to SIGABRT (cppcrash) during teardown.
-        #[cfg(not(target_env = "ohos"))]
+        // OHOS: `crate::process::restart` drives the app-control bridge's
+        // `restartApp` (API 12+), which kills the app's processes and
+        // relaunches the current UIAbility. It parks forever on success
+        // while the system tears this process down; `exit(0)` (reported by
+        // appspawn as SIGABRT) remains only as the bridge-error fallback.
         if self.manager.restart_on_exit.load(atomic::Ordering::Relaxed) {
           crate::process::restart(&self.env());
         }

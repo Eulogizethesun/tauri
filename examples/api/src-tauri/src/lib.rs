@@ -935,8 +935,6 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(target_env = "ohos")]
       cmd::set_deny_new_window,
       #[cfg(target_env = "ohos")]
-      cmd::set_exit_prevention,
-      #[cfg(target_env = "ohos")]
       cmd::set_create_new_window,
       #[cfg(target_env = "ohos")]
       cmd::desktop_features_test,

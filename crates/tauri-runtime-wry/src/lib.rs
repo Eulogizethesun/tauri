@@ -5260,8 +5260,10 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   {
     use tao::platform::ohos::WindowBuilderExtOpenHarmony;
     // The label is set here (once) for both the with_config and programmatic
-    // paths. Window kind is determined by tao based on UIABILITY_CREATED flag:
-    // first window → UIAbility, subsequent windows → Float.
+    // paths. Window kind is resolved in tao's `Window::new`: an explicit
+    // builder choice wins; otherwise the first window defaults to UIAbility
+    // and later ones to Float (see FIRST_WINDOW_CREATED in tao's ohos window
+    // backend).
     window_builder.inner = window_builder.inner.with_label(&label);
   }
 

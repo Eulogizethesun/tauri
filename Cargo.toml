@@ -91,7 +91,8 @@ window-vibrancy = { path = "../window-vibrancy" }
 # upstream crate (public: gitcode.com/dragonswordy/stronghold.rs, ohos branch,
 # based on tag stronghold-runtime-v2.0.1). The adapted build is also published
 # on the OpenHarmony Artifactory cargo registry under the same version —
-# plugins-workspace consumes it there via source replacement; this repo uses
-# the path patch because its Cargo.lock is committed (registry replacement
-# would flip the committed checksum).
+# plugins-workspace consumes it there via source replacement; this repo points
+# at the in-tree fork with a path dependency, consistent with the other OHOS
+# forks in this workspace (this repo's Cargo.lock is not committed, so no
+# checksum-stability constraint applies here).
 stronghold-runtime = { path = "../stronghold.rs/engine/runtime" }

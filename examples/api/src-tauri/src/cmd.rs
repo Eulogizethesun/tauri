@@ -98,31 +98,6 @@ pub struct NewWindowDenyState {
   pub last_url: Mutex<Option<String>>,
 }
 
-/// Exit-prevention guard for the OHOS RunEvent test instrumentation.
-///
-/// The `ExitRequested` handler in lib.rs calls `prevent_exit()` on every exit
-/// request under `cfg(target_env = "ohos")` to exercise that API (test-only
-/// code — that's how the `prevent_exit` manual test drives the event). The
-/// process-plugin exit experiment (`VITE_PROCESS_TESTS` builds) disables this
-/// guard before invoking `plugin:process|exit` so the handler does not
-/// swallow the event; the `restart` leg clears it too, purely defensively —
-/// post-#82-14 it never fires `ExitRequested` (see below). Post-#82-14
-/// layering, `exit` fires `ExitRequested` but nothing terminates the process
-/// on OHOS, and `restart` goes through the `ohos.process` bridge
-/// (`appRecovery.restartApp`, API 12+) without firing `ExitRequested` at
-/// all. The guard is per-process and defaults back on at every boot.
-/// Default: enabled (keep exercising `prevent_exit`).
-#[cfg(target_env = "ohos")]
-pub static EXIT_PREVENT_GUARD: std::sync::atomic::AtomicBool =
-  std::sync::atomic::AtomicBool::new(true);
-
-#[command]
-#[cfg(target_env = "ohos")]
-pub fn set_exit_prevention(enabled: bool) {
-  EXIT_PREVENT_GUARD.store(enabled, Ordering::SeqCst);
-  log::info!("[set_exit_prevention] enabled={}", enabled);
-}
-
 #[command]
 pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> tauri::Result<()> {
   let state = app.state::<NewWindowDenyState>();
@@ -1339,10 +1314,15 @@ pub fn create_ui_ability_windows_x3<R: tauri::Runtime>(
         log::info!("[x3] #{} webview_acquired={}, label={}, all_labels={:?}", i, acquired, window_id, all_labels);
 
         // Trigger an IPC from the new webview to verify its label is registered
-        // correctly. Use fetch to tauri://localhost (same as page JS IPC) —
-        // if the webview's label isn't in the manager, this hits
-        // "failed to acquire webview reference" in the URI scheme handler.
-        let ipc_js = r#"fetch('tauri://localhost/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd:'dummy_command'})}).catch(e=>console.error('IPC fetch failed: '+e))"#;
+        // correctly — via the page's own invoke channel, NOT a raw fetch to
+        // tauri://localhost/ (the URI scheme handler serves that URL as the
+        // index.html asset, so a fetch never exercises the IPC path). The init
+        // script that defines __TAURI_INTERNALS__ rides in the webview
+        // creation options, so it is present in spawned-instance webviews
+        // too. If the webview's label isn't in the manager, this invoke
+        // fails with "failed to acquire webview reference"; dummy_command is
+        // a registered no-op, so a clean resolve means the label resolved.
+        let ipc_js = r#"window.__TAURI_INTERNALS__.invoke('dummy_command').catch(e=>console.error('IPC invoke failed: '+e))"#;
         if let Err(e) = w.eval(ipc_js) {
           log::error!("[x3] #{} eval (IPC trigger) failed: {:?}", i, e);
         }

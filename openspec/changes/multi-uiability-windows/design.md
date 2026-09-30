@@ -49,6 +49,9 @@
 - NG6 `EventLoop::run` 的 `Box::leak`（mod.rs:522）不动——tao 架构约束，与多 UIAbility 正交。
 - NG7 `content_rect` 单 Rect / `native_window` 单句柄（S7/S8）不在本期——第二 UIAbility 窗口的
   `raw_window_handle` 暂缺，标注为已知限制。
+- NG8 spawned 实例的 NewWant 事件路由不在本期——单事件循环下 `Event::NewWant` 仅主实例（id 0）
+  派发（lifecycle.rs `on_new_want` 门控）；spawned 实例的 warm-start want 仅入 per-id 存储
+  （`WANT_PARAMETERS`，可经 `take_want_parameters_for_window` 读取），事件路由另行立项。
 
 ## 3. 硬约束（任何实现必须全部满足）
 

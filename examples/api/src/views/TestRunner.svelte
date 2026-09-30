@@ -85,7 +85,7 @@
 
   // driver blind-invocation + side-effect replay go last by design (S2 coverage suite).
   // Gating: only coverage-verification builds (cov-build.sh with VITE_COVERAGE_TESTS=true) inject the coverage batch;
-  // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 283-case set.
+  // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 293-case set.
   // The api-gap batch (S10) runs last: it contains destructive ops (app hide/show, settings-page jumps) and must come after all other batches.
   // The risk-supplement batch (2026-09-04) sits after windowOps and before the coverage batch:
   // the three risk-point follow-ups (fs watcher / shell subprocess), skipped on platforms other than OHOS,
@@ -196,10 +196,9 @@
       if (phase === 'exit-launched') {
         onMessage('[process] 本次启动为 exit(0) 之后（上一进程在 8s 观察窗内终止——终止路径是 exit 链还是外部原因，需 pidof/hilog 时间线判定）');
         await writeProcessPhase('restart-launched');
-        // On OHOS, restart goes through the ohos.process bridge (appRecovery.restartApp, API 12+),
-        // not through ExitRequested, so the prevent_exit guard is irrelevant to this leg; this call only clears the flag defensively, symmetric with
-        // boot 1 (no side effects; every boot restores true by default)
-        await invoke('set_exit_prevention', { enabled: false });
+        // ExitRequested prevention is gated on EXIT_CONFIRM_MODE in lib.rs,
+        // which the process experiment never enables, so nothing to disable
+        // before invoking restart (this leg never fires ExitRequested anyway).
         onMessage('[process] invoking plugin:process|restart（ohos.process 桥 appRecovery.restartApp，API 12+ 门控）...');
         let restartRejected = false;
         try {
@@ -222,9 +221,9 @@
         await runAll();
         onMessage('[process] runAll 完成，invoking plugin:process|exit（code 0 → ExitRequested；#82-14 分层后事件循环不再派发终止，预期进程存活）...');
         await writeProcessPhase('exit-launched');
-        // Turn off the app's own prevent_exit test instrumentation (lib.rs's ExitRequested handler
-        // calls prevent_exit on every exit request by default), otherwise the test code would intercept the exit
-        await invoke('set_exit_prevention', { enabled: false });
+        // ExitRequested prevention in lib.rs is gated on EXIT_CONFIRM_MODE,
+        // which this experiment never enables, so the exit request passes
+        // through unprevented without any upfront toggling.
         await invoke('plugin:process|exit', { code: 0 });
         await delayMs(8000);
         onMessage('[process] exit 后 8s 进程仍存活 → exit 未生效');
@@ -1389,13 +1388,17 @@ Expected behavior:
     });
   }
 
-  // Main-window Hide/Show — hide=hideAbility, show=startAbility (reuses instanceKey='main')
+  // Main-window Hide/Show — window-level ops via tao set_visible: hide →
+  // minimize_window (main window = ArkTS win.minimize(); hideAbility is not
+  // supported on PC/2in1), show → restore_window (API14+ documented inverse
+  // of minimize) + show_window (raise). No startAbility/onAcceptWant routing
+  // — that is the tray/menu showMainAbility restore path, not win.show().
   async function manualShowHide() {
     await wrapManual('showHide', async () => {
       const win = getCurrentWindow();
       await win.hide();
-      ohosWinState = `main hide dispatched; 2s 后 show(startAbility)`;
-      manualResult = `hide() on main window (hideAbility → app 后台)。\n2 秒后 show() (startAbility instanceKey='main' → onAcceptWant 复用实例)。\n若主窗口先消失再恢复 → PASS。`;
+      ohosWinState = `main hide dispatched; 2s 后 show(restore+showWindow)`;
+      manualResult = `hide() on main window（窗口级 minimize → 退后台）。\n2 秒后 show()（restore + showWindow 窗口级恢复，不经 startAbility 实例路由）。\n若主窗口先消失再恢复 → PASS。`;
       onMessage(manualResult);
       setTimeout(() => getCurrentWindow().show(), 2000);
     });

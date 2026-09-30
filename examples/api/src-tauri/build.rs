@@ -78,11 +78,6 @@ fn main() {
         "append_test_result",
         "get_ohos_version_info",
         "set_deny_new_window",
-        // set_exit_prevention is cfg-gated to ohos in cmd.rs, but the
-        // permission list is host-compiled so cfg attrs can't gate entries.
-        // Registering unconditionally is harmless: on other builds the
-        // command doesn't exist and the capability entry is inert.
-        "set_exit_prevention",
         "set_create_new_window",
         "desktop_features_test",
         "get_last_new_window_url",

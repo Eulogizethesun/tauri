@@ -10,7 +10,7 @@
 |---|---|---|
 | 291 例自动套件 | 基线 **290/291**（唯一失败=已知剪贴板限制） | 每阶段抽跑（建议 ≥30 例：window-ops / window-state / decor / emit / menu 各抽）；Phase 6 全量 |
 | Float 专项 5 方法 | `closeWindow` / `setDecorations` / `setWindowBackgroundColor` / `showWindowMethod` / `setDecorationFlags`（D11 按 windowKinds 分支的回归敏感点） | Phase 4、6 |
-| 手动套件 | manual_tests.md 既有 169 例中窗口相关章 | Phase 6 |
+| 手动套件 | manual_tests.md 既有 229 例中窗口相关章 | Phase 6 |
 | 故障面 | `hdc shell faultlog` 零新增 appfreeze；hilog 零 `THREAD_BLOCK_3S` | 每阶段 |
 
 ## 2. 分阶段用例矩阵
@@ -63,7 +63,7 @@
 |---|---|---|---|---|
 | P5-1 | tray 恢复不重复 | 主窗最小化 → 点 tray | restore 既有实例，无新任务卡片 | 任务卡片 |
 | P5-2 | 其余两调用点 | menu.ets / StatusBarUtils / AppControlPlugin 三路径恢复 | 同上（D4 三调用点全量） | 任务卡片 |
-| P5-3 | 建窗走新实例 | `create_ui_ability_window` | 产生**新**任务卡片（standard 语义生效） | 截图 |
+| P5-3 | 建窗走新实例 | `create_ui_ability_window` | 产生**新**任务卡片（specified + onAcceptWant：每窗唯一 key → 新实例） | 截图 |
 
 ### Phase 6 — 全量回归与残留
 
@@ -71,7 +71,7 @@
 |---|---|---|---|---|
 | P6-1 | 反复建销 ×10 | 建/销第二实例循环 10 轮（E4） | `PENDING_UI_ABILITIES` / `sessions` / `render_owners` / want-URI map 无残留（D13） | Rust 侧观测 |
 | P6-2 | 291 全量 | 全套件 | ≥ 基线 290/291 | 套件 |
-| P6-3 | E2 最小化恢复 | 第二实例最小化 → 恢复 | onWindowStageRestore 链正确、内容不白屏 | 手动/截图 |
+| P6-3 | E2 最小化恢复 | 第二实例最小化 → 恢复 | **不触发** onWindowStageRestore/onNewWant（活任务恢复绕过 onAcceptWant 路由，2026-09-16 实测定案）；内容不白屏、页面状态保持 | 手动/截图 |
 | P6-4 | E3 任务卡片切换 | 双实例互切 | 焦点事件成对（Gained/Lost 落对实例） | hilog |
 | P6-5 | 双形态 | desktop + mobile 全套 | OQ1 最终结论落文档 | 记录 |
 | P6-6 | ohpm 净重建 | 删 oh_modules + CompileArkTS 缓存重建后复跑 | 全绿复验（R6） | 套件 |
