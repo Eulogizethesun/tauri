@@ -30,7 +30,8 @@
 - G3 input/IME/axis/focus/redraw/destroy 事件按真实 windowId 路由（当前 14 处硬编码 0）。
 - G4 bridge 会话与生命周期状态 per-ability 正确（聚合模型，进程级插件不分家）。
 - G5 startAbility 异步握手事件驱动（注册表 + waker），**禁 block_on / recv_timeout**。
-- G6 launchType `standard` 化且 tray/menu/statusbar 恢复路径不产生重复实例。
+- G6 launchType 迁移（2026-09-15 二次修订终态：`specified` + `onAcceptWant` 实例路由，一版
+  `standard` 已弃，见 D4）且 tray/menu/statusbar 恢复路径不产生重复实例。
 - G7 desktop/mobile 两形态验证（mobile 允许结论为"维持 singleton"）。
 - G8 Float 子窗口路径（291 例已验证）零回归。
 - G9 全部改动 `cfg(target_env = "ohos")` 隔离；ArkTS 改动只进 openharmony-ability。
@@ -63,7 +64,7 @@
 | HC-8 | 14 处 `WindowId(0)` 派发硬编码必须参数化 | mod.rs:203,274,299,309,333,357,388,466,596,624,636,648,697,703 |
 | HC-9 | `HAS_EVENT`+`WAKER` 双单例必须 per-instance 化（已抽查属实：app.rs:30 静默 no-op；waker.rs:35 全局） | app.rs:30,910-921; waker.rs:35 |
 | HC-10 | `registerUIAbilityStage(0,...)` 及其镜像 `unregisterUIAbilityStage(0)`(:540) 必须参数化——后者不改会**误清第一实例** | NativeAbility.ets:374,540 |
-| HC-11 | launchType standard 化的 3 个自定位 startAbility 调用点必须同步迁移 | menu.ets:73; StatusBarUtils.ets:40; AppControlPlugin.ets:181 |
+| HC-11 | launchType 迁移的 3 个自定位 startAbility 调用点必须同步处置（2026-09-15 二次修订终态：specified 下**维持 startAbility(self)**，一版迁 `showWindowMethod(0)` 已回退，见 D4） | menu.ets:73; StatusBarUtils.ets:40; AppControlPlugin.ets:181 |
 | HC-12 | ArkTS 销毁须同步 Rust 注册表（已知同类坑：僵尸句柄） | unregisterUIAbilityStage 路径 |
 | HC-13 | `new_any_thread` OHOS `unimplemented!()`——不得依赖多线程 EventLoop | tauri-runtime-wry lib.rs:3504-3507 |
 | HC-14 | `createSubWindow` 锁 stage 0（WindowManager.ets:1136）——Float 子窗口须从**调用者所属 stage** 创建 | WindowManager.ets:1136,1161,1164 |
