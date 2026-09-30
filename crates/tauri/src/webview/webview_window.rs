@@ -1462,7 +1462,11 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///
   /// - `UIAbility`: UIAbility main window. The first one (windowId=0) reuses the
   ///   existing container; subsequent ones start a new EntryAbility instance via
-  ///   `context.startAbility` (requires `launchType: standard` in module.json5).
+  ///   `context.startAbility` (requires `launchType: "specified"` + AbilityStage
+  ///   `onAcceptWant` routing (tauri-window-N keys) in module.json5: the spawn
+  ///   want carries a unique `tauri_window_id`, which onAcceptWant maps to the
+  ///   `tauri-window-<id>` instance key so AMS starts a new instance; a bare
+  ///   want is routed to the main instance instead).
   /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
   ///
   /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.

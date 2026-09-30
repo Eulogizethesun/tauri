@@ -165,6 +165,12 @@ pub enum Error {
   InvalidProxyUrl,
   #[error("window not found")]
   WindowNotFound,
+  /// The operation is not available on this platform (or requires a newer API
+  /// level on OpenHarmony). The payload carries the full user-facing message,
+  /// including the required API level and the current one when the gap is
+  /// version-related.
+  #[error("{0}")]
+  NotSupported(String),
   #[cfg(any(target_os = "macos", target_os = "ios"))]
   #[error("failed to remove data store")]
   FailedToRemoveDataStore,

@@ -392,6 +392,23 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         }
       }
 
+      // OHOS: Stronghold secret-management plugin. Registered here (not in the
+      // builder chain above) because Builder::with_argon2 needs the app handle
+      // to resolve the persisted salt file; the plugin's own doc example uses
+      // this setup-time registration shape. The kdf feature (default) provides
+      // the argon2 key derivation — initialize pays ≈0.7s per load on device.
+      #[cfg(target_env = "ohos")]
+      {
+        let salt_path = app
+          .path()
+          .app_data_dir()
+          .expect("app data dir unavailable for stronghold salt")
+          .join("stronghold-salt.txt");
+        app.handle().plugin(
+          tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build(),
+        )?;
+      }
+
       #[cfg(target_os = "macos")]
       app.manage(AppMenu::<R>(Default::default()));
 
@@ -891,6 +908,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::create_transparent_borderless_window,
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_window,
+      #[cfg(target_env = "ohos")]
+      cmd::create_ui_ability_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
+      cmd::create_float_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
+      cmd::get_current_window_id,
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_windows_x3,
       #[cfg(target_env = "ohos")]

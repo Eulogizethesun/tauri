@@ -4,6 +4,7 @@
     "type": "entry",
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
+    "srcEntry": "./ets/abilitystage/EntryAbilityStage.ets",
     "deviceTypes": {{{form-device-types}}},
     "deliveryWithInstall": true,
     "installationFree": false,
@@ -18,7 +19,8 @@
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
-        "launchType": "singleton",
+        "launchType": "specified",
+        "recoverable": true,
         "skills": [
           {
             "entities": [

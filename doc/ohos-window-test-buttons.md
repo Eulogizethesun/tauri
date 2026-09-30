@@ -1,5 +1,12 @@
 # OHOS 窗口能力 — 手动测试按钮清单
 
+> **⚠️ 2026-09-15 起本文档转为历史参考**: A 区「有手动按钮的能力」全部用例已合并至
+> [manual_tests.md](manual_tests.md) §三十六（窗口能力手动按钮），**以 manual_tests.md 为准**——
+> 本文件 2026-08-20 后未随代码更新，含两条过时结论：① 多 UIAbility 两按钮已随
+> multi-uiability-windows Phase 1-5 落地可用（非 deferred）；② "不要跑 Run All" 已随
+> serializeOp 队列修复过时（2026-09-15 真机全量 296✅/0❌/2⏭️，THREAD_BLOCK=0）。
+> C 区平台限制结论正式口径见 tauri-ohos-api-support.md。
+>
 > 创建时间: 2026-08-10
 > 最后更新: 2026-08-20(IME 位置双重误判纠正 + inner_position 标题栏补偿;此前 2026-08-19 光标抓取实现)
 > 数据来源: [ohos-window-test-mapping.md](ohos-window-test-mapping.md)(能力表)+ TestRunner.svelte 实际按钮

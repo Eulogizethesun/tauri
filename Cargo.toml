@@ -86,3 +86,13 @@ openharmony-ability-derive = { path = "../openharmony-ability/crates/derive" }
 # OHOS-only "0.7" requirement is redirected here to the local fork (0.7.1,
 # matching upstream repo main).
 window-vibrancy = { path = "../window-vibrancy" }
+# stronghold-runtime: OHOS adaptation (nix excluded from the OHOS dependency
+# graph + upstream DirectAlloc misaligned-offset fix). Local fork of the
+# upstream crate (public: gitcode.com/dragonswordy/stronghold.rs, ohos branch,
+# based on tag stronghold-runtime-v2.0.1). The adapted build is also published
+# on the OpenHarmony Artifactory cargo registry under the same version —
+# plugins-workspace consumes it there via source replacement; this repo points
+# at the in-tree fork with a path dependency, consistent with the other OHOS
+# forks in this workspace (this repo's Cargo.lock is not committed, so no
+# checksum-stability constraint applies here).
+stronghold-runtime = { path = "../stronghold.rs/engine/runtime" }
