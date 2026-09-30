@@ -253,7 +253,7 @@ export const windowOpsTests: TestCase[] = [
         Math.abs(outer.width - targetW) <= 8 && Math.abs(outer.height - targetH) <= 8,
         `immediate set_size(260×180 logical) lost to float creation race: outer ` +
           `${outer.width}×${outer.height} physical ≠ ${targetW}×${targetH} ` +
-          `(scale ${scale}) — op dropped pre-registration (问题七附注)`
+          `(scale ${scale}) — op dropped pre-registration (issue-7 addendum)`
       );
       console.log(
         '[float-race-diag]',

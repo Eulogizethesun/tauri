@@ -183,6 +183,11 @@
   onMount(async () => {
     const isMainWindow = getCurrentWindow().label === 'main';
     const isAutotest = envFlag(import.meta.env.VITE_AUTOTEST) || envFlag(import.meta.env.VITE_COVERAGE_TESTS);
+    // VITE_PROCESS_TESTS is a bare flag (no platform composite like isAutotest above) on purpose:
+    // the process exit/restart experiment below is an OHOS-specific launch sequence (boot chain over
+    // appRecovery.restartApp / terminateSelf — see the state-machine comment above), and the flag is
+    // only ever exported for OHOS builds (run-tests.sh → cargo tauri ohos build). No desktop/mobile
+    // split is needed; if it is ever set on a non-OHOS build the experiment simply never boots there.
     const isProcessTest = envFlag(import.meta.env.VITE_PROCESS_TESTS);
     if (isMainWindow && isAutotest && isProcessTest) {
       // process exit/restart experiment launch sequence (see the state-machine comment above)
@@ -1151,9 +1156,15 @@ Expected behavior:
       manualResult = `UIAbility instance window requested (label: "${windowId}").\n\n` +
         `Expected: A new EntryAbility instance starts via context.startAbility,\n` +
         `opening a separate main window with its own lifecycle + recent-task card.\n` +
-        `Requires launchType: "standard" in module.json5.\n\n` +
+        `Requires launchType: "specified" + AbilityStage onAcceptWant routing\n` +
+        `(tauri-window-N keys) in module.json5 (entry_desktop): the spawn want carries a\n` +
+        `unique tauri_window_id → onAcceptWant returns the "tauri-window-<id>" instance\n` +
+        `key → AMS starts a new instance.\n\n` +
         `If a new independent window appears (separate from the Float sub-windows) → PASS.\n` +
-        `If no new window or only onNewWant fires (singleton) → FAIL: launchType not standard.\n\n` +
+        `If the request instead falls back to the main instance (bare-want "tauri-primary"\n` +
+        `routing: only onNewWant, no new onCreate/window) → FAIL: per-window instance key\n` +
+        `not applied (launchType not "specified", AbilityStage srcEntry missing, or the want\n` +
+        `lost tauri_window_id).\n\n` +
         `Note: the new instance loads the app default page (MainPage), not hello.html.\n` +
         `The new window is system-managed: resize/move return 1300002 (no-op).`;
       onMessage(manualResult);

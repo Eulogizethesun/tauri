@@ -35,9 +35,16 @@ upstream PR #19（`58ad4377`）曾在旧框架实现 `start_ui_ability` multiton
   UIAbility）；第二个 UIAbility 窗口走 `start_ui_ability` 预分配 id 路径；**14 处 `WindowId(0)`
   事件派发硬编码参数化**（input/IME/axis/redraw/focus/destroy；WindowResize/ContentRectChange 已是
   per-window 可作参照）。
-- **launchType**：module.json5（tauri-cli 模板 + gen 目录）`singleton` → `standard`；3 个自定位
-  `startAbility` 调用点（menu.ets:73、StatusBarUtils.ets:40、AppControlPlugin.ets:181）迁移到
-  `WindowManager.showWindowMethod()`（restore() 路径）。
+- **launchType**（2026-09-15 二次修订终态，演进全程见 design.md D4）：module.json5（tauri-cli 模板
+  + gen 目录）entry_desktop `singleton` → `specified` + 模块级 `srcEntry`（AbilityStage
+  `onAcceptWant` 实例路由：带 `tauri_window_id` 的 want → `tauri-window-${id}` key → AMS 新建实例；
+  裸 want → `tauri-primary` 复用主实例拉回栈顶 + onNewWant）；entry_mobile 维持 `singleton`
+  （OQ1 结论位）。3 个自定位 `startAbility` 调用点（menu.ets:73、StatusBarUtils.ets:40、
+  AppControlPlugin.ets:181）**维持 startAbility(self)**——specified 下裸 startAbility 即官方前台化
+  原语；plain-relaunch 单实例式守护（D4b）兜底纵深防御。（过渡方案 `standard` + 三调用点迁
+  `WindowManager.showWindowMethod()` 已放弃：2026-09-15 真机回归正源于它——`hideAbility()` 是
+  ability 级后台化，窗口级 `restore()`/`showWindow()` 撤销不了，standard 下恢复路径 `startAbility`
+  变重复实例 spawn（splash 闪现）。）
 - **验证基建**：examples/api 已有 `create_ui_ability_window` 命令（cmd.rs:923）与
   `create_ui_ability_windows_x3`（build.rs:56）可直接复用。
 
