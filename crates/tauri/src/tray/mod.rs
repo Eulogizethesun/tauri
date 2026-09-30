@@ -308,6 +308,11 @@ impl<R: Runtime> TrayIconBuilder<R> {
   ///
   /// On Linux, we need to write the icon to the disk and usually it will
   /// be `$XDG_RUNTIME_DIR/tray-icon` or `$TEMP/tray-icon`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **OHOS:** no-op — icons are transferred through the bridge, not
+  ///   written to disk.
   pub fn temp_dir_path<P: AsRef<Path>>(mut self, s: P) -> Self {
     self.inner = self.inner.with_temp_dir_path(s);
     self
@@ -642,6 +647,11 @@ impl<R: Runtime> TrayIcon<R> {
   ///
   /// On Linux, we need to write the icon to the disk and usually it will
   /// be `$XDG_RUNTIME_DIR/tray-icon` or `$TEMP/tray-icon`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **OHOS:** no-op — icons are transferred through the bridge, not
+  ///   written to disk.
   pub fn set_temp_dir_path<P: AsRef<Path>>(&self, path: Option<P>) -> crate::Result<()> {
     #[allow(unused)]
     let p = path.map(|p| p.as_ref().to_path_buf());

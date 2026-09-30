@@ -183,11 +183,12 @@
   onMount(async () => {
     const isMainWindow = getCurrentWindow().label === 'main';
     const isAutotest = envFlag(import.meta.env.VITE_AUTOTEST) || envFlag(import.meta.env.VITE_COVERAGE_TESTS);
-    // VITE_PROCESS_TESTS is a bare flag (no platform composite like isAutotest above) on purpose:
-    // the process exit/restart experiment below is an OHOS-specific launch sequence (boot chain over
-    // appRecovery.restartApp / terminateSelf — see the state-machine comment above), and the flag is
-    // only ever exported for OHOS builds (run-tests.sh → cargo tauri ohos build). No desktop/mobile
-    // split is needed; if it is ever set on a non-OHOS build the experiment simply never boots there.
+    // VITE_PROCESS_TESTS is a bare flag (no platform composite like isAutotest above) and no
+    // script exports it: run-tests.sh / cov-build.sh only set VITE_AUTOTEST / VITE_COVERAGE_TESTS,
+    // so it is exported manually before an OHOS build (see the launch note above). The boot gate
+    // below has no platform check — with both flags set on a non-OHOS build the exit/restart
+    // sequence (appRecovery.restartApp / terminateSelf, see the state-machine comment above)
+    // really executes there, so the OHOS-only contract is by convention, not by construction.
     const isProcessTest = envFlag(import.meta.env.VITE_PROCESS_TESTS);
     if (isMainWindow && isAutotest && isProcessTest) {
       // process exit/restart experiment launch sequence (see the state-machine comment above)
@@ -1163,9 +1164,12 @@ Expected behavior:
         `If a new independent window appears (separate from the Float sub-windows) → PASS.\n` +
         `If the request instead falls back to the main instance (bare-want "tauri-primary"\n` +
         `routing: only onNewWant, no new onCreate/window) → FAIL: per-window instance key\n` +
-        `not applied (launchType not "specified", AbilityStage srcEntry missing, or the want\n` +
-        `lost tauri_window_id).\n\n` +
-        `Note: the new instance loads the app default page (MainPage), not hello.html.\n` +
+        `not applied (launchType not "specified", or the want lost tauri_window_id).\n` +
+        `AbilityStage srcEntry missing is a different failure mode: with no onAcceptWant\n` +
+        `route AMS spawns a fresh primary instance (splash flash, then the D4b\n` +
+        `duplicate-primary guard terminates it) — not a fallback to main.\n\n` +
+        `Note: the new instance loads hello.html (the WebviewUrl passed by the command,\n` +
+        `queued until the stage-registration handshake), not the app default page.\n` +
         `The new window is system-managed: resize/move return 1300002 (no-op).`;
       onMessage(manualResult);
     });
