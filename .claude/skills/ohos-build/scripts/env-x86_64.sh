@@ -8,12 +8,13 @@
 #
 # 用途：DevEco Studio 2in1 模拟器（x86_64 ABI）上的构建。
 # env.sh 的 aarch64 变量保持不变，两套变量按 cargo target 各自生效，可共存。
-# 另需 export SODIUM_LIB_DIR 指向 x86_64 预编译 libsodium（见
-# D:\xuqiu\tauri-3.0\libsodium-ohos-x86_64\lib）。
+# 另需 export SODIUM_LIB_DIR 指向 x86_64 预编译 libsodium（约定路径
+# $PROJECT_ROOT/../libsodium-ohos-x86_64/lib，与 env.sh 的 aarch64 默认
+# $PROJECT_ROOT/../libsodium-ohos/lib 对应；$PROJECT_ROOT 由 env.sh 导出）。
 
 if [ -z "$OHOS_CLANG" ] || [ -z "$OHOS_SYSROOT" ]; then
     echo "ERROR: source env.sh first (OHOS_CLANG/OHOS_SYSROOT not set)"
-    exit 1
+    return 1
 fi
 
 export CC_x86_64_unknown_linux_ohos="$OHOS_CLANG"
