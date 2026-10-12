@@ -14,7 +14,7 @@ use cargo_mobile2::{
 use handlebars::Handlebars;
 use include_dir::{include_dir, Dir};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::plugins::PluginMeta;
 
@@ -61,6 +61,47 @@ pub fn gen(
   );
   map.insert("root-dir", app.root_dir());
   map.insert("windows", cfg!(windows));
+
+  // `@ohos-rs/ability` in each entry's oh-package.json5 consumes the sibling
+  // openharmony-ability checkout's prebuilt bridge HAR. Compute the relative
+  // path from the entry module instead of the template's fixed
+  // `../../../../../../../` hop count — that constant only matches the
+  // in-repo `examples/api/src-tauri` depth and silently breaks every other
+  // scaffold location (caught by the C8 fresh-scaffold smoke). Both entry
+  // modules sit at the same depth under the project dir, so one value serves
+  // both. `OHOS_ABILITY_HAR` (absolute) overrides discovery for layouts where
+  // the checkout is not an ancestor of the app — e.g. on another drive —
+  // mirroring `TAURI_WORKSPACE_ROOT` for plugin HAR discovery. Falls back to
+  // the in-repo depth when no HAR is found; the build then fails at ohpm
+  // resolution, where `prerequisites.sh` explains the sibling checkouts.
+  let ability_har = match std::env::var_os("OHOS_ABILITY_HAR") {
+    Some(path) if Path::new(&path).is_absolute() => Some(PathBuf::from(path)),
+    Some(path) => {
+      log::warn!(
+        "ignoring OHOS_ABILITY_HAR={}: must be an absolute path",
+        path.to_string_lossy()
+      );
+      find_sibling_ability_har(&dest)
+    }
+    None => find_sibling_ability_har(&dest),
+  };
+  let ability_har_rel = ability_har
+    .map(|har| {
+      os::replace_path_separator(
+        util::relativize_path(har, dest.join("entry_desktop")).into_os_string(),
+      )
+      .to_string_lossy()
+      .into_owned()
+    })
+    .unwrap_or_else(|| {
+      log::warn!(
+        "no openharmony-ability sibling checkout found; entry oh-package.json5 keeps \
+         the in-repo relative HAR path — clone the repo next to your project or set \
+         OHOS_ABILITY_HAR and re-run init"
+      );
+      "../../../../../../../openharmony-ability/ability.har".to_string()
+    });
+  map.insert("ability-har-rel", ability_har_rel.as_str());
 
   // Render the shared (non-entry) parts of the tree with the global map. The
   // two entry modules are rendered separately below with per-form data (their
@@ -146,4 +187,24 @@ pub fn gen_with_plugins(
     mobile_device_types,
     desktop_device_types,
   )
+}
+
+/// Walk up from `start` to the nearest ancestor directory that contains an
+/// `openharmony-ability/ability.har` sibling checkout, and return that HAR's
+/// path. Mirrors the plugins-workspace ancestor walk in `plugins.rs` so
+/// scaffolded projects resolve the bridge HAR at any directory depth instead
+/// of assuming the in-repo examples layout. Returns `None` if no ancestor has
+/// the checkout (e.g. the app lives outside the monorepo entirely).
+fn find_sibling_ability_har(start: &Path) -> Option<PathBuf> {
+  let mut current = start;
+  loop {
+    let har = current.join("openharmony-ability").join("ability.har");
+    if har.is_file() {
+      return Some(har);
+    }
+    match current.parent() {
+      Some(parent) => current = parent,
+      None => return None,
+    }
+  }
 }
