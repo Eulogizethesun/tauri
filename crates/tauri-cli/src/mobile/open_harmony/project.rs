@@ -153,6 +153,16 @@ pub fn gen(
       .with_context(|| format!("failed to render {module}"))?;
   }
 
+  // The `tauri::mobile_entry_point` expansion on OHOS (`#[ability]`-derived
+  // `openharmony` entry fn) references `napi_ohos`, `napi_derive_ohos` and
+  // `::openharmony_ability` paths directly, so the app crate must depend on
+  // them for `cfg(target_env = "ohos")`. Without this the scaffold compiles,
+  // but its .so registers the NAPI module under the runtime crate's name
+  // (`openharmony_ability`) instead of the app's (`lib<app>.so`), and the
+  // ArkTS dynamic import never settles — every window stays blank (caught by
+  // the C8 fresh-scaffold smoke).
+  inject_ohos_cargo_dependencies(app.root_dir())?;
+
   Ok(())
 }
 
@@ -207,4 +217,52 @@ fn find_sibling_ability_har(start: &Path) -> Option<PathBuf> {
       None => return None,
     }
   }
+}
+
+/// Append the OHOS target dependencies that the `mobile_entry_point` OHOS
+/// expansion needs to the app's Cargo.toml. Idempotent: skips when the
+/// manifest already mentions `openharmony-ability` (hand-configured project
+/// or re-init). `openharmony-ability` resolves through the sibling-checkout
+/// `[patch.crates-io]` table or the OHOS registry mirror — the same
+/// consumption models `prerequisites.sh` documents for the rest of the fork
+/// stack.
+fn inject_ohos_cargo_dependencies(tauri_dir: &Path) -> Result<()> {
+  let manifest_path = tauri_dir.join("Cargo.toml");
+  let manifest = std::fs::read_to_string(&manifest_path)
+    .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+  if manifest.contains("openharmony-ability") {
+    return Ok(());
+  }
+
+  // Versions mirror the tauri crate's own OHOS target dependencies: `napi-ohos`
+  // / `napi-derive-ohos` are published on crates.io; `openharmony-ability`
+  // must match the runtime crate's published version (a bare pre-release
+  // requirement matches exactly that version). `log` is required by the
+  // expansion's `::log::info!` calls — declared here (not only in the app
+  // template's general dependencies) so hand-rolled manifests compile too;
+  // cargo merges it with an existing general `log` entry without conflict.
+  let section = concat!(
+    "\n",
+    "# OHOS NAPI bridge (added by `tauri ohos init`): the `tauri::mobile_entry_point`\n",
+    "# expansion on OHOS references these crates directly, so the app crate must\n",
+    "# depend on them for the target.\n",
+    "[target.'cfg(target_env = \"ohos\")'.dependencies]\n",
+    "napi-ohos = \"1\"\n",
+    "napi-derive-ohos = \"1\"\n",
+    "openharmony-ability = \"1.0.0-beta.0\"\n",
+    "log = \"0.4\"\n",
+  );
+
+  let mut updated = manifest;
+  if !updated.ends_with('\n') {
+    updated.push('\n');
+  }
+  updated.push_str(section);
+  std::fs::write(&manifest_path, updated)
+    .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+  println!(
+    "Added OHOS target dependencies to {}",
+    manifest_path.display()
+  );
+  Ok(())
 }

@@ -41,6 +41,11 @@ export default class EntryAbility extends NativeAbility {
   public mode: 'xcomponent' | 'webview' = 'webview'
   // Stored for handleNotificationAction to dispatch action-click events.
   private pluginManager: PluginManager | null = null;
+  // Process-level guard (multi-UIAbility, single-runtime invariant): the
+  // PluginManager and the STATIC_PLUGINS JS singletons belong to the process —
+  // a spawned UIAbility instance must not re-load them into a second manager,
+  // which would rewire their transport to the spawned instance's context.
+  private static pluginsInitialized: boolean = false;
   // ArkTS-side BridgePlugin factories. These match the Rust-declared plugin ids in the
   // native module's ApplicationLifecycle.bridgePlugins; BridgeHostRegistry.prepare installs
   // them into every module host for this Ability session. Separate from the Tauri JS-layer
@@ -56,7 +61,10 @@ export default class EntryAbility extends NativeAbility {
     console.info('[Tauri] ===== EntryAbility onCreate =====');
     await super.onCreate(want, launchParam);
     console.info('[Tauri] ===== super.onCreate done =====');
-    await this.initTauriPlugins();
+    if (!EntryAbility.pluginsInitialized) {
+      await this.initTauriPlugins();
+      EntryAbility.pluginsInitialized = true;
+    }
     this.handleNotificationAction(want);
   }
 
