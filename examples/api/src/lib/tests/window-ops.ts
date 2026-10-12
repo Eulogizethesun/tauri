@@ -1,4 +1,4 @@
-import { skip, skipOnMobile, type TestCase } from '../test-runner';
+import { skip, skipOnMobile, skipBelowOhosApi, type TestCase } from '../test-runner';
 import { getCurrentWindow, currentMonitor, Window } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -65,6 +65,30 @@ async function readBackEquals(
     seen.push(`${cur.width}×${cur.height}`);
     if (Date.now() - start > timeoutMs) {
       throw new Error(`${label}: 期望 ${w}×${h}，${timeoutMs}ms 内读回 ${seen.join(' → ')}`);
+    }
+    await delay(200);
+  }
+}
+
+/// The constraints-clamp acceptance of the setSizeConstraints case: the read-back must be
+/// AT LEAST the floor in both dimensions ("边界不被超" — a request below the floor comes back
+/// clamped, never under). Same polling contract as readBackEquals: timeout means fail and the
+/// error carries the observed series.
+async function readBackAtLeast(
+  read: () => Promise<{ width: number; height: number }>,
+  minW: number,
+  minH: number,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const seen: string[] = [];
+  const start = Date.now();
+  for (;;) {
+    const cur = await read();
+    if (cur.width >= minW - 1 && cur.height >= minH - 1) return; // -1: physical rounding slack
+    seen.push(`${cur.width}×${cur.height}`);
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`${label}: 期望 ≥ ${minW}×${minH}，${timeoutMs}ms 内读回 ${seen.join(' → ')}`);
     }
     await delay(200);
   }
@@ -405,6 +429,66 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
+    // Review C1 acceptance: the runtime setSizeConstraints entry must funnel into the same
+    // tao constraints cache as builder-time with_inner_size_constraints (apply_window_limits →
+    // ArkTS setWindowLimits). The old OHOS gate returned Err unconditionally while the builder
+    // path worked — "works at creation, Errs afterwards". Here the floor is proven by read-back:
+    // a resize request below the just-set minimum must come back clamped to ≥ the floor, and
+    // clearing with null must restore unconstrained resize (the cache is not wedged).
+    name: 'window.setSizeConstraints runtime min-floor clamps (and null clears)',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('phone main window is full-screen: the min-floor clamp of setSizeConstraints needs a freeform-resizable main window (PC/2in1 capability), same policy as the setInnerSize cases');
+      if (!(await mainWindowResizable())) return;
+      const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
+      const win = getCurrentWindow();
+      const orig = await win.innerSize();
+      const sf = await win.scaleFactor();
+      // Clear the demo's builder-time min (600×400 logical → 1140×760 physical at PC density
+      // 1.9) so the baseline below the floor can land — same as the setInnerSize cases.
+      await win.setMinSize(null);
+      await delay(600);
+      try {
+        const targetW = 1000, targetH = 700; // issue#97 manual baseline, below the floor
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackEquals(() => win.innerSize(), targetW, targetH, `setSize(${targetW}×${targetH}) 基线读回`);
+        // Runtime constraints, floor 100px above the baseline in each dimension. Constraints
+        // are logical; ceil(physical/sf) keeps the physical floor ≥ the intended value at any
+        // scale factor.
+        const floorW = targetW + 100, floorH = targetH + 100;
+        await win.setSizeConstraints({
+          minWidth: Math.ceil(floorW / sf),
+          minHeight: Math.ceil(floorH / sf),
+        });
+        // setWindowLimits is a fire-and-forget bridge call — wait for it to land before the
+        // clamp probe (same 600ms convention as the min-clear above).
+        await delay(600);
+        // Probe: request a size below the floor; the floor must hold (either the request is
+        // clamped, or the window was already raised to the floor when the limits landed).
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackAtLeast(
+          () => win.innerSize(),
+          floorW,
+          floorH,
+          `setSize(${targetW}×${targetH}) 被 min floor ${floorW}×${floorH} 钳制 (scaleFactor=${sf})`,
+        );
+        // Clear via the same runtime entry: an unconstrained small resize must land exactly —
+        // proves null clears the cache instead of leaving the floor wedged.
+        await win.setSizeConstraints(null);
+        await delay(600);
+        const clearW = 900, clearH = 650;
+        await win.setSize(new PhysicalSize(clearW, clearH));
+        await readBackEquals(() => win.innerSize(), clearW, clearH, `setSizeConstraints(null) 后 ${clearW}×${clearH} 精确读回`);
+      } finally {
+        // Restore order: size first (orig satisfies the demo min), then the demo's
+        // builder-time constraint — mirroring the setInnerSize cases.
+        await win.setSize(new PhysicalSize(orig.width, orig.height));
+        await delay(400);
+        await win.setMinSize(new LogicalSize(600, 400));
+      }
+    },
+  },
+  {
     // issue#97 scenario 2: exact read-back on a Float sub-window (decor=0, constructively zero chrome).
     // Follows core.ts's float-window convention: do not destroy it here; leave cleanup to the manual Close All;
     // the label uses the test- prefix (cmd.rs convention: a non-test- prefix gets STATUS_SCRIPT polling injected).
@@ -514,6 +598,10 @@ export const windowOpsTests: TestCase[] = [
     category: 'auto',
     async fn() {
       await skipOnMobile('the setAlwaysOnTop window command is upstream cfg(desktop) and absent from the mobile build');
+      // smoke() fails on any throw, and the Rust facade returns a version
+      // error below API 14 (setWindowTopmost does not exist there) — record
+      // the tier as a skip instead of a red failure on low-API devices.
+      await skipBelowOhosApi(14, 'setAlwaysOnTop dispatches to setWindowTopmost (API 14+)');
       const win = getCurrentWindow();
       // set_always_on_top dispatches to OHOS setWindowTopmost (API 14+,
       // ohos.permission.WINDOW_TOPMOST; main window, freeform mode) — but

@@ -1,4 +1,4 @@
-import { skip, skipOnMobile, type TestCase } from '../test-runner';
+import { skip, skipOnMobile, skipBelowOhosApi, type TestCase } from '../test-runner';
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
 import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
@@ -1014,6 +1014,10 @@ export const coreTests: TestCase[] = [
     name: 'webview.createPdf (default A4)',
     category: 'auto',
     async fn() {
+      // The runtime gate rejects below API 14 with the unified version error
+      // (test_create_pdf would surface it as a `false:` result → red). Record
+      // the tier as a skip on low-API devices instead.
+      await skipBelowOhosApi(14, 'ArkWeb createPdf is API 14+');
       let result = '';
       const unlisten = await listen<string>('create-pdf-result', (event) => {
         result = event.payload;
@@ -1030,6 +1034,42 @@ export const coreTests: TestCase[] = [
       unlisten();
       assert(result.startsWith('true:'), `Expected success, got: ${result}`);
       assert(result.includes('.pdf'), `Expected path in result, got: ${result}`);
+    },
+  },
+
+  // Review C4 companion: Webview.clearAllBrowsingData must carry `label` so a cross-webview
+  // call routes to the TARGET webview (plugin.rs get_webview: label → manager lookup,
+  // WebviewNotFound on miss; a missing label silently falls back to the CALLING webview,
+  // which made `Webview.getByLabel(x).clearAllBrowsingData()` clear the caller instead —
+  // the same defect shape as the setBackgroundColor fix in this PR).
+  {
+    name: 'webview.clearAllBrowsingData routes to the labeled target',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      const label = 'test-clear-' + Date.now();
+      await invoke('create_borderless_window', { windowId: label });
+      await new Promise((r) => setTimeout(r, 500));
+      const w = await Webview.getByLabel(label);
+      assert(w !== null, `Float webview "${label}" should exist`);
+      // Positive: clearing a webview OTHER than the caller resolves — the label routes to it.
+      await w!.clearAllBrowsingData();
+      // Negative: an unknown label must reject (WebviewNotFound). Under the pre-fix no-label
+      // wire this call RESOLVED and cleared the caller's — this suite's own — data instead.
+      const bogus = `no-such-webview-${Date.now()}`;
+      let rejected = false;
+      try {
+        await invoke('plugin:webview|clear_all_browsing_data', { label: bogus });
+      } catch {
+        rejected = true;
+      }
+      assert(
+        rejected,
+        `clearAllBrowsingData on unknown label "${bogus}" must reject (label not consulted — caller-fallback regression?)`
+      );
+      // Data-layer note: WHICH storage got wiped is not observable from JS here (same-origin
+      // ArkWeb instances may share DOM storage), so this case pins the routing layer the
+      // label fix touches. The float window is left for the manual Close All cleanup.
     },
   },
 

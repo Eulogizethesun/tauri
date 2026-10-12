@@ -2560,6 +2560,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     // ohos_unsupported("setContentProtection") from this spot, which failed
     // the window.setContentProtection demo test (#115) on devices where the
     // operation works.
+    //
+    // Deliberate exception to this PR's "honest Err below the API level"
+    // convention (print/createPdf/setAlwaysOnTop/setCursorGrab/
+    // startResizeDragging all gate with ohos_requires_api): on API < 15 tao
+    // logs a clear warning and no-ops instead, and this stays a silent Ok.
+    // Two structural reasons: tao's public set_content_protection returns
+    // `()` (an Err is not expressible at that layer without changing the
+    // upstream signature), and upstream tao keeps the same silent no-op
+    // contract on Linux for the identical operation — an OHOS-only Err gate
+    // would make the two platforms disagree about a no-op.
     send_user_message(
       &self.context,
       Message::Window(
@@ -2591,14 +2601,12 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_size_constraints(&self, constraints: WindowSizeConstraints) -> Result<()> {
-    #[cfg(target_env = "ohos")]
-    {
-      // WindowSizeConstraints (inner/outer combined struct) has no OHOS mapping;
-      // setMinSize/setMaxSize DO work (setWindowLimits) and stay available.
-      let _ = constraints;
-      return Err(ohos_unsupported("setSizeConstraints"));
-    }
-    #[cfg(not(target_env = "ohos"))]
+    // OHOS: no gate here on purpose. The message handler below funnels into
+    // tao's `set_inner_size_constraints`, which on OHOS shares the exact same
+    // `apply_window_limits` → ArkTS `setWindowLimits` path as the builder-time
+    // `with_inner_size_constraints` attributes (the constraints cache is the
+    // single funnel). Gating the runtime entry while leaving the builder entry
+    // open produced "works at creation, Errs afterwards" on the same window.
     send_user_message(
       &self.context,
       Message::Window(

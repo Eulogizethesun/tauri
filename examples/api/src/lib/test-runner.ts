@@ -100,6 +100,48 @@ export function desktopOnlySuite(tests: TestCase[], feature: string): TestCase[]
   }));
 }
 
+// ─── OHOS API-level gating (version tiering) ────────────────────────────────
+//
+// Several OHOS window/webview operations are version-gated in
+// tauri-runtime-wry (`ohos_requires_api`): print/createPdf/setAlwaysOnTop
+// need SDK API 14+, startResizeDragging 20+, setCursorGrab 22+ — below the
+// threshold the facade returns Err BY DESIGN because the underlying
+// ArkTS/NDK API does not exist there. The suite's verified devices are API
+// 23 (2in1) and API 26 (phone), where every gate passes; this helper keeps
+// the suite honest on lower-API devices by recording a skip with the
+// threshold in the reason instead of a red "not supported" failure.
+
+let cachedSdkApiVersion: number | null = null;
+
+/**
+ * The device's OHOS SDK API level (`get_ohos_version_info`), or null on
+ * non-OHOS platforms (no command → no tiering applies).
+ */
+export async function ohosSdkApiVersion(): Promise<number | null> {
+  if (cachedSdkApiVersion === null) {
+    try {
+      cachedSdkApiVersion = (
+        await invoke<{ sdkApiVersion: number }>('get_ohos_version_info')
+      ).sdkApiVersion;
+    } catch {
+      cachedSdkApiVersion = -1;
+    }
+  }
+  return cachedSdkApiVersion < 0 ? null : cachedSdkApiVersion;
+}
+
+/**
+ * Skip the current test when the device's OHOS SDK API level is below
+ * `minApi`. Use at the top of a case whose Rust facade gate returns a
+ * version error below that level.
+ */
+export async function skipBelowOhosApi(minApi: number, reason: string): Promise<void> {
+  const v = await ohosSdkApiVersion();
+  if (v !== null && v < minApi) {
+    skip(`OHOS API ${v} < ${minApi} (facade returns a version error there) — ${reason}`);
+  }
+}
+
 const TEST_TIMEOUT_MS = 5000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

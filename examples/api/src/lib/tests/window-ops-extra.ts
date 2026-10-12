@@ -154,6 +154,10 @@ export const windowOpsExtraTests: TestCase[] = [
       try {
         // 无鼠标按住时 OHOS 大概率拒绝 → 错误分支点亮即达标
         await attempt('startDragging', () => w.startDragging());
+        // startResizeDragging is facade-gated at API 20+ (ohos_requires_api):
+        // on lower-API devices this attempt records the version error, which
+        // is the correct error-branch outcome under attempt semantics — no
+        // skip, so the startDragging coverage above stays live at every tier.
         await attempt('startResizeDragging', () => w.startResizeDragging('East'));
         await delay(300);
         await attempt('float setFocus', () => w.setFocus());
