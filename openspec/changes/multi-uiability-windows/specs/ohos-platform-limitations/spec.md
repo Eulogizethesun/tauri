@@ -1,3 +1,7 @@
+<!-- 有意镜像（TA3 双写）：本 delta 之 Requirement/Scenario 正文与 live spec
+     openspec/specs/ohos-platform-limitations/spec.md 的同名小节逐字相同——归档（archive）
+     本 change 时按 openspec 流程去重，勿在 delta 侧单独演化。 -->
+
 ## ADDED Requirements
 
 <!-- Note: this change also adds one row (`R-multiuiab-singleton`) to the existing

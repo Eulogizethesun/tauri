@@ -435,8 +435,10 @@ E16 Path C context 错用（deprecated 注释后无生产调用方） / E17 taur
 ## 9. Open Questions
 
 - OQ1 mobile 形态同模块多实例行为（Phase 1 mobile 设备验证；允许结论=mobile 维持 singleton）。
-  **状态（2026-09-16）**：随 6.4 双形态验证延期——阻塞 Mate 70 设备，结论位
-  entry_mobile 维持 singleton（Phase 5 决策），待移动真机复验后回填。
+  **已回填（2026-10-09 mobile 基线交付，doc/ohos-mobile-baseline.md；Mate 70 r1-r8，终态
+  167✅/0❌/144⏭）**：结论=entry_mobile 维持 singleton——第二 UIAbility spawn 在 mobile
+  形态被 tao desktop-only 门控拦截（套件 #291/#292 ⏭，fail-fast 理由串存证），多实例为
+  desktop 形态专属能力。
 - OQ2 `createSubWindow` 在非 primary stage 上调用的平台可行性（D11 Phase 4 实测；不行则 Float
   始终挂 primary stage 并文档化）。
   **已定（2026-09-16 零代码实验，openspec 6.3）**：**可行**。scratch 补丁将 createSubWindow

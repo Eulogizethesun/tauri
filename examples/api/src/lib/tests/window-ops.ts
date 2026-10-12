@@ -510,12 +510,15 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    name: 'window.setAlwaysOnTop smoke (OHOS partial: flag only, no z-order API)',
+    name: 'window.setAlwaysOnTop smoke (dispatches to setWindowTopmost API 14+; z-order effect unverifiable from JS)',
     category: 'auto',
     async fn() {
       await skipOnMobile('the setAlwaysOnTop window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
-      // isAlwaysOnTop only reads tao's AtomicBool, so the round-trip is self-proving and not asserted.
+      // set_always_on_top dispatches to OHOS setWindowTopmost (API 14+,
+      // ohos.permission.WINDOW_TOPMOST; main window, freeform mode) — but
+      // isAlwaysOnTop only reads tao's AtomicBool, so the round-trip is
+      // self-proving and the z-order effect is not asserted.
       await smoke(() => win.setAlwaysOnTop(true), 'setAlwaysOnTop(true)');
       await smoke(() => win.setAlwaysOnTop(false), 'setAlwaysOnTop(false)');
     },
@@ -597,8 +600,10 @@ export const windowOpsTests: TestCase[] = [
       await w.setResizable(true);
       assert((await w.isResizable()) === true, 'setResizable(true) readback');
 
-      // ③ minimize → show: isMinimized reads ArkTS getWindowStatus() live state (not tao's mirror),
-      //    a real assertion. show goes through showWindowMethod's Float branch (win.showWindow()).
+      // ③ minimize → show: isMinimized reads tao's local mirror and minimize() writes that same
+      //    mirror — a round-trip assertion (the command chain works end-to-end), NOT an independent
+      //    read of ArkTS getWindowStatus() live OS state. show goes through showWindowMethod's
+      //    Float branch (win.showWindow()).
       await w.minimize();
       await delay(500);
       assert((await w.isMinimized()) === true, 'Float minimize should reflect in live window status');

@@ -20,6 +20,10 @@
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "launchType": "specified",
+        // Declared as the phase prerequisite for the process relaunch chain
+        // (doc/ohos-plugin-process-updater/design.md ~L79: appRecovery.restartApp()
+        // needs "recoverable": true + enableAppRecovery() in AbilityStage.onCreate()).
+        // Declaration only — the code-side enableAppRecovery() call is a follow-up.
         "recoverable": true,
         "skills": [
           {

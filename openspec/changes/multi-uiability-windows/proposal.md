@@ -30,7 +30,9 @@ upstream PR #19（`58ad4377`）曾在旧框架实现 `start_ui_ability` multiton
   `notifyWindowStatus`/`setMenuClickHandler` 等硬编码 0 全部参数化；`loadContentByName` 传
   LocalStorage（windowId + bridgeSessionId）；`bridgeSessionId` 从 AppStorage 全局单值改为 per-instance
   LocalStorage；`BridgeHostRegistry.prepare()` 模块独占异常改为 join 语义（第二实例 join 既有 session）；
-  `WindowManager.createSubWindow` 的 stage 0 硬编码参数化（Float 子窗口从调用者所属 stage 创建）。
+  `WindowManager.createSubWindow` 的 stage 0 硬编码参数化（**实现修订（OQ2 定案）**：Float 保持
+  挂 primary stage `uiAbilityStages.get(0)`，per-instance Float 为 feasible-but-not-implemented，
+  见 design.md §9 OQ2 与 WindowManager.ets 存证注释——参数化仅止于 scratch 实验）。
 - **tao**：删除 `UIABILITY_CREATED` guard，换 `FIRST_WINDOW_CREATED` 闩锁（仅约束首窗口必须是
   UIAbility）；第二个 UIAbility 窗口走 `start_ui_ability` 预分配 id 路径；**14 处 `WindowId(0)`
   事件派发硬编码参数化**（input/IME/axis/redraw/focus/destroy；WindowResize/ContentRectChange 已是

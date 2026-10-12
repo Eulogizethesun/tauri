@@ -8,7 +8,7 @@
 
 | 层 | 内容 | 频率 |
 |---|---|---|
-| 310 例自动套件 | 基线 **305/310**（5 skip 均为已知环境限制：3 剪贴板读权限 / 1 通知开关 / 1 haptics 硬件；2026-10-08 HAD-W32 实测） | 每阶段抽跑（建议 ≥30 例：window-ops / window-state / decor / emit / menu 各抽）；Phase 6 全量 |
+| 311 例自动套件 | 基线 **305/311**（6 skip 均为已知环境限制：3 剪贴板读权限 / 1 通知开关 / 1 NFC 硬件 / 1 haptics 硬件；2026-10-09 HAD-W32 实测） | 每阶段抽跑（建议 ≥30 例：window-ops / window-state / decor / emit / menu 各抽）；Phase 6 全量 |
 | Float 专项 5 方法 | `closeWindow` / `setDecorations` / `setWindowBackgroundColor` / `showWindowMethod` / `setDecorationFlags`（D11 按 windowKinds 分支的回归敏感点） | Phase 4、6 |
 | 手动套件 | manual_tests.md 既有 229 例中窗口相关章 | Phase 6 |
 | 故障面 | `hdc shell faultlog` 零新增 appfreeze；hilog 零 `THREAD_BLOCK_3S` | 每阶段 |
@@ -70,7 +70,7 @@
 | # | 用例 | 操作 | 判据 | 证据 |
 |---|---|---|---|---|
 | P6-1 | 反复建销 ×10 | 建/销第二实例循环 10 轮（E4） | `PENDING_UI_ABILITIES` / `sessions` / `render_owners` / want-URI map 无残留（D13） | Rust 侧观测 |
-| P6-2 | 310 全量 | 全套件 | ≥ 基线 305/310 | 套件 |
+| P6-2 | 311 全量 | 全套件 | ≥ 基线 305/311 | 套件 |
 | P6-3 | E2 最小化恢复 | 第二实例最小化 → 恢复 | **不触发** onWindowStageRestore/onNewWant（活任务恢复绕过 onAcceptWant 路由，2026-09-16 实测定案）；内容不白屏、页面状态保持 | 手动/截图 |
 | P6-4 | E3 任务卡片切换 | 双实例互切 | 焦点事件成对（Gained/Lost 落对实例） | hilog |
 | P6-5 | 双形态 | desktop + mobile 全套 | OQ1 最终结论落文档 | 记录 |

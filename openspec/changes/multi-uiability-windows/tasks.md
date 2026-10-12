@@ -20,7 +20,10 @@ ArkTS 改动后一律删 oh_modules + CompileArkTS 缓存重建（R6）。
 - [x] 1.3 构建部署（SODIUM_LIB_DIR 配方）+ `aa start --ps tauri_window_id 1` 起第二实例
 - [x] 1.4 判据：任务卡片双实例；hilog 收到 id；Rust `register_ui_ability_stage: id=1`；
       **prepare() 是否抛 already-belongs**（D12 join 可行性实证）；tray 点击无重复 spawn；E13 时序观测
-- [ ] 1.5 mobile 形态重复 1.3-1.4（OQ1；允许结论=mobile 维持 singleton）——无 mobile 设备在线，待 Mate 70
+- [x] 1.5 mobile 形态重复 1.3-1.4（OQ1；允许结论=mobile 维持 singleton）——收口（2026-10-09
+      Mate 70 mobile 基线交付，doc/ohos-mobile-baseline.md）：mobile 形态第二 UIAbility spawn
+      被 tao desktop-only 门控拦截（套件 #291/#292 ⏭ 理由串），entry_mobile 维持 singleton；
+      原计划的 --ps 手工 spawn 复验被该门控取代
 - [x] 1.6 还原 1.1-1.2 临时改动（保留验证记录）
 
 ### Phase 1 验证记录（2026-09-14，HAD-W32 desktop，pid 49832 单进程）
@@ -268,7 +271,14 @@ Phase 5 D4 落地时复验）；spawn 机制已由同形 want 的 aa start 直�
       移动/幸存"系 sceneboard 任务视图缩略图类陈旧帧（hidumper 全表无此窗），非 tauri
       行为；uinput X 定位以 dump 矩形为准（api1 [789,287] 右缘 2879），目测截图坐标
       不可靠。
-- [ ] 6.4 desktop + mobile 双形态（OQ1 结论落文档）
+- [x] 6.4 desktop + mobile 双形态（OQ1 结论落文档）
+      **收口（2026-10-09，doc/ohos-mobile-baseline.md）**：mobile 基线 r1-r8 终态
+      167✅/0❌/144⏭（NFC on 后 r7/r8 双跑稳定）+ 桌面零回归（HAD-W32 311 例
+      305✅/0❌/6⏭，唯一差异=#137 NFC 用例无 NFC 硬件按设计 skip）。OQ1 结论落文档=mobile
+      维持 singleton（entry_mobile launchType singleton；第二 UIAbility spawn 被 tao
+      desktop-only 门控拦截，#291/#292 ⏭ 存证）。披露项随基线文档在案：NFC 物理标签 write
+      于双协议门禁卡为平台限制（非 port bug，以披露收口）、手机沙盒禁 exec（#308/#309）、
+      ArkWeb window.open 无 URL（上游已披露）。
 - [x] 6.5 E2/E3 专项：第二实例最小化恢复、任务卡片切换焦点
       **全过（2026-09-16 HAD-W32，pid 16393）**。观测栈：hilog 过滤器（app 行 + 系统
       WMSFocus/sceneboard）+ hidumper Focus/ZOrd + JS focus-probe 三层交叉。设计路径建窗链

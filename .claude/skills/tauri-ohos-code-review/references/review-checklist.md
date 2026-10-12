@@ -40,7 +40,7 @@
 - [ ] D2: Mutex 未跨越阻塞 I/O 操作持有
 - [ ] D3: `Function::call()` 未在 `render()` / `@Builder` 上下文中调用
 - [ ] D4: 代际戳/令牌必须在与其守护的变更同一临界区内获取 → 🟡。"先取号、锁内变更、后台按号条件撤销"的模式（如 global-shortcut 的 registration stamp：同步插入 Map，worker 在 ArkTS 拒绝时按 stamp 条件删除），若取号发生在锁外，两线程对同一 key 并发注册可能出现取号序与插入序倒挂（旧号覆盖新号后，旧 worker 的条件撤销反而成立，删掉新注册）。**要求**：取号（如 `next_stamp()`）必须在持有该 Map 锁的同一临界区内调用，保证取号序 ≡ 插入序。**检查方法**：grep 代际戳/AtomicU64 计数器的获取点与对应 `lock`+`insert` 的相对位置，凡取号在锁外即 finding。（来源：2026-09-16 rebase 检视 global-shortcut 同 id 并发注册竞态加固）
-- [ ] D5: 面向异步注册窗口的创建期属性下发必须门控到注册握手之后 → 🟡。spawned UIAbility 窗口（id>0）的 stage 注册是异步的（D7 握手），`Window::new` 不等握手即返回；若创建后立刻向该 windowId 派发 `set_window_decorations` / `set_window_limits` 等桥调用，调用可能先于新实例 `onWindowStageCreate` 落地 → ArkTS `requireWindow` 抛 Unknown OS sub-window，属性丢失（仅 warn）。wry 的 webview 操作已有 `pending_ops` 按 window_id 排队至握手的先例，窗口属性下发需同等门控（Rust 侧排队或 ArkTS 侧为 pending id 缓冲）。**已知未守卫点**：tao `platform_impl/ohos/window.rs` 创建期 decorations(false) 与 `apply_window_limits`（主窗口 id 0 无竞态——stage 先于 runtime 就绪；spawned 窗口有竞态，修复方案待定）。**检查方法**：审查任何 `start_ui_ability` 之后立刻向该 windowId 派发桥操作的代码，确认有握手门控或排队 → 🟡。（来源：2026-09-16 rebase 检视发现）
+- [ ] D5: 面向异步注册窗口的创建期属性下发必须门控到注册握手之后 → 🟡。spawned UIAbility 窗口（id>0）的 stage 注册是异步的（D7 握手），`Window::new` 不等握手即返回；若创建后立刻向该 windowId 派发 `set_window_decorations` / `set_window_limits` 等桥调用，调用可能先于新实例 `onWindowStageCreate` 落地 → ArkTS `requireWindow` 抛 Unknown OS sub-window，属性丢失（仅 warn）。wry 的 webview 操作已有 `pending_ops` 按 window_id 排队至握手的先例，窗口属性下发需同等门控（Rust 侧排队或 ArkTS 侧为 pending id 缓冲）。**守卫状态（原未守卫点已修）**：tao `platform_impl/ohos/window.rs` 创建期 decorations(false) 与 `apply_window_limits`——spawned 窗口竞态已修：创建期属性经 `PENDING_WINDOW_OPS` 按 window_id 排队至 D7 注册握手后下发（Eulogizethesun/tao#26，issue 7，E4 验证）；主窗口 id 0 本就无竞态（stage 先于 runtime 就绪）。**检查方法**：审查任何 `start_ui_ability` 之后立刻向该 windowId 派发桥操作的代码，确认有握手门控或排队 → 🟡。（来源：2026-09-16 rebase 检视发现）
 
 ## E — ArkTS 框架
 
@@ -100,7 +100,7 @@
   - **IDE 文件** — `.idea/`、`.vscode/`、`*.swp`
   - **环境/lock 文件** — `.env.local`、`oh-package-lock.json5`
   - **检查方法**：`git diff <base-branch> --name-only` 逐一核对上述路径模式
-- [ ] H2: `.gitattributes` 应保持 `eol=lf`（CRLF 会导致 OHOS 构建异常）→ 🟡。**例外**：upstream 本身为 CRLF 的文件（tauri 仓 `crates/tauri-runtime-wry/src/lib.rs`、`Cargo.toml`、`crates/tauri/src/app.rs`）必须以 `-text` 条目保真——否则 `* text=auto eol=lf` 在暂存时把它们重归一化成整文件 churn（真实改动被 ~190 行 EOL 噪声包裹，09-29 tauri#166 TA1 实例）。**检查方法**：改动这类文件时 diff 须只剩真实改动行；验证 blob CRLF 保真用 `git ls-files --eol` 或 `tr -dc '\r' < 文件 | wc -c`——MSYS `grep -c $'\r'` 在文本模式静默返回 0，不可信。（来源：2026-09-29 五仓 babysit 修复轮）
+- [ ] H2: `.gitattributes` 应保持 `eol=lf`（CRLF 会导致 OHOS 构建异常）→ 🟡。**例外**：upstream 本身为 CRLF 的文件（tauri 仓 `crates/tauri-runtime-wry/Cargo.toml`、`crates/tauri/src/app.rs`）必须以 `-text` 条目保真——否则 `* text=auto eol=lf` 在暂存时把它们重归一化成整文件 churn（真实改动被 ~190 行 EOL 噪声包裹，09-29 tauri#166 TA1 实例）。⚠️ `crates/tauri-runtime-wry/src/lib.rs` 实为 LF，**不在例外内**（10-12 committer 检视发现其曾被误列于 CRLF 块下后订正——对 LF 文件 `-text` 反而会放行 CRLF 混入；以 `git ls-files --eol` 实测为准，勿按注释块推断）。**检查方法**：改动这类文件时 diff 须只剩真实改动行；验证 blob CRLF 保真用 `git ls-files --eol` 或 `tr -dc '\r' < 文件 | wc -c`——MSYS `grep -c $'\r'` 在文本模式静默返回 0，不可信。（来源：2026-09-29 五仓 babysit 修复轮；2026-10-12 committer 检视 C10 订正）
 - [ ] H3: openspec 文件必须归档到 `openspec/changes/`（不能散落在仓库根目录）→ 🔵
 - [ ] H4: 模板文件 `.ets.hbs` 重命名需验证 CLI template.rs 能正确处理 → 🟡
 - [ ] H5: **仅 tauri 仓**：检查 `doc/manual_tests.md` 是否归档了新手动用例（🟡）

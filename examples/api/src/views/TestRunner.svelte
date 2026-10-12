@@ -86,7 +86,7 @@
   // driver blind-invocation + side-effect replay go last by design (S2 coverage suite).
   // Gating: only coverage-verification builds (cov-build.sh with VITE_COVERAGE_TESTS=true) inject the coverage batch;
   // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 311-case set
-  // (311 = all non-coverage batches; ground truth is the generated test-report row count, 2026-10-08 HAD-W32: 305 passed / 5 skipped / 0 failed).
+  // (311 = all non-coverage batches; ground truth is the generated test-report row count, 2026-10-09 HAD-W32: 305 passed / 6 skipped / 0 failed).
   // The suite is authored against the desktop (PC/2in1) form; on an OHOS mobile-form build desktop-only
   // domains are skipped with a reason via skipOnMobile/desktopOnlySuite (get_device_form command):
   // menu/tray suites whole (desktop-form features), upstream cfg(desktop) window commands
@@ -97,7 +97,8 @@
   // The api-gap batch (S10) runs last: it contains destructive ops (app hide/show, settings-page jumps) and must come after all other batches.
   // The risk-supplement batch (2026-09-04) sits after windowOps and before the coverage batch:
   // the three risk-point follow-ups (fs watcher / shell subprocess), skipped on platforms other than OHOS,
-  // appended at the tail to keep the existing #1-#310 numbering stable.
+  // appended at the tail to keep the numbering stable (the suite now spans #1-#311; the 2026-10-09
+  // NFC batch was later inserted at #137, shifting subsequent case numbers by one).
   // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
   // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
@@ -305,8 +306,7 @@
   // Toggles EXIT_CONFIRM_MODE: implicit closes (✕) are prevented and the page
   // (App.svelte, main window) shows a "confirm exit?" dialog via plugin:dialog
   // ask; confirm → process.exit(0) (explicit exits are never prevented),
-  // cancel → the window stays. Distinct from the raw prevention test
-  // (test_set_prevent_exit, console-only).
+  // cancel → the window stays.
   let exitConfirmOn = $state(false);
   async function manualExitConfirm() {
     await wrapManual('exit_confirm', async () => {
@@ -416,8 +416,8 @@
   // Full pass-through test on a Float overlay sub-window (manual_tests.md §28).
   // The 3s-toggle smoke above only exercises the TSFN bridge on the main window;
   // T0/T1 require an overlay ABOVE the main window so click/hover pass-through is
-  // observable. setIgnoreCursorEvents DOES pass label (unlike setBackgroundColor),
-  // so targeting the sub-window via getByLabel works.
+  // observable. setIgnoreCursorEvents passes label, so targeting the sub-window
+  // via getByLabel works.
   let overlayIgnoreCursorWin = null;
   async function manualOverlayIgnoreCursor() {
     await wrapManual('overlayIgnoreCursor', async () => {
@@ -1094,8 +1094,9 @@ Expected behavior:
   let decorationsState = $state('unknown');
   // Tracks the label of the most-recently-created Float sub-window so the BG
   // buttons (set_background_color) can target it instead of the main window.
-  // @tauri-apps/api Window.setBackgroundColor omits `label` in the invoke payload
-  // (upstream bug), so we invoke the command directly with this label.
+  // Historical note: @tauri-apps/api Window.setBackgroundColor used to omit
+  // `label` in the invoke payload (fixed in the fork, 3ff13dff9; upstreaming
+  // pending), so these buttons invoke the command directly with this label.
   let lastCreatedWindowLabel = $state(null);
 
   async function manualCreateBorderlessWindow() {
@@ -1228,12 +1229,13 @@ Expected behavior:
   // (click "Create Borderless Window" or "Create Transparent+Borderless" first).
   //
   // Why not win.setBackgroundColor(): @tauri-apps/api Window.setBackgroundColor
-  // (window.ts) does NOT pass `label` in the invoke payload (unlike setDecorations
-  // etc.), so the Rust command `get_window(window, label=None)` always resolves to
+  // (window.ts) used to omit `label` in the invoke payload (unlike setDecorations
+  // etc.), so the Rust command `get_window(window, label=None)` always resolved to
   // the main window (windowId=0), whose background is masked by the XComponent
-  // content layer. We invoke the command directly with the sub-window's label so
-  // it targets the correct Float sub-window. Upstream bug — should be fixed in
-  // @tauri-apps/api. See ohos-window-test-mapping.md row "window background color".
+  // content layer. Fixed in the fork (3ff13dff9 passes `label`); upstreaming
+  // pending. These buttons invoke the command directly with the sub-window's
+  // label so it targets the correct Float sub-window. See
+  // ohos-window-test-mapping.md row "window background color".
   async function manualSetBackgroundColor(color, label) {
     await wrapManual(`setBackgroundColor(${label})`, async () => {
       if (!lastCreatedWindowLabel) {
@@ -1720,7 +1722,7 @@ Expected behavior:
       const win = getCurrentWindow();
       // setMinSize → tao set_min_inner_size → setWindowLimits(min, 0, 0, 0)
       // ⚠️ LogicalSize is multiplied by scale_factor into px; device scale ≈ 2.0 → 1600×1200 logical = 3200×2400 px > the 3120×2080 screen
-      // exceeding the screen triggers a resize → sizeChange storm → appfreeze. Use PhysicalSize to pass px directly and avoid the conversion.
+      // exceeding the screen triggers a resize → sizeChange storm → appfreeze. (manualSetMinAndMaxSize below passes PhysicalSize px directly to avoid this conversion.)
       await win.setMinSize(new LogicalSize(1600, 1200));
       manualResult = `setMinSize(LogicalSize 1600×1200) dispatched on main window.\n\n⚠️ scale≈2.0 → 实际 px ≈ 3200×2400 > 屏幕 3120×2080,可能卡死。\n若未卡死:拖拽窗口不能小于 1600×1200 logical → PASS。\n卡死 → force-stop 重启,点 Reset Min Size 清除。`;
       onMessage(manualResult);
@@ -3656,7 +3658,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualFullscreen}>Toggle Fullscreen</button>
         <button class="btn" onclick={manualShowHide}>Hide/Show (2s restore)</button>
         <button class="btn" onclick={manualSetFocus}>setFocus</button>
-        <button class="btn" onclick={manualAlwaysOnTop}>Toggle AlwaysOnTop (partial)</button>
+        <button class="btn" onclick={manualAlwaysOnTop}>Toggle AlwaysOnTop</button>
         <button class="btn" onclick={manualContentProtection}>
           {contentProtectionOn ? 'Content Protection: ON → 点击关闭 (#115)' : 'Content Protection: OFF → 点击开启 (#115 截屏变黑)'}
         </button>

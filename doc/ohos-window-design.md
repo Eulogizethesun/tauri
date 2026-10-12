@@ -151,7 +151,7 @@
 | set_visible / is_visible | ✅ | hide：主窗口 hideAbility 后台、子窗口 minimize；show 恢复 | Hide/Show (2s restore) |
 | set_focus | ✅ | 子窗口 raiseToAppTop 置前；主窗口聚焦系统管理 | setFocus |
 | set_fullscreen / fullscreen | ✅ | 进入沉浸布局（隐藏状态栏/导航条）；退出还原。无独占全屏，映射 Borderless | Toggle Fullscreen |
-| set_always_on_top / is_always_on_top | ⚠️ partial | OHOS 无 z-order API，仅记录意图标志；Float 子窗口天然浮于主窗口 | Toggle AlwaysOnTop ⚠️partial |
+| set_always_on_top / is_always_on_top | ✅（API14+） | 真实调用 `setWindowTopmost`（跨应用常驻置顶，需 ohos.permission.WINDOW_TOPMOST，仅主窗口）；<API14 时 no-op 仅记标志。`is_always_on_top` 读值保留；Float 子窗口天然浮于主窗口 | Toggle AlwaysOnTop |
 | set_ignore_cursor_events | ✅ | ignore=true 时点击穿透（setWindowTouchable=false），可点到后面窗口 | Toggle IgnoreCursor (3s) |
 
 ### D 组 — 装饰按钮可用性 + focusable
