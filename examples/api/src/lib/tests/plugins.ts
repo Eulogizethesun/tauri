@@ -1650,13 +1650,18 @@ export const pluginTests: TestCase[] = [
   //  - the quantifier fix (some → length>0 && every) rejects mixed lists that some
   //    wrongly accepted (those sessions would pend forever).
   // No physical tag is required: the scenario completes through sync rejects plus one
-  // deliberately-pending legal write that is then cancelled by a follow-up scan
-  // (session replacement), settling every promise it created.
+  // deliberately-pending legal write. Review round F4 moved handleScan's techLists
+  // guard ahead of its failPending* block — an invalid scan must leave a legitimate
+  // session untouched — so the drain is two-phase: the invalid scan proves the
+  // guard's zero side effects, then a LEGAL scan performs the session replacement
+  // that settles the write promise. That scan ends the case armed-but-replaceable
+  // (the round-4 anti-goal was a locked session, not a live one); its promise is
+  // caught so a later replacement cannot surface as an unhandled rejection.
   {
     name: 'nfc techLists fail-fast + zero session residue (OHOS)',
     category: 'auto',
-    // 1s legal-write race + settles + retries fit the 5s default on a healthy
-    // device; 10s absorbs readerMode registration latency on a fresh install.
+    // 1s legal-write race + two 300ms settle windows fit the 5s default on a
+    // healthy device; 10s absorbs readerMode registration latency on a fresh install.
     timeout: 10000,
     async fn() {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -1742,15 +1747,32 @@ export const pluginTests: TestCase[] = [
         );
       }
 
-      // ⑥ drain: a follow-up scan replaces the session — it fails the pending
-      // legal write ('Write cancelled by a new scan request', settling that
-      // promise) and then rejects itself on the same techLists guard, leaving
-      // no armed session behind.
+      // ⑥ guard-order proof (review F4: validate BEFORE cancelling — an
+      // invalid request must not disturb a legitimate session): the drain
+      // scan still rejects with the same BAD_MSG, but the pending legal
+      // write must stay UNSETTLED — the pre-F4 order settled it here
+      // ('cancelled' from a request that armed nothing in return).
       msg = await rejectMsg(
         'scan [[NfcBarcode]] (drain)',
         invoke('plugin:nfc|scan', { kind: { ndef: { techLists: [[TECH_NFC_BARCODE]] } } })
       );
       assert(msg.includes(BAD_MSG), `drain scan unexpected reject: ${msg}`);
+      await new Promise((r) => setTimeout(r, 300));
+      if (legalRejected !== null) {
+        throw new Error(
+          `invalid scan settled the legitimate pending write (F4 guard-order regression): ${legalRejected}`
+        );
+      }
+
+      // ⑦ session replacement with a LEGAL scan: it fails the pending legal
+      // write ('Write cancelled by a new scan request'), settling that
+      // promise — the round-4 lock-free proof. The scan itself stays pending
+      // (no tag nearby); its promise is caught so a later replacement cannot
+      // surface as an unhandled rejection. Note a write cannot drain here:
+      // while a session is pending, handleWrite rejects with
+      // 'connected tag not found' — a legal scan is the only replacement.
+      const drainScan = invoke('plugin:nfc|scan', { kind: { ndef: {} } });
+      drainScan.catch(() => undefined);
       await new Promise((r) => setTimeout(r, 300));
       if (legalRejected === null) {
         throw new Error('pending legal write was never settled by the session replacement');
