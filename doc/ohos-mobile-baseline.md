@@ -1,13 +1,13 @@
 # OHOS mobile 形态基线（Mate 70 真机，2026-10-08/09）
 
-> 内部验证记录。桌面（2in1）形态基线见 `ohos-test-coverage.md` 各轮与 2026-10-08 round-5（310 例 305✅）；本文记录 phone 形态基线的建立过程、修复链与终态。报告文件出处：`examples/api/device-report-1009-mobile-r8.md`（mobile 终态）、`examples/api/device-report-1009-desktop.md`（桌面零回归复验）。
+> 内部验证记录。桌面（2in1）形态基线见 `ohos-test-coverage.md` 各轮与 2026-10-08 round-5（310 例 305✅）；本文记录 phone 形态基线的建立过程、修复链与终态。报告文件出处：`examples/api/device-report-1009-mobile-r8.md`（r7/r8 时代）、`examples/api/device-report-1013-mobile.md`（2026-10-13 检视修复批终验，313 例）、`examples/api/device-report-1009-desktop.md`（桌面零回归复验）。
 
 ## 一、概述
 
 - **设备**：Mate 70（CLS-AL00，API 26，物理屏 1216×2688 px）
-- **套件**：examples/api 自动化套件 mobile 形态（`OHOS_DEVICE_TYPE=mobile`，entry_mobile 模块），311 例
+- **套件**：examples/api 自动化套件 mobile 形态（`OHOS_DEVICE_TYPE=mobile`，entry_mobile 模块），r1-r8 时代 311 例；2026-10-13 检视修复批起 313 例（+2 桌面专属 `skipOnMobile`）
 - **终态结论**：
-  - mobile：**167✅ / 0❌ / 144⏭**（NFC 开启后 r7/r8 双跑稳定，footer 完整落位）
+  - mobile：**167✅ / 0❌ / 146⏭**（313 例，2026-10-13 检视修复批终验 r9，`examples/api/device-report-1013-mobile.md`；r7/r8 311 例时代为 167✅/0❌/144⏭ 双跑稳定）
   - 桌面零回归：2026-10-09 HAD-W32 复验 **305✅ / 0❌ / 6⏭**（311 例），与 2026-10-08 round-5 基线（310 例 305✅/0❌/5⏭）✅/❌ 完全持平；唯一差异 = 新增 #137 NFC 用例在无 NFC 硬件的 HAD-W32 上按设计 skip（skip 理由串明示"needs an NFC-capable device"）
 
 ## 二、轨迹
@@ -18,6 +18,7 @@
 | r5（修复链落位后） | 311 | 166 | 2 | 143 | footer 首次完整出现；2❌ = #294/#295 setInnerSize 5s 超时（后改 skip） |
 | r6（终验） | 311 | 166 | 0 | 145 | **mobile 套件零失败收官**，exit 0；#291/#292 fail-fast 理由串完整落位 |
 | r7/r8（NFC on） | 311 | 167 | 0 | 144 | #137 ⏭→✅（1382ms）；含弹窗钳制修复复验（7 行 Phone clamp 日志） |
+| r9（检视修复批终验，2026-10-13） | 313 | 167 | 0 | 146 | 首跑 166✅/1❌（#138 步⑥：drain 步骤仍编码 F4 前的 scan 守卫顺序——非法 scan 不再结算挂起写入）；用例适配（⑥证守卫零副作用+⑦合法 scan 结算）后复跑零失败；force 前台重注册链实机复核（onForeground→notifyForeground→readerMode off/on 对） |
 | 桌面复验（HAD-W32） | 311 | 305 | 0 | 6 | 2026-10-09；零回归（见 §一） |
 
 ## 三、r1 138❌ 四类定性
@@ -36,7 +37,8 @@
 
 ## 五、NFC 专项
 
-- **自动用例**：NFC 开启后 #137 techLists fail-fast 全链首跑 ✅（NfcBarcode 单/混 scan 双拒、write 双拒、重复 write 零残留、合法 write 无标签正确 pending、被 drain scan 结算 cancelled）；2in1 无 NFC 硬件从未跑过此链。
+- **自动用例**：NFC 开启后 #138 techLists fail-fast 全链 ✅（NfcBarcode 单/混 scan 双拒、write 双拒、重复 write 零残留、合法 write 无标签正确 pending）；2in1 无 NFC 硬件从未跑过此链。drain 语义随检视轮 F4（scan 守卫前置）两段化：⑥非法 scan 证守卫零副作用（挂起合法写入不被触碰）、⑦合法 scan 做会话替换结算（写入收 'cancelled'）——会话 pending 时合法 write 被 'connected tag not found' 拒，合法 scan 是唯一替换路径；⑦收尾留 armed-but-replaceable 会话（promise 已挂 catch），后续请求可随时替换。
+- **前台 force 重注册（检视轮 F1 修复实机复核）**：后台 ≥30s（cgroup 冻结窗）后回前台，`EntryAbility onForeground → [PluginManager] notifyForeground → [NfcPlugin] readerMode unregistered + registered` force 对完整落位（2026-10-13 11:19:46，后台 46s；同日上午两次自然熄屏/亮屏周期同序列）——armed 会话的注册丢失可重建。
 - **物理标签 scan**：✅ `{id:[187,74,24,163], kind:["IsoDep","NfcA","NfcA","MifareClassic","Ndef"], records:[]}`，发现→派发→resolve→readerMode 干净注销全链 <100ms。
 - **物理标签 write**：❌ 已定性为**平台限制非 port bug**——标签为双协议门禁卡（Mifare Classic 家族）；发现期 NDEF 探测成功于 MifareClassic 通道，但 `ndefTag.connect()` 落在 index 0 IsoDep 通道，而 OHOS `TagSession.connect()` 签名 `connect(): void` **无 tech 参数**（SDK tagSession.d.ts:85，弃用版 connectTag() 同样无参），无法选通道 → 该通道上标签非 NDEF → writeNdef 拒绝（3100201）。华为官方确认此点；建议的 MifareClassicTag 裸写扇区方案（重实现 MAD/TLV/鉴权）超出插件合理范围。标准单协议 NDEF 标签（NTAG213/215/216）上 write 应正常，无空白贴纸可实证，**以披露收口**。
 - **`ParseNdefParamInner: Wrong argument type. Number Array expected.` 告警 = 良性**：OHOS `createNdefMessage` 双重载（`number[]` 在前 / `NdefRecord[]` 在后），native 先探测 number[] 重载失败打日志、再匹配 NdefRecord[] 重载成功（无 401 抛出，流程继续）。
@@ -56,6 +58,6 @@
 
 - mobile 上 app 被冻结先查 SUSPEND_MANAGER（FreezeFreezeUnit/MinimizeUIAbilityBySCB/LifecycleDetectTimeoutProc）而非 faultlog；被冻测试的 duration 就是冻结窗口定位法
 - 任何测试调 startAbility/开设置页/launch 别的 ability 都会把调用方打到后台——手机上等于判死刑，须前置形态门控
-- info 级日志（含 ArkTS console.info）不进 hilog，取证用 warn/error；报告 footer（cmd.rs Rust 侧）是跑完判据
+- webview（前端 JS）console.log 不进 hilog，ArkTS console.info/warn/error 可捕获（JSAPP 域）；报告 footer（cmd.rs Rust 侧）是跑完判据
 - `display.getDefaultDisplaySync().width/height` = 物理 px；tao 送 ArkTS 的几何值同单位可直接 min()
 - 构建 stronghold 依赖需 `SODIUM_LIB_DIR` 指向预编译库（skill env.sh 已带守卫自动设置）
