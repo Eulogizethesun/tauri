@@ -250,7 +250,7 @@ Phase 5 D4 落地时复验）；spawn 机制已由同形 want 的 aa start 直�
       'decorations'，与 set-fullscreen/set-blur 委托先例同式），openharmony-ability
       plugins/window/WindowPlugin.ets。新增自动用例 `window Float kind-branch ops`（
       window-ops.ts #293：decorated Float 起点→setDecorations 假/真镜像读回→4 flag
-      假/真读回→minimize 真实 isMinimized 断言（读 ArkTS 活状态）→show 恢复→
+      假/真读回→minimize isMinimized 读回断言（镜像 round-trip，非独立读 ArkTS 活状态——与 window-ops.ts 该用例内注释同口径；OS 层生效证据属手动章 hilog）→show 恢复→
       setBackgroundColor smoke→close）；套件 **297✅/0❌/2⏭（299 例，基线 296+1 新例
       零回归）**；hilog 证据：`Decorations set to false/true for Float window 13
       (LocalStorage)`（修复生效）、`showWindowMethod 13 OK`×2、setDecorationFlags

@@ -85,8 +85,8 @@
 
   // driver blind-invocation + side-effect replay go last by design (S2 coverage suite).
   // Gating: only coverage-verification builds (cov-build.sh with VITE_COVERAGE_TESTS=true) inject the coverage batch;
-  // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 311-case set
-  // (311 = all non-coverage batches; ground truth is the generated test-report row count, 2026-10-09 HAD-W32: 305 passed / 6 skipped / 0 failed).
+  // VITE_AUTOTEST (auto-run tests) does not inject it, so the plain demo keeps the standard 313-case set
+  // (313 = all non-coverage batches; ground truth is the generated test-report row count, 2026-10-13 HAD-W32: 307 passed / 6 skipped / 0 failed).
   // The suite is authored against the desktop (PC/2in1) form; on an OHOS mobile-form build desktop-only
   // domains are skipped with a reason via skipOnMobile/desktopOnlySuite (get_device_form command):
   // menu/tray suites whole (desktop-form features), upstream cfg(desktop) window commands
@@ -97,8 +97,10 @@
   // The api-gap batch (S10) runs last: it contains destructive ops (app hide/show, settings-page jumps) and must come after all other batches.
   // The risk-supplement batch (2026-09-04) sits after windowOps and before the coverage batch:
   // the three risk-point follow-ups (fs watcher / shell subprocess), skipped on platforms other than OHOS,
-  // appended at the tail to keep the numbering stable (the suite now spans #1-#311; the 2026-10-09
-  // NFC batch was later inserted at #137, shifting subsequent case numbers by one).
+  // appended at the tail to keep the numbering stable (the suite now spans #1-#313; the 2026-10-09
+  // NFC batch was later inserted at #137, and the 2026-10-12 review-fix cases at #50
+  // (clearAllBrowsingData routing) and #297 (setSizeConstraints min-floor read-back),
+  // each shifting subsequent case numbers by one).
   // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
   // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];

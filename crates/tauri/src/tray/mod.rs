@@ -335,6 +335,8 @@ impl<R: Runtime> TrayIconBuilder<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux:** Unsupported.
+  /// - **OHOS**: Stored without runtime effect — left-click presentation is system-controlled
+  ///   (a QuickOperation popup; see `quick_operation`).
   #[deprecated(
     since = "2.2.0",
     note = "Use `TrayIconBuilder::show_menu_on_left_click` instead."
@@ -349,6 +351,8 @@ impl<R: Runtime> TrayIconBuilder<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux:** Unsupported.
+  /// - **OHOS**: Stored without runtime effect — left-click presentation is system-controlled
+  ///   (a QuickOperation popup; see `quick_operation`).
   pub fn show_menu_on_left_click(mut self, enable: bool) -> Self {
     self.inner = self.inner.with_menu_on_left_click(enable);
     self
@@ -683,6 +687,8 @@ impl<R: Runtime> TrayIcon<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux**: Unsupported.
+  /// - **OHOS**: No-op — the value is never forwarded to the platform; left-click presentation
+  ///   is system-controlled (a QuickOperation popup; see `quick_operation`).
   pub fn set_show_menu_on_left_click(&self, #[allow(unused)] enable: bool) -> crate::Result<()> {
     #[cfg(any(target_os = "macos", windows))]
     run_item_main_thread!(self, |self_: Self| {
