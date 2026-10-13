@@ -280,6 +280,9 @@ export const windowOpsTests: TestCase[] = [
   {
     name: 'window.createFloatWindowRacyAttrs (float creation race)',
     category: 'auto',
+    // 2.4s fixed settle + read-back polls ≈ 4s observed on the 2in1 — the same
+    // polling variance that tips the sibling cases past the 5s default.
+    timeout: 10000,
     async fn() {
       const label = 'test-float-racy-' + Date.now();
       const result = await invoke<{
@@ -334,6 +337,9 @@ export const windowOpsTests: TestCase[] = [
   {
     name: 'window.setInnerSize actually resizes (main window)',
     category: 'auto',
+    // ~1s of fixed settle + resize read-back polling ≈ 4s observed on the 2in1;
+    // explicit budget keeps the read-back assertions off the 5s default line.
+    timeout: 10000,
     async fn() {
       await skipOnMobile('phone main window is full-screen: resize-inner cannot land (tao warns "precise decor unavailable" — Mate 70 r5-live.log ×10) — the exact-readback acceptance of issue#97 needs freeform resize, a PC/2in1 capability; the generic setSize path stays covered by the earlier window.set_size case');
       if (!(await mainWindowResizable())) return;
@@ -437,6 +443,11 @@ export const windowOpsTests: TestCase[] = [
     // clearing with null must restore unconstrained resize (the cache is not wedged).
     name: 'window.setSizeConstraints runtime min-floor clamps (and null clears)',
     category: 'auto',
+    // ~2.2s of fixed settle delays + three read-back polls put the operating
+    // point at ~5s — past the 5s default (observed 5023ms passing, 5989ms
+    // timing out on the same device/code). Explicit budget per the G-series
+    // rule for cases with ≥3s of internal delay.
+    timeout: 10000,
     async fn() {
       await skipOnMobile('phone main window is full-screen: the min-floor clamp of setSizeConstraints needs a freeform-resizable main window (PC/2in1 capability), same policy as the setInnerSize cases');
       if (!(await mainWindowResizable())) return;
