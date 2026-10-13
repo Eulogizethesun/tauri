@@ -409,22 +409,33 @@ impl<T: UserEvent> Context<T> {
       })
       .unwrap_or((None, false));
 
-    send_user_message(
-      self,
-      Message::CreateWindow(
+    let handler: CreateWindowClosure<T> = Box::new(move |event_loop| {
+      create_window(
         window_id,
-        Box::new(move |event_loop| {
-          create_window(
-            window_id,
-            webview_id.unwrap_or_default(),
-            event_loop,
-            &context,
-            pending,
-            after_window_creation,
-          )
-        }),
-      ),
-    )?;
+        webview_id.unwrap_or_default(),
+        event_loop,
+        &context,
+        pending,
+        after_window_creation,
+      )
+    });
+
+    // OHOS: wait for the creation outcome so a failed window creation
+    // propagates as an Err to `WebviewWindowBuilder::build` (e.g. tao
+    // rejecting an explicit Float kind for the first window) instead of
+    // resolving Ok and registering a label-only zombie window in the
+    // manager. Main-thread callers are handled inline by
+    // `send_user_message` (the reply is already queued when it returns);
+    // other callers block exactly like the getter dispatchers do. Other
+    // platforms keep the upstream fire-and-forget semantics.
+    #[cfg(target_env = "ohos")]
+    {
+      let (sender, receiver) = channel();
+      send_user_message(self, Message::CreateWindow(window_id, handler, sender))?;
+      receiver.recv().map_err(|_| Error::CreateWindow)??;
+    }
+    #[cfg(not(target_env = "ohos"))]
+    send_user_message(self, Message::CreateWindow(window_id, handler))?;
 
     let dispatcher = WryWindowDispatcher {
       window_id,
@@ -1701,7 +1712,12 @@ pub enum Message<T: 'static> {
   Webview(WindowId, WebviewId, WebviewMessage),
   EventLoopWindowTarget(EventLoopWindowTargetMessage),
   CreateWebview(WindowId, CreateWebviewClosure),
-  CreateWindow(WindowId, CreateWindowClosure<T>),
+  CreateWindow(
+    WindowId,
+    CreateWindowClosure<T>,
+    #[cfg(target_env = "ohos")]
+    Sender<Result<()>>,
+  ),
   CreateRawWindow(
     WindowId,
     Box<dyn FnOnce() -> (String, TaoWindowBuilder) + Send>,
@@ -4524,6 +4540,22 @@ fn handle_user_message<T: UserEvent>(
         }
       }
     }
+    #[cfg(target_env = "ohos")]
+    // OHOS: reply with the creation outcome so `Context::create_window` can
+    // propagate a failure (e.g. tao rejecting an explicit Float kind for the
+    // first window) instead of resolving `build()` with a label-only zombie
+    // window — same reply-channel shape as `CreateRawWindow` below.
+    Message::CreateWindow(window_id, handler, sender) => match handler(event_loop) {
+      Ok(webview) => {
+        windows.0.borrow_mut().insert(window_id, webview);
+        sender.send(Ok(())).unwrap();
+      }
+      Err(e) => {
+        log::error!("{e}");
+        sender.send(Err(e)).unwrap();
+      }
+    },
+    #[cfg(not(target_env = "ohos"))]
     Message::CreateWindow(window_id, handler) => match handler(event_loop) {
       Ok(webview) => {
         windows.0.borrow_mut().insert(window_id, webview);

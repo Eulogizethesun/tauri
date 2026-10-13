@@ -1123,7 +1123,11 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
     WebviewUrl::App("hello.html".into()),
   )
   .title("UIAbility Racy Attrs Window")
+  // Creation-time geometry: consumed by the spawned-UIAbility path via
+  // startAbility StartOptions (tao#26 review follow-up F5) — asserted by the
+  // window-ops racy-attrs case (outer size/position readback after settle).
   .inner_size(700.0, 500.0)
+  .position(90.0, 70.0)
   .min_inner_size(400.0, 300.0)
   .ohos_window_kind(OHOSWindowKind::UIAbility);
   // `.decorations()` on the builder is a desktop-only API (cfg(desktop) impl

@@ -2488,12 +2488,23 @@ tauri::Builder::default()
     {
       let config = app.config();
       if let Some(tray_config) = &config.app.tray_icon {
+        let mut tray = TrayIconBuilder::with_id(
+          tray_config.id.clone().unwrap_or_else(|| "main".into()),
+        )
+        .icon_as_template(tray_config.icon_as_template);
+        // The menu-on-left-click config keys are unsupported on OHOS (see
+        // tray-icon's build-time warnings for the builder methods), and the
+        // config struct always materializes them from serde defaults —
+        // forwarding would trip that warning for every app that merely has
+        // a tray config. Skip the forward on OHOS: the attrs stay unset,
+        // which resolves to the same platform default (true).
+        #[cfg(not(target_env = "ohos"))]
         #[allow(deprecated)]
-        let mut tray =
-          TrayIconBuilder::with_id(tray_config.id.clone().unwrap_or_else(|| "main".into()))
-            .icon_as_template(tray_config.icon_as_template)
+        {
+          tray = tray
             .menu_on_left_click(tray_config.menu_on_left_click)
             .show_menu_on_left_click(tray_config.show_menu_on_left_click);
+        }
         if let Some(icon) = &app.manager.tray.icon {
           tray = tray.icon(icon.clone());
         }

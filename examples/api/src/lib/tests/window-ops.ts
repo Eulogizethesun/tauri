@@ -232,6 +232,7 @@ export const windowOpsTests: TestCase[] = [
       const win = await Window.getByLabel(label);
       assert(win, `window not found by label after settle: ${label}`);
       const before = await win.outerSize();
+      const beforePos = await win.outerPosition();
       await win.setSize(new LogicalSize(300, 200));
       await delay(800);
       const after = await win.outerSize();
@@ -259,11 +260,33 @@ export const windowOpsTests: TestCase[] = [
         `decorations(false) not applied: outer ${after.width}×${after.height} vs inner ` +
           `${inner.width}×${inner.height} (title bar present — issue 7 race)`
       );
+      // ④ creation-time geometry applied (tao#26 review follow-up F5 regression guard):
+      //    the builder's inner_size(700×500)/position(90,70) reach the spawned stage via
+      //    startAbility StartOptions (windowWidth/Height/Left/Top) instead of being dropped.
+      //    `before` was captured pre-setSize (the settled creation state). Physical =
+      //    logical × scale; ±64 tolerance absorbs the outer-rect (frame-included)
+      //    interpretation and WM placement adjustments, while a px/vp unit mix-up would
+      //    be off by the full scale factor.
+      const geoW = Math.round(700 * scale);
+      const geoH = Math.round(500 * scale);
+      assert(
+        Math.abs(before.width - geoW) <= 64 && Math.abs(before.height - geoH) <= 64,
+        `creation-time inner_size(700×500) not applied: outer ${before.width}×${before.height} physical ` +
+          `vs expected ~${geoW}×${geoH} (scale ${scale}) — spawned-stage geometry dropped (tao F5)`
+      );
+      const geoX = Math.round(90 * scale);
+      const geoY = Math.round(70 * scale);
+      assert(
+        Math.abs(beforePos.x - geoX) <= 48 && Math.abs(beforePos.y - geoY) <= 48,
+        `creation-time position(90,70) not applied: outer at ${beforePos.x},${beforePos.y} ` +
+          `vs expected ~${geoX},${geoY} (scale ${scale})`
+      );
       console.log(
         '[issue7-diag]',
         `ohos_id=${result.ohos_window_id} scale=${scale} setSize(300×200 logical) → ` +
           `outer ${after.width}×${after.height} / inner ${inner.width}×${inner.height} ` +
-          `(floor ${floorW}×${floorH} ENFORCED, borderless OK)`
+          `(floor ${floorW}×${floorH} ENFORCED, borderless OK, creation geo ` +
+          `${before.width}×${before.height}@${beforePos.x},${beforePos.y})`
       );
     },
   },
