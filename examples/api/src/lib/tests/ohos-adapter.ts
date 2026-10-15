@@ -1,4 +1,4 @@
-import type { TestCase } from '../test-runner';
+import { skipOnMobile, type TestCase } from '../test-runner';
 import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 
@@ -33,6 +33,7 @@ export const ohosAdapterTests: TestCase[] = [
     name: 'ohos-adapter.monitor.real-size',
     category: 'auto',
     async fn() {
+      await skipOnMobile('currentMonitor is upstream cfg(desktop) and absent from the mobile build');
       const m = await currentMonitor();
       assert(m !== null, 'currentMonitor returned null');
       assert(

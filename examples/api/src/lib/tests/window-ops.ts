@@ -1,13 +1,31 @@
-import type { TestCase } from '../test-runner';
+import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-runner';
 import { getCurrentWindow, currentMonitor, Window } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+
+/**
+ * Shared handling for the UIAbility-spawn tests: on a mobile-form build the
+ * spawn is rejected up front by tao's desktop-only gate (fail-fast instead of
+ * a forever-pending instance — multi-uiability-windows OQ1 keeps the mobile
+ * entry singleton). The command reports `mobile_form` + `mobile_fail_fast`
+ * so this records a skip; a desktop failure or a mobile-form build whose
+ * spawn unexpectedly succeeded (gate regression) fails loudly.
+ */
+function handleMobileFailFast(r: { mobile_form: boolean; mobile_fail_fast: string | null }): void {
+  if (!r.mobile_form) return;
+  assert(
+    r.mobile_fail_fast !== null,
+    'mobile-form build let the UIAbility spawn through (desktop-only gate regressed): ' +
+      JSON.stringify(r)
+  );
+  skip(`UIAbility spawn fail-fast on mobile form (desktop-only, tao gate): ${r.mobile_fail_fast}`);
+}
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
 }
 
-/// 仅校验调用不抛错。用于无 getter 可读回的能力（cursor/focus 等），
-/// **不**证明 OHOS 实际生效——效果需手动按钮验证。
+/// Only checks that the call does not throw. Used for capabilities with no getter to read back (cursor/focus, etc.):
+/// it does **not** prove the effect actually applies on OHOS — that requires manual button verification.
 async function smoke(fn: () => Promise<unknown>, label: string): Promise<void> {
   try {
     await fn();
@@ -18,9 +36,9 @@ async function smoke(fn: () => Promise<unknown>, label: string): Promise<void> {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/// 创建一个 Float 子窗口用于测试 resize/move。
-/// 主 UIAbility 窗口由系统管理，win.resize()/moveWindowTo() 被拒绝（no-op）；
-/// Float 子窗口可自由 resize/move（FloatPage resize 手柄亦证此）。
+/// Creates a Float sub-window for testing resize/move.
+/// The main UIAbility window is managed by the system; win.resize()/moveWindowTo() are rejected (no-op);
+/// Float sub-windows can be resized/moved freely (also proven by the FloatPage resize handle).
 async function createFloatWindow(label: string): Promise<Window> {
   await invoke('create_borderless_window', { windowId: label });
   await delay(600);
@@ -29,9 +47,9 @@ async function createFloatWindow(label: string): Promise<Window> {
   return w;
 }
 
-/// issue#97 验收口径是「精确相等、零容差」。轮询只消除 resize-inner 异步桥
-/// 往返的时序抖动（单次固定 delay 在慢路径下会读到旧值），不放松断言：
-/// 超时即 fail，报错带历次读值。
+/// issue#97's acceptance criterion is "exact equality, zero tolerance". Polling only removes the timing jitter of the resize-inner async bridge
+/// round trip (a single fixed delay can read a stale value on the slow path); it does not loosen the assertion:
+/// timeout means fail, and the error carries the series of observed values.
 async function readBackEquals(
   read: () => Promise<{ width: number; height: number }>,
   w: number,
@@ -52,31 +70,66 @@ async function readBackEquals(
   }
 }
 
-/// 主窗口 resize 仅在自由悬浮形态（PC/2in1）生效；手机全屏主窗是系统级
-/// no-op（见 doc/ohos-window-test-mapping.md 窗口大小调整行）。outerSize≈
-/// 显示器视为全屏形态，跳过主窗尺寸用例（与 maximize 用例的 alreadyMax
-/// 早退同策；代价是 PC 最大化状态下也会跳过）。
+/// The constraints-clamp acceptance of the setSizeConstraints case: the read-back must be
+/// AT LEAST the floor in both dimensions ("边界不被超" — a request below the floor comes back
+/// clamped, never under). Same polling contract as readBackEquals: timeout means fail and the
+/// error carries the observed series.
+async function readBackAtLeast(
+  read: () => Promise<{ width: number; height: number }>,
+  minW: number,
+  minH: number,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const seen: string[] = [];
+  const start = Date.now();
+  for (;;) {
+    const cur = await read();
+    if (cur.width >= minW - 1 && cur.height >= minH - 1) return; // -1: physical rounding slack
+    seen.push(`${cur.width}×${cur.height}`);
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`${label}: 期望 ≥ ${minW}×${minH}，${timeoutMs}ms 内读回 ${seen.join(' → ')}`);
+    }
+    await delay(200);
+  }
+}
+
+/// Main-window resize only takes effect in the free-floating form factor (PC/2in1); on phone the fullscreen main window is a system-level
+/// no-op (see the window-resize row in doc/ohos-window-test-mapping.md). outerSize ≈
+/// display counts as the fullscreen form factor, so skip the main-window size case (same policy as the maximize case's alreadyMax
+/// early exit; the tradeoff is it also skips when the PC window is maximized).
 async function mainWindowResizable(): Promise<boolean> {
   const win = getCurrentWindow();
-  const mon = await currentMonitor();
-  if (!mon) return true; // 无显示器信息时按可 resize 尝试
+  // currentMonitor is upstream cfg(desktop): on an OHOS mobile-form build the
+  // invoke rejects ("Plugin not found: window"). Treat that as "no monitor
+  // info" — the same optimistic branch as a null monitor on desktop — so the
+  // setInnerSize cases themselves (setSize IS compiled for mobile) still run
+  // and grow the mobile baseline instead of being skipped.
+  let mon: Awaited<ReturnType<typeof currentMonitor>> = null;
+  try {
+    mon = await currentMonitor();
+  } catch {
+    mon = null;
+  }
+  if (!mon) return true; // no monitor info: optimistically assume resizable
   const outer = await win.outerSize();
   return !(outer.width >= mon.size.width * 0.95 && outer.height >= mon.size.height * 0.95);
 }
 
-/// 诚实测试：只断言能从 JS 真实观测到的效果。
-/// - setInnerSize：主窗口严格读回（resize 触发尺寸回调，读回可靠）。
-/// - setOuterPosition：smoke（不抛错）。moveWindowTo 只改位置、不触发我们监听的
-///   rect 回调，outer_position() 读回恒为旧值，无法从 JS 验证移动效果（见 #143 注释）。
-/// - maximize：主窗口 innerSize 接近显示器。
-/// - cursor / focus / focusable / ignoreCursor / 装饰 flag：无 getter 或主窗口 no-op，
-///   仅 smoke（不抛错），效果靠手动按钮验证。
+/// Honest testing: only assert effects that can genuinely be observed from JS.
+/// - setInnerSize: strict read-back on the main window (resize fires the size callback, so read-back is reliable).
+/// - setOuterPosition: smoke (no throw). moveWindowTo only changes position and does not fire the rect callback we listen to,
+///   so outer_position() always reads back the old value and the move effect cannot be verified from JS (see the #143 comment).
+/// - maximize: main-window innerSize approaches the display size.
+/// - cursor / focus / focusable / ignoreCursor / decoration flags: no getter, or no-op on the main window,
+///   so smoke only (no throw); effects are verified via manual buttons.
 export const windowOpsTests: TestCase[] = [
   // ─── Diagnosis: setFullscreen real behavior on the main window (run first so it always executes) ───
   {
     name: 'window.setFullscreen diag (main window)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the isFullscreen/setFullscreen window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       const diag: string[] = [];
       const log = (s: string) => { diag.push(s); console.log('[diag-fs]', s); };
@@ -99,58 +152,238 @@ export const windowOpsTests: TestCase[] = [
       // no-op or resolve-but-noop; verify via the printed values, not an assert).
     },
   },
-  // ─── 多 UIAbility 实例 (startAbility 路径) —— 放最前，确保跑得到 ───
-  // 创建单个 UIAbility 实例，等 3s 让新实例加载 hello.html 并发 IPC。
-  // 验证 webview 注册成功 + 主实例存活。IPC label 诊断由 protocol.rs 日志覆盖。
+  // ─── Multi-UIAbility instances (startAbility path) — placed first to make sure they actually run ───
+  // Create a single UIAbility instance, wait 3s for the new instance to load hello.html and send IPC.
+  // Verifies webview registration succeeded + the main instance is alive. IPC label diagnostics are covered by protocol.rs logging.
   {
     name: 'window.createUIAbilityWindow (webview registered + new instance IPC)',
     category: 'auto',
+    // UIAbility spawn (startAbility handshake + instance load) varies 1-2.5s
+    // (slower on a fresh install); with the 3s settle delay below the total
+    // walks past the runner's 5s default. Same for the racy-attrs repro below.
+    timeout: 10000,
     async fn() {
-      const label = 'uiability-' + Date.now();
+      // "test-" prefix matches the run-app capability window patterns ([test-*])
+      // so the spawned instance's webview is allowed to invoke commands.
+      const label = 'test-uiability-' + Date.now();
       const result = await invoke<{
         label: string;
         webview_acquired: boolean;
         all_webview_labels: string[];
+        mobile_form: boolean;
+        mobile_fail_fast: string | null;
       }>('create_ui_ability_window', { windowId: label });
+
+      // Mobile form: desktop-only gate rejected the spawn → recorded skip.
+      handleMobileFailFast(result);
 
       assert(
         result.webview_acquired === true,
         `webview not acquired: label=${result.label}, all_labels=${JSON.stringify(result.all_webview_labels)}`
       );
 
-      // 等 3s 让新实例加载 hello.html，页面 JS 发 IPC（sentry 等）
-      // 如果新实例 WebView 的 IPC label 不匹配，会在 hilog 报
-      // "failed to acquire webview reference" + protocol.rs 打印 label
+      // Wait 3s for the new instance to load hello.html and for page JS to send IPC (sentry, etc.)
+      // If the new instance's WebView IPC label does not match, hilog reports
+      // "failed to acquire webview reference" + protocol.rs prints the label
       await delay(3000);
 
-      // 主实例仍存活
+      // main instance still alive
       await smoke(() => invoke('dummy_command'), 'dummy_command (post-create alive check)');
     },
   },
-  // ─── 真实读回验证（Float 子窗口） ───
+  // ─── issue-7 repro (doc/OHOS窗口遗留问题.md issue 7): creation-time property race on spawned-UIAbility windows ───
+  // decorations(false) + min_inner_size(400,300) + set_decorations(false) right after build —
+  // all three set-downs reach ArkTS before the startAbility handshake completes. Bug evidence: hilog's
+  // 'Unknown OS sub-window' warn + the window having a system title bar / no size floor (check via hilog/screenshots);
+  // this case pins the trigger path and diagnoses whether the min-size floor takes effect (setSize below the floor, then read back).
+  {
+    name: 'window.createUIAbilityWindowRacyAttrs (issue-7 repro)',
+    category: 'auto',
+    // 3s replay settle + 0.8s resize settle + spawn: 4.9s-5.9s observed —
+    // the 5s runner default left a 33ms margin on 2026-09-28 run h and tipped
+    // over on the fresh-install run i. 15s keeps the assertions intact while
+    // absorbing spawn variance.
+    timeout: 15000,
+    async fn() {
+      const label = 'test-uia-racy-' + Date.now();
+      const result = await invoke<{
+        label: string;
+        webview_acquired: boolean;
+        ohos_window_id: number;
+        mobile_form: boolean;
+        mobile_fail_fast: string | null;
+      }>('create_ui_ability_window_racy_attrs', { windowId: label });
+      // Mobile form: desktop-only gate rejected the spawn → recorded skip
+      // (the issue-7 racy-attrs assertions are desktop-only semantics).
+      handleMobileFailFast(result);
+      assert(
+        result.webview_acquired === true,
+        `webview not acquired: ${JSON.stringify(result)}`
+      );
+      // Wait 3s so the queued tao-side properties replay after the new instance's stage registers (issue-7 fix) and the webview settles.
+      await delay(3000);
+      // Hard assertion (2026-09-17 on-device verdict: setWindowLimits clamps programmatic resizes;
+      // after the fix the floor is ENFORCED and outer==inner with no title bar — doc/OHOS窗口遗留问题.md issue 7).
+      // Size semantics (D2): setWindowLimits clamps the outer rect (the win.resize target),
+      // innerSize = outer − title bar; the criterion converts outerSize × scaleFactor into physical pixels
+      // and compares them against the 400×300 logical floor (the first probe round compared physical innerSize directly against the logical floor,
+      // which would misjudge 300×200@1.9x as ENFORCED — fixed).
+      const { LogicalSize } = await import('@tauri-apps/api/dpi');
+      const win = await Window.getByLabel(label);
+      assert(win, `window not found by label after settle: ${label}`);
+      const before = await win.outerSize();
+      const beforePos = await win.outerPosition();
+      await win.setSize(new LogicalSize(300, 200));
+      await delay(800);
+      const after = await win.outerSize();
+      const inner = await win.innerSize();
+      const scale = await win.scaleFactor();
+      const floorW = Math.floor(400 * scale);
+      const floorH = Math.floor(300 * scale);
+      // ① setSize must have an effect (guards the floor assertion against false green: if resize is entirely broken and the window stays at
+      //    its original size (>= the floor), ② would pass spuriously)
+      assert(
+        after.width !== before.width || after.height !== before.height,
+        `setSize(300×200) had no effect: outer ${before.width}×${before.height} → ${after.width}×${after.height}`
+      );
+      // ② 400×300 logical floor clamping (issue-7 regression guard: min_inner_size set at creation time is no longer lost)
+      assert(
+        after.width >= floorW - 2 && after.height >= floorH - 2,
+        `min_inner_size(400×300) floor not enforced: outer ${after.width}×${after.height} physical ` +
+          `< ${floorW}×${floorH} (scale ${scale}) — creation-time attributes lost to the ` +
+          `stage-registration race (issue 7)`
+      );
+      // ③ no title bar (issue-7 regression guard: decorations(false) set at creation time is no longer lost) —
+      //    a decorated window has inner = outer − title bar; borderless makes the two equal
+      assert(
+        Math.abs(after.width - inner.width) <= 2 && Math.abs(after.height - inner.height) <= 2,
+        `decorations(false) not applied: outer ${after.width}×${after.height} vs inner ` +
+          `${inner.width}×${inner.height} (title bar present — issue 7 race)`
+      );
+      // ④ creation-time geometry applied (tao#26 review follow-up F5 regression guard):
+      //    the builder's inner_size(700×500)/position(90,70) reach the spawned stage via
+      //    startAbility StartOptions (windowWidth/Height/Left/Top) instead of being dropped.
+      //    `before` was captured pre-setSize (the settled creation state). Physical =
+      //    logical × scale; ±64 tolerance absorbs the outer-rect (frame-included)
+      //    interpretation and WM placement adjustments, while a px/vp unit mix-up would
+      //    be off by the full scale factor.
+      const geoW = Math.round(700 * scale);
+      const geoH = Math.round(500 * scale);
+      assert(
+        Math.abs(before.width - geoW) <= 64 && Math.abs(before.height - geoH) <= 64,
+        `creation-time inner_size(700×500) not applied: outer ${before.width}×${before.height} physical ` +
+          `vs expected ~${geoW}×${geoH} (scale ${scale}) — spawned-stage geometry dropped (tao F5)`
+      );
+      const geoX = Math.round(90 * scale);
+      const geoY = Math.round(70 * scale);
+      assert(
+        Math.abs(beforePos.x - geoX) <= 48 && Math.abs(beforePos.y - geoY) <= 48,
+        `creation-time position(90,70) not applied: outer at ${beforePos.x},${beforePos.y} ` +
+          `vs expected ~${geoX},${geoY} (scale ${scale})`
+      );
+      console.log(
+        '[issue7-diag]',
+        `ohos_id=${result.ohos_window_id} scale=${scale} setSize(300×200 logical) → ` +
+          `outer ${after.width}×${after.height} / inner ${inner.width}×${inner.height} ` +
+          `(floor ${floorW}×${floorH} ENFORCED, borderless OK, creation geo ` +
+          `${before.width}×${before.height}@${beforePos.x},${beforePos.y})`
+      );
+    },
+  },
+  // ─── Float window creation-time race (doc/OHOS窗口遗留问题.md issue-7 addendum) ───
+  // create_os_window is fire-and-forget: the Rust side pre-allocates an id and returns, while the ArkTS
+  // WindowManager.createSubWindow chain (createSubWindowWithOptions →
+  // loadContentByName → FloatPage load) is still in progress. A set_size(260×180) issued immediately after build()
+  // raced with the creation chain; pre-fix it arrived before the window was registered in WindowManager.windows
+  // → requireWindow threw "Unknown OS sub-window" → the op was silently dropped
+  // (the family behind the 22 warns per round). Fix criterion: PENDING_FLOAT_WINDOWS queues during the handshake,
+  // and replays after notifyFloatWindowRegistered (at createSubWindow promise END).
+  // setSize is issued immediately by a Rust-side command — the JS-side setSize races the tauri IPC
+  // (window-not-found), not the ArkTS registration, so it cannot reproduce this race (issue-7 lesson).
+  {
+    name: 'window.createFloatWindowRacyAttrs (float creation race)',
+    category: 'auto',
+    // 2.4s fixed settle + read-back polls ≈ 4s observed on the 2in1 — the same
+    // polling variance that tips the sibling cases past the 5s default.
+    timeout: 10000,
+    async fn() {
+      const label = 'test-float-racy-' + Date.now();
+      const result = await invoke<{
+        label: string;
+        webview_acquired: boolean;
+        ohos_window_id: number;
+      }>('create_float_window_racy_attrs', { windowId: label });
+      assert(
+        result.webview_acquired === true,
+        `webview not acquired: ${JSON.stringify(result)}`
+      );
+      // Wait 2s: notify is only sent at ArkTS createSubWindow promise END (including the FloatPage load),
+      // and the queued set_size replay needs time.
+      await delay(2000);
+      const win = await Window.getByLabel(label);
+      assert(win, `window not found by label after settle: ${label}`);
+      const outer = await win.outerSize();
+      const scale = await win.scaleFactor();
+      const targetW = Math.round(260 * scale);
+      const targetH = Math.round(180 * scale);
+      const buildW = Math.round(500 * scale);
+      const buildH = Math.round(400 * scale);
+      // ① must leave the constructed size (guards against false green: if Float resize is entirely broken and the window stays at
+      //    500×400, ② fails on the "close to target" criterion, but ① gives the more accurate
+      //    failure semantics — resize never took effect, rather than a race loss)
+      assert(
+        Math.abs(outer.width - buildW) > 8 || Math.abs(outer.height - buildH) > 8,
+        `window stuck at builder size: outer ${outer.width}×${outer.height} ≈ ` +
+          `${buildW}×${buildH} physical — the racing setSize never took effect at all`
+      );
+      // ② the immediately-issued set_size (260×180 logical) is queued and replayed even when it arrives before registration
+      //    (float race fix regression guard; a ±8 physical-pixel tolerance absorbs rounding differences)
+      assert(
+        Math.abs(outer.width - targetW) <= 8 && Math.abs(outer.height - targetH) <= 8,
+        `immediate set_size(260×180 logical) lost to float creation race: outer ` +
+          `${outer.width}×${outer.height} physical ≠ ${targetW}×${targetH} ` +
+          `(scale ${scale}) — op dropped pre-registration (issue-7 addendum)`
+      );
+      console.log(
+        '[float-race-diag]',
+        `ohos_id=${result.ohos_window_id} scale=${scale} outer ` +
+          `${outer.width}×${outer.height} physical = 260×180 logical REPLAYED, ` +
+          `builder 500×400 overridden`
+      );
+      // Cleanup: destroy goes through Window::drop → unregister_pending_float (a late notify is
+      // made harmless), which also covers the V5 observation path
+      await win.destroy();
+      await delay(400);
+    },
+  },
+  // ─── Real read-back verification (Float sub-window) ───
   {
     name: 'window.setInnerSize actually resizes (main window)',
     category: 'auto',
+    // ~1s of fixed settle + resize read-back polling ≈ 4s observed on the 2in1;
+    // explicit budget keeps the read-back assertions off the 5s default line.
+    timeout: 10000,
     async fn() {
+      await skipOnMobile('phone main window is full-screen: resize-inner cannot land (tao warns "precise decor unavailable" — Mate 70 r5-live.log ×10) — the exact-readback acceptance of issue#97 needs freeform resize, a PC/2in1 capability; the generic setSize path stays covered by the earlier window.set_size case');
       if (!(await mainWindowResizable())) return;
       const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
       const win = getCurrentWindow();
       const orig = await win.innerSize();
       const sf = await win.scaleFactor();
-      // demo 主窗在 desktop cfg 下带 min_inner_size(600,400)（src-tauri lib.rs），
-      // tao 建窗即换算成物理像素下发 setWindowLimits；不清掉的话小目标会被
-      // 钳制（参考 PC density 1.9 → 最小 1140×760）。测完还原。
+      // The demo main window carries min_inner_size(600,400) under desktop cfg (src-tauri lib.rs);
+      // tao converts it to physical pixels and issues setWindowLimits at window creation; if not cleared, small targets get
+      // clamped (PC density 1.9 → a minimum of 1140×760). Restored after the test.
       await win.setMinSize(null);
-      // set-limits 是 fire-and-forget 桥调用（系统调用完成不早于 ack 有保证），
-      // 等 600ms 让解除先落地再 resize——否则小目标可能被旧 min 抢先钳住
-      // （setWindowLimits 完成顺序 vs resize 在系统内无顺序保证）。
+      // set-limits is a fire-and-forget bridge call (the system call completing no earlier than the ack is guaranteed),
+      // so wait 600ms for the removal to land before resizing — otherwise the small target may be clamped first by the old min
+      // (the system gives no ordering guarantee between setWindowLimits completion and resize).
       await delay(600);
       try {
-        // 目标取原值一半，下限用 issue#97 的人工验证基准 1000×700
+        // the target is half the original value; the floor uses issue#97's manual verification baseline of 1000×700
         const targetW = Math.max(1000, Math.floor(orig.width / 2));
         const targetH = Math.max(700, Math.floor(orig.height / 2));
-        // issue#97 验收口径：精确相等、零容差。读回源是系统 drawableRect
-        // 快照（inner_size → inner_rect_for），不是 tao 自己算的值。
+        // issue#97 acceptance criterion: exact equality, zero tolerance. The read-back source is the system drawableRect
+        // snapshot (inner_size → inner_rect_for), not a value tao computes itself.
         await win.setSize(new PhysicalSize(targetW, targetH));
         await readBackEquals(
           () => win.innerSize(),
@@ -158,8 +391,8 @@ export const windowOpsTests: TestCase[] = [
           targetH,
           `setSize(${targetW}×${targetH}) 精确读回 (scaleFactor=${sf})`,
         );
-        // issue#97 场景「连续两次 set」：中间设一个不同值并确认落地，最终
-        // 读回必须是第二次的值（防止连续 set 被合并/丢失）。
+        // issue#97 scenario "two consecutive sets": set a different value in between and confirm it lands; the final
+        // read-back must be the second value (guards against consecutive sets being merged or dropped).
         const midW = targetW + 100;
         const midH = targetH + 80;
         await win.setSize(new PhysicalSize(midW, midH));
@@ -172,8 +405,8 @@ export const windowOpsTests: TestCase[] = [
           `连续两次 setSize 后读回 (期望 ${targetW}×${targetH}, scaleFactor=${sf})`,
         );
       } finally {
-        // 还原尺寸与 demo 的最小尺寸约束（lib.rs: min_inner_size(600,400) 逻辑像素；
-        // 先还原尺寸再恢复约束，orig 本来就满足约束不会引发再钳制）
+        // Restore the size and the demo's minimum-size constraint (lib.rs: min_inner_size(600,400) in logical pixels;
+        // restore the size first, then the constraint — orig already satisfies it, so no re-clamping is triggered)
         await win.setSize(new PhysicalSize(orig.width, orig.height));
         await delay(400);
         await win.setMinSize(new LogicalSize(600, 400));
@@ -181,22 +414,23 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    // issue#97 验收 3：save/restore 零漂移（shrinking-main-window 永久回归保护）。
-    // 会话内代理：读 inner → 写回同值 → 再读，5 轮全部精确相等。跨重启的
-    // window-state 循环 JS 无法重启 UIAbility，仍按 issue97-verify-plan.md §F
-    // 人工执行；本用例保护同一漂移机制（读侧 drawableRect ↔ 写侧 resize-inner）。
+    // issue#97 acceptance 3: save/restore zero drift (permanent regression protection for shrinking-main-window).
+    // In-session proxy: read inner → write back the same value → read again; all 5 rounds must be exactly equal. The across-restart
+    // window-state loop cannot restart the UIAbility from JS, so it stays manual per issue97-verify-plan.md §F;
+    // this case protects the same drift mechanism (read side drawableRect ↔ write side resize-inner).
     name: 'window.setInnerSize save/restore zero drift (5 rounds)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('phone main window is full-screen: resize-inner cannot land (tao warns "precise decor unavailable") — the zero-drift read-back loop of issue#97 needs freeform resize, a PC/2in1 capability');
       if (!(await mainWindowResizable())) return;
       const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
       const win = getCurrentWindow();
       const orig = await win.innerSize();
-      // 同用例一：清掉 600×400 逻辑最小约束，否则 1000×700 会被钳制
+      // Same as case one: clear the 600×400 logical minimum constraint, otherwise 1000×700 gets clamped
       await win.setMinSize(null);
-      await delay(600); // 同用例一：等 fire-and-forget 的解除先落地
+      await delay(600); // same as case one: wait for the fire-and-forget removal to land first
       try {
-        const targetW = 1000, targetH = 700; // issue#97 人工验证基准
+        const targetW = 1000, targetH = 700; // issue#97 manual verification baseline
         await win.setSize(new PhysicalSize(targetW, targetH));
         await readBackEquals(
           () => win.innerSize(),
@@ -215,8 +449,8 @@ export const windowOpsTests: TestCase[] = [
           );
         }
       } finally {
-        // 还原（不还原会经 window-state 插件跨轮投毒：下一轮 orig=1000×700，
-        // 用例一的原值一半目标会低于最小约束）
+        // Restore (not restoring would poison later rounds via the window-state plugin: the next round's orig becomes 1000×700,
+        // and case one's half-of-original target would fall below the minimum constraint)
         await win.setSize(new PhysicalSize(orig.width, orig.height));
         await delay(400);
         await win.setMinSize(new LogicalSize(600, 400));
@@ -224,12 +458,78 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    // issue#97 场景 2：Float 子窗口（decor=0，chrome 构造性为 0）精确读回。
-    // 沿用 core.ts 的 float 窗口惯例：不主动销毁，留给手动 Close All 清理；
-    // label 用 test- 前缀（cmd.rs 惯例：非 test- 前缀会注入 STATUS_SCRIPT 轮询）。
+    // Review C1 acceptance: the runtime setSizeConstraints entry must funnel into the same
+    // tao constraints cache as builder-time with_inner_size_constraints (apply_window_limits →
+    // ArkTS setWindowLimits). The old OHOS gate returned Err unconditionally while the builder
+    // path worked — "works at creation, Errs afterwards". Here the floor is proven by read-back:
+    // a resize request below the just-set minimum must come back clamped to ≥ the floor, and
+    // clearing with null must restore unconstrained resize (the cache is not wedged).
+    name: 'window.setSizeConstraints runtime min-floor clamps (and null clears)',
+    category: 'auto',
+    // ~2.2s of fixed settle delays + three read-back polls put the operating
+    // point at ~5s — past the 5s default (observed 5023ms passing, 5989ms
+    // timing out on the same device/code). Explicit budget per the G-series
+    // rule for cases with ≥3s of internal delay.
+    timeout: 10000,
+    async fn() {
+      await skipOnMobile('phone main window is full-screen: the min-floor clamp of setSizeConstraints needs a freeform-resizable main window (PC/2in1 capability), same policy as the setInnerSize cases');
+      if (!(await mainWindowResizable())) return;
+      const { PhysicalSize, LogicalSize } = await import('@tauri-apps/api/dpi');
+      const win = getCurrentWindow();
+      const orig = await win.innerSize();
+      const sf = await win.scaleFactor();
+      // Clear the demo's builder-time min (600×400 logical → 1140×760 physical at PC density
+      // 1.9) so the baseline below the floor can land — same as the setInnerSize cases.
+      await win.setMinSize(null);
+      await delay(600);
+      try {
+        const targetW = 1000, targetH = 700; // issue#97 manual baseline, below the floor
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackEquals(() => win.innerSize(), targetW, targetH, `setSize(${targetW}×${targetH}) 基线读回`);
+        // Runtime constraints, floor 100px above the baseline in each dimension. Constraints
+        // are logical; ceil(physical/sf) keeps the physical floor ≥ the intended value at any
+        // scale factor.
+        const floorW = targetW + 100, floorH = targetH + 100;
+        await win.setSizeConstraints({
+          minWidth: Math.ceil(floorW / sf),
+          minHeight: Math.ceil(floorH / sf),
+        });
+        // setWindowLimits is a fire-and-forget bridge call — wait for it to land before the
+        // clamp probe (same 600ms convention as the min-clear above).
+        await delay(600);
+        // Probe: request a size below the floor; the floor must hold (either the request is
+        // clamped, or the window was already raised to the floor when the limits landed).
+        await win.setSize(new PhysicalSize(targetW, targetH));
+        await readBackAtLeast(
+          () => win.innerSize(),
+          floorW,
+          floorH,
+          `setSize(${targetW}×${targetH}) 被 min floor ${floorW}×${floorH} 钳制 (scaleFactor=${sf})`,
+        );
+        // Clear via the same runtime entry: an unconstrained small resize must land exactly —
+        // proves null clears the cache instead of leaving the floor wedged.
+        await win.setSizeConstraints(null);
+        await delay(600);
+        const clearW = 900, clearH = 650;
+        await win.setSize(new PhysicalSize(clearW, clearH));
+        await readBackEquals(() => win.innerSize(), clearW, clearH, `setSizeConstraints(null) 后 ${clearW}×${clearH} 精确读回`);
+      } finally {
+        // Restore order: size first (orig satisfies the demo min), then the demo's
+        // builder-time constraint — mirroring the setInnerSize cases.
+        await win.setSize(new PhysicalSize(orig.width, orig.height));
+        await delay(400);
+        await win.setMinSize(new LogicalSize(600, 400));
+      }
+    },
+  },
+  {
+    // issue#97 scenario 2: exact read-back on a Float sub-window (decor=0, constructively zero chrome).
+    // Follows core.ts's float-window convention: do not destroy it here; leave cleanup to the manual Close All;
+    // the label uses the test- prefix (cmd.rs convention: a non-test- prefix gets STATUS_SCRIPT polling injected).
     name: 'float window setInnerSize exact readback (decor=0)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('create_borderless_window (the Float-window creator used here) is cfg(desktop)-gated in cmd.rs since e2fb524c7 — Float windows work on mobile, but this creator command is desktop-only');
       const { PhysicalSize } = await import('@tauri-apps/api/dpi');
       const w = await createFloatWindow('test-size-' + Date.now());
       await w.setSize(new PhysicalSize(760, 1100));
@@ -242,16 +542,16 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    // OHOS 上 setOuterPosition 的「实际移动」效果**无法从 JS 可靠读回验证**：
-    // outerPosition() 读自 window_rect，由 ArkTS window_rect_change 回调填充
-    // (lifecycle.rs:175-179)。resize 会触发尺寸回调 → #142 setInnerSize 读回可靠；
-    // 但纯 moveWindowTo 只改位置、不触发我们监听的 rect 回调，故读回恒为旧值
-    // (实测 Float 子窗口 orig(515,343)→after(515,343) 完全不变)。主窗口上则由系统
-    // 自由窗口 WM 非确定性重定位 (如 (699,651))，读回时 pass 时 fail。两种窗口都
-    // 无法满足「after 比 orig 更接近 target」断言。hilog 实测 moveWindowTo 解析成功、
-    // 无 1300002 reject(ArkTS 仅 .catch 时 warn，全程零失败日志)——调用本身不抛错。
-    // 故降为 smoke：校验 setPosition 不抛错即可，移动效果靠手动按钮验证。
-    // (与 #137 fullscreen / #138 minimize / #139 alwaysOnTop 等主窗口不可验证能力同策)
+    // On OHOS, setOuterPosition's "actual move" effect **cannot be reliably verified from JS read-back**:
+    // outerPosition() reads from window_rect, which is filled by the ArkTS window_rect_change callback
+    // (lifecycle.rs:175-179). resize fires the size callback → #142's setInnerSize read-back is reliable;
+    // but a pure moveWindowTo only changes position and does not fire the rect callback we listen to, so read-back stays at the old value
+    // (measured: a Float sub-window stayed orig(515,343)→after(515,343), completely unchanged). On the main window the system's
+    // free-window WM relocates non-deterministically (e.g. (699,651)), so read-back passes and fails sporadically. Neither window type
+    // can satisfy the "after is closer to target than orig" assertion. On-device hilog shows moveWindowTo resolves successfully with
+    // no 1300002 reject (ArkTS only warns in .catch; zero failure logs throughout) — the call itself does not throw.
+    // So this is downgraded to smoke: just verify setPosition does not throw; the move effect is verified via manual buttons.
+    // (same policy as main-window capabilities that cannot be verified: #137 fullscreen / #138 minimize / #139 alwaysOnTop, etc.)
     name: 'window.setOuterPosition smoke (move unverifiable from JS)',
     category: 'auto',
     async fn() {
@@ -262,7 +562,7 @@ export const windowOpsTests: TestCase[] = [
       const targetY = orig.y < 200 ? 400 : 100;
       await smoke(() => win.setPosition(new PhysicalPosition(targetX, targetY)), 'setPosition(target)');
       await delay(400);
-      // 还原(即便读回不反映，仍尝试复位)
+      // Restore (attempt the reset even if read-back does not reflect it)
       await smoke(() => win.setPosition(new PhysicalPosition(orig.x, orig.y)), 'setPosition(orig)');
       await delay(200);
     },
@@ -271,6 +571,7 @@ export const windowOpsTests: TestCase[] = [
     name: 'window.maximize fills monitor',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the maximize window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       const mon = await currentMonitor();
       const before = await win.innerSize();
@@ -281,15 +582,15 @@ export const windowOpsTests: TestCase[] = [
       await win.unmaximize();
       await delay(400);
       if (!mon) {
-        // 无 monitor 信息，仅校验 maximize 不抛错
+        // no monitor info: only verify maximize does not throw
         return;
       }
-      // 最大化后 innerSize 应接近显示器尺寸（若原本未全屏）。
-      // 若原本已全屏（before 已 ≈ monitor），则 maximize 为 no-op，跳过强校验。
+      // After maximize, innerSize should approach the display size (if it was not already fullscreen).
+      // If it was already fullscreen (before ≈ monitor), maximize is a no-op and the strict check is skipped.
       const alreadyMax = before.width >= mon.size.width * 0.95 && before.height >= mon.size.height * 0.95;
       if (alreadyMax) return;
-      // D2 语义（OHOS）：innerSize = outer − 装饰(标题栏)。"铺满显示器"以 outerSize
-      // 断言；innerSize 校验内容区宽度铺满 + 高度扣除装饰后仍占大头（≥80%）。
+      // D2 semantics (OHOS): innerSize = outer − decorations (title bar). "Fills the display" is asserted via outerSize;
+      // innerSize checks the content width is full and the height still dominates after subtracting decorations (>= 80%).
       assert(
         afterOuter.width >= mon.size.width * 0.9 && afterOuter.height >= mon.size.height * 0.9,
         `maximize 后 outerSize ${afterOuter.width}×${afterOuter.height} 未接近显示器 ${mon.size.width}×${mon.size.height}`
@@ -301,11 +602,12 @@ export const windowOpsTests: TestCase[] = [
     },
   },
 
-  // ─── smoke：无 getter，仅校验不抛错。效果靠手动按钮验证。 ───
+  // ─── smoke: no getters; only verify no throw. Effects are verified via manual buttons. ───
   {
     name: 'window.setFullscreen smoke (effect unverifiable from JS)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the setFullscreen window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await smoke(() => win.setFullscreen(true), 'setFullscreen(true)');
       await delay(400);
@@ -317,6 +619,7 @@ export const windowOpsTests: TestCase[] = [
     name: 'window.minimize smoke (effect unverifiable from JS)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the minimize window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await smoke(() => win.minimize(), 'minimize');
       await delay(400);
@@ -325,19 +628,96 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    name: 'window.setAlwaysOnTop smoke (OHOS partial: flag only, no z-order API)',
+    name: 'window.setAlwaysOnTop smoke (dispatches to setWindowTopmost API 14+; z-order effect unverifiable from JS)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the setAlwaysOnTop window command is upstream cfg(desktop) and absent from the mobile build');
+      // C5 (round 2): smoke() fails on any throw, and the Rust facade
+      // rejects below API 14 (setWindowTopmost does not exist there). That
+      // tier was previously a silent skip — the rejection was never
+      // positively asserted anywhere — so assert it here; at/above API 14
+      // (the verified devices are API 23/26) the normal smoke path runs.
+      const topmostApi = await ohosSdkApiVersion();
+      if (topmostApi !== null && topmostApi < 14) {
+        let err: unknown = null;
+        try {
+          await getCurrentWindow().setAlwaysOnTop(true);
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'setAlwaysOnTop must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `setAlwaysOnTop below API 14 must carry the version error, got: ${String(err)}`
+        );
+        return;
+      }
       const win = getCurrentWindow();
-      // isAlwaysOnTop 只读 tao AtomicBool，round-trip 是自证，不作断言。
+      // set_always_on_top dispatches to OHOS setWindowTopmost (API 14+,
+      // ohos.permission.WINDOW_TOPMOST; main window, freeform mode) — but
+      // isAlwaysOnTop only reads tao's AtomicBool, so the round-trip is
+      // self-proving and the z-order effect is not asserted.
       await smoke(() => win.setAlwaysOnTop(true), 'setAlwaysOnTop(true)');
       await smoke(() => win.setAlwaysOnTop(false), 'setAlwaysOnTop(false)');
+    },
+  },
+  {
+    name: 'version-gate negative probes (print API 14 / setCursorGrab API 22)',
+    category: 'auto',
+    async fn() {
+      // C5 (round 2): the print (14) and setCursorGrab (22) facade gates have
+      // no other hand-written case — print's only automated coverage is the
+      // fault-injection timeout probe (error is the injected fault, not the
+      // gate), setCursorGrab lives in the generated blind-call file where any
+      // outcome passes — so their low-tier rejections are asserted here:
+      // below the threshold the facade must reject with the unified version
+      // error, positively matched. At/above both thresholds (the verified
+      // devices are API 23 desktop and API 26 phone) the Err side is
+      // unreachable; record a skip naming the tier so the report shows why
+      // instead of a silent pass.
+      const api = await ohosSdkApiVersion();
+      if (api === null) {
+        skip('non-OHOS platform — version gates do not apply');
+      }
+      let probed = false;
+      if (api < 14) {
+        let err: unknown = null;
+        try {
+          await invoke('plugin:webview|print', { label: 'main' });
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'print must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `print below API 14 must carry the version error, got: ${String(err)}`
+        );
+        probed = true;
+      }
+      if (api < 22) {
+        let err: unknown = null;
+        try {
+          await getCurrentWindow().setCursorGrab(false);
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'setCursorGrab must reject below API 22');
+        assert(
+          /requires API level 22/.test(String(err)),
+          `setCursorGrab below API 22 must carry the version error, got: ${String(err)}`
+        );
+        probed = true;
+      }
+      if (!probed) {
+        skip(`API ${api} ≥ 22 — both gates pass here; the Err sides only assert on lower-API devices`);
+      }
     },
   },
   {
     name: 'window.setIgnoreCursorEvents smoke',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the setIgnoreCursorEvents window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await smoke(() => win.setIgnoreCursorEvents(true), 'setIgnoreCursorEvents(true)');
       await smoke(() => win.setIgnoreCursorEvents(false), 'setIgnoreCursorEvents(false)');
@@ -347,9 +727,10 @@ export const windowOpsTests: TestCase[] = [
     name: 'window decoration flags smoke (D group, main window no-op)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the setClosable/setMaximizable/setMinimizable window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
-      // 主窗口 setDecorationFlags 为 no-op；is*() 只读 tao 位域，round-trip 自证。
-      // 仅校验调用不抛错。效果在 Float 子窗口上手动验证。
+      // setDecorationFlags is a no-op on the main window; is*() only reads tao's bitfield, so the round-trip is self-proving.
+      // Only verify the call does not throw. Effects are verified manually on a Float sub-window.
       await smoke(() => win.setClosable(false), 'setClosable(false)');
       await smoke(() => win.setClosable(true), 'setClosable(true)');
       await smoke(() => win.setMaximizable(false), 'setMaximizable(false)');
@@ -362,10 +743,77 @@ export const windowOpsTests: TestCase[] = [
       await smoke(() => win.setFocusable(true), 'setFocusable(true)');
     },
   },
+  // ─── 6.3 Float-specific: behavior of D11's windowKinds-branched methods on Float sub-windows ───
+  // Production entry audit (2026-09-16): show→showWindowMethod (Float branch win.showWindow);
+  // set-decoration-flags→setDecorationFlags (the Float branch writes 4 LocalStorage keys that drive
+  // FloatPage button visibility); set-decorations→setDecorations (the Float branch writes LocalStorage
+  // 'decorations' to drive the custom-drawn title bar visibility — during the pluginize migration it briefly bypassed this and called setWindowDecorVisible directly,
+  // making Float a no-op; fixed on 2026-09-16 to delegate to WindowManager); set-background-color→calls the sub-window
+  // handle directly (same API for both kinds, no branch semantics); closeWindow→reachable only via the menu path (Float has no menu;
+  // the branch is defensive code; code-audit verdict: not automated).
+  {
+    name: 'window Float kind-branch ops (D11: decorations/flags/minimize/show)',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('the branch ops exercised here (setDecorations/minimize/decoration flags) are upstream cfg(desktop) window commands absent from the mobile build');
+      const label = 'test-float-' + Date.now();
+      await invoke('create_decorated_window', { windowId: label });
+      await delay(600);
+      const w = await Window.getByLabel(label);
+      assert(w, `Float window "${label}" not found after create`);
+
+      // ① setDecorations (starting point: a decorated Float with decorations=true).
+      //    isDecorated only reads tao's mirror (round-trip self-proving); Float's real semantics =
+      //    FloatPage's custom-drawn title bar visibility (LocalStorage 'decorations'); visual/hilog evidence belongs to the manual chapter.
+      assert((await w.isDecorated()) === true, 'decorated Float should start decorated');
+      await w.setDecorations(false);
+      assert((await w.isDecorated()) === false, 'setDecorations(false) mirror readback');
+      await w.setDecorations(true);
+      assert((await w.isDecorated()) === true, 'setDecorations(true) mirror readback');
+
+      // ② decoration flags: the Float branch writes 4 LocalStorage keys. is*() reads tao's bitfield (self-proving);
+      //    the real effect = FloatPage button visibility, covered by hilog/the manual chapter; for the main-window no-op contrast see the case above.
+      await w.setClosable(false);
+      assert((await w.isClosable()) === false, 'setClosable(false) readback');
+      await w.setMaximizable(false);
+      assert((await w.isMaximizable()) === false, 'setMaximizable(false) readback');
+      await w.setMinimizable(false);
+      assert((await w.isMinimizable()) === false, 'setMinimizable(false) readback');
+      await w.setResizable(false);
+      assert((await w.isResizable()) === false, 'setResizable(false) readback');
+      await w.setClosable(true);
+      assert((await w.isClosable()) === true, 'setClosable(true) readback');
+      await w.setMaximizable(true);
+      assert((await w.isMaximizable()) === true, 'setMaximizable(true) readback');
+      await w.setMinimizable(true);
+      assert((await w.isMinimizable()) === true, 'setMinimizable(true) readback');
+      await w.setResizable(true);
+      assert((await w.isResizable()) === true, 'setResizable(true) readback');
+
+      // ③ minimize → show: isMinimized reads tao's local mirror and minimize() writes that same
+      //    mirror — a round-trip assertion (the command chain works end-to-end), NOT an independent
+      //    read of ArkTS getWindowStatus() live OS state. show goes through showWindowMethod's
+      //    Float branch (win.showWindow()).
+      await w.minimize();
+      await delay(500);
+      assert((await w.isMinimized()) === true, 'Float minimize round-trip (tao local mirror — not live OS state, see ③)');
+      await w.show();
+      await delay(500);
+      assert((await w.isMinimized()) === false, 'Float show (showWindowMethod Float branch) should restore from minimized');
+
+      // ④ setBackgroundColor: Float = direct call on the sub-window handle (same API as the UIAbility branch); smoke only.
+      await smoke(() => w.setBackgroundColor([255, 0, 0, 255]), 'Float setBackgroundColor');
+
+      // Wrap-up: flags are restored to true; close goes through the destroy-window idempotent path (best-effort;
+      // leaving a leftover window matches the suite's existing behavior — core.ts's timestamped label likewise guards against rerun collisions).
+      await w.close().catch(() => {});
+    },
+  },
   {
     name: 'window cursor smoke (E group, no getter)',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the setCursorVisible/setCursorIcon/setCursorPosition window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await smoke(() => win.setCursorVisible(false), 'setCursorVisible(false)');
       await smoke(() => win.setCursorVisible(true), 'setCursorVisible(true)');

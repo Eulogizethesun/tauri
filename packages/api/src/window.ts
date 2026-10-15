@@ -1606,7 +1606,16 @@ class Window {
    * @since 2.1.0
    */
   async setBackgroundColor(color: Color): Promise<void> {
-    return invoke('plugin:window|set_background_color', { value: color })
+    // `label` is required for cross-window routing: without it the backend
+    // falls back to the invoking window, so `Window.getByLabel(x).setBackgroundColor()`
+    // called from another window would color the invoking window instead of `x`
+    // (observed on OpenHarmony 2026-10-08: the suite's Float-window case turned the
+    // primary window's system background red, visible while drag-resizing).
+    // Every other setter here (set_decorations, set_resizable, ...) already passes it.
+    return invoke('plugin:window|set_background_color', {
+      label: this.label,
+      value: color
+    })
   }
 
   /**

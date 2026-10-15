@@ -59,29 +59,54 @@ jobs:
 
       - name: Checkout sibling repos for [patch] resolution
         shell: bash
+        env:
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
         run: |
-          # Cargo.toml [patch] references local paths to sibling repos
-          # Need to checkout these repos to the correct location
+          # The root Cargo.toml [patch.crates-io] path entries (wry, tao, muda,
+          # tray-icon, openharmony-ability, cargo-mobile2, window-vibrancy) and
+          # the examples' path dependencies into plugins-workspace and
+          # sentry-tauri must exist as sibling checkouts — cargo validates
+          # patch paths during resolution even when the patched crate is not
+          # in the graph, and it loads every workspace member's path
+          # dependencies (examples/api is a member), so a missing sibling
+          # fails with an error that looks nothing like the actual cause.
+          # Clone failures are therefore fatal, not "skipped".
+          #
+          # Branch selection: a coordinated PR set (tauri + tao + wry + muda +
+          # tray-icon + openharmony-ability + plugins-workspace) lands its
+          # cross-repo contract in each repo's PR head before any single repo
+          # merges, so try the PR head's owner/ref first (the set shares the
+          # fork owner and branch name); otherwise fall back to this
+          # organization's `ohdev` branch. The forks' default branches (dev /
+          # v2 / master) do NOT carry the OHOS adaptation or the OHOS-only
+          # plugins.
           SIBLINGS=(
-            "Eulogizethesun/wry"
-            "Eulogizethesun/tao"
-            "Eulogizethesun/muda"
-            "Eulogizethesun/tray-icon"
-            "Eulogizethesun/openharmony-ability"
+            "wry"
+            "tao"
+            "muda"
+            "tray-icon"
+            "openharmony-ability"
+            "cargo-mobile2"
+            "window-vibrancy"
+            "plugins-workspace"
+            "sentry-tauri"
           )
-          for repo in "${SIBLINGS[@]}"; do
-            name=$(basename "$repo")
-            echo "::group::Checkout $repo"
-            git clone --depth 1 "https://github.com/${repo}.git" "../${name}" 2>/dev/null || \
-              echo "⚠️ Failed to clone $repo, skipping"
+          for name in "${SIBLINGS[@]}"; do
+            echo "::group::Checkout $name"
+            if [ -n "$PR_HEAD_OWNER" ] && [ -n "$PR_HEAD_REF" ] && \
+               git clone --depth 1 --branch "$PR_HEAD_REF" \
+                 "https://github.com/${PR_HEAD_OWNER}/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out ${PR_HEAD_OWNER}/${name}@${PR_HEAD_REF} (coordinated PR head)"
+            elif git clone --depth 1 --branch ohdev \
+                 "https://github.com/Eulogizethesun/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out Eulogizethesun/${name}@ohdev (fallback)"
+            else
+              echo "::error::Failed to clone sibling ${name} (tried ${PR_HEAD_OWNER:-?}/${name}@${PR_HEAD_REF:-?}, then Eulogizethesun/${name}@ohdev) — [patch]/path dependencies cannot resolve without it"
+              exit 1
+            fi
             echo "::endgroup::"
           done
-
-          # plugins-workspace (required by examples/api)
-          echo "::group::Checkout plugins-workspace"
-          git clone --depth 1 --branch v2 "https://github.com/Eulogizethesun/plugins-workspace.git" "../plugins-workspace" 2>/dev/null || \
-            echo "⚠️ Failed to clone plugins-workspace, skipping"
-          echo "::endgroup::"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -114,21 +139,42 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Checkout sibling repos for [patch] resolution
+        shell: bash
+        env:
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
         run: |
+          # Same sibling set and branch-selection rule as the host-compile-check
+          # job above: full [patch] path set + plugins-workspace and
+          # sentry-tauri (examples' path deps), coordinated PR head first,
+          # Eulogizethesun@ohdev fallback, fatal on failure (a missing sibling
+          # breaks dependency resolution with a misleading error).
           SIBLINGS=(
-            "Eulogizethesun/wry"
-            "Eulogizethesun/tao"
-            "Eulogizethesun/muda"
-            "Eulogizethesun/tray-icon"
-            "Eulogizethesun/openharmony-ability"
+            "wry"
+            "tao"
+            "muda"
+            "tray-icon"
+            "openharmony-ability"
+            "cargo-mobile2"
+            "window-vibrancy"
+            "plugins-workspace"
+            "sentry-tauri"
           )
-          for repo in "${SIBLINGS[@]}"; do
-            name=$(basename "$repo")
-            git clone --depth 1 "https://github.com/${repo}.git" "../${name}" 2>/dev/null || \
-              echo "⚠️ Failed to clone $repo, skipping"
+          for name in "${SIBLINGS[@]}"; do
+            echo "::group::Checkout $name"
+            if [ -n "$PR_HEAD_OWNER" ] && [ -n "$PR_HEAD_REF" ] && \
+               git clone --depth 1 --branch "$PR_HEAD_REF" \
+                 "https://github.com/${PR_HEAD_OWNER}/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out ${PR_HEAD_OWNER}/${name}@${PR_HEAD_REF} (coordinated PR head)"
+            elif git clone --depth 1 --branch ohdev \
+                 "https://github.com/Eulogizethesun/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out Eulogizethesun/${name}@ohdev (fallback)"
+            else
+              echo "::error::Failed to clone sibling ${name} (tried ${PR_HEAD_OWNER:-?}/${name}@${PR_HEAD_REF:-?}, then Eulogizethesun/${name}@ohdev) — [patch]/path dependencies cannot resolve without it"
+              exit 1
+            fi
+            echo "::endgroup::"
           done
-          git clone --depth 1 --branch v2 "https://github.com/Eulogizethesun/plugins-workspace.git" "../plugins-workspace" 2>/dev/null || \
-            echo "⚠️ Failed to clone plugins-workspace, skipping"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

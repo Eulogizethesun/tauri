@@ -1,4 +1,5 @@
 import type { TestCase } from '../test-runner';
+import { desktopOnlySuite } from '../test-runner';
 import { invoke } from '@tauri-apps/api/core';
 
 function assert(condition: boolean, msg: string) {
@@ -21,7 +22,7 @@ async function skipIfNoSimulate(): Promise<boolean> {
   }
 }
 
-export const menuTests: TestCase[] = [
+const menuTestsInner: TestCase[] = [
   // ==================== Menu 测试 ====================
 
   // --- 创建方法 ---
@@ -1222,3 +1223,10 @@ export const menuTests: TestCase[] = [
     },
   },
 ];
+
+/**
+ * Menu is a desktop-form feature on OHOS: lib.rs initialises the menu plugin
+ * only under cfg(desktop), so on a mobile-form build every plugin:menu| invoke
+ * fails with "plugin menu not found". Wrap the whole suite.
+ */
+export const menuTests: TestCase[] = desktopOnlySuite(menuTestsInner, 'menu');

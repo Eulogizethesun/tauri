@@ -1,4 +1,4 @@
-import { skip, type TestCase } from '../test-runner';
+import { skip, skipOnMobile, type TestCase } from '../test-runner';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
@@ -9,6 +9,23 @@ function assert(condition: boolean, msg: string) {
 function isMissing(e: unknown): boolean {
   const m = String((e as Error)?.message ?? e);
   return m.includes('not found') || m.includes('not implemented') || m.includes('command not found') || m.includes('not allowed by ACL') || m.includes('not supported');
+}
+
+/**
+ * OHOS pasteboard reads require the restricted READ_PASTEBOARD permission
+ * (user_grant, signing-profile-ACL-gated). Without the grant the pasteboard
+ * service rejects even the app's own just-written data and getData() resolves
+ * empty, so readImage surfaces "clipboard does not contain an image" right
+ * after a successful writeImage. Same degradation contract as the readText
+ * round-trip test (empty read ⇒ honest skip, not a failed round-trip); with
+ * the grant (and on desktop) the byte-exact assertions still hold.
+ */
+async function isOhosClipboardReadDenied(e: unknown): Promise<boolean> {
+  if (!String((e as Error)?.message ?? e).includes('does not contain an image')) {
+    return false;
+  }
+  const { platform } = await import('@tauri-apps/plugin-os');
+  return platform() === 'ohos';
 }
 
 /** Unique suffix to avoid cross-test state collision (store/db/snapshot names). */
@@ -276,28 +293,55 @@ export const pluginTests: TestCase[] = [
   },
 
   // @tauri-apps/plugin-autostart
+  // On OHOS, getAutoStartupStatusForSelf is API 21+ — on lower API levels
+  // isEnabled rejects with the unified version error. Both outcomes are the
+  // documented contract; assert whichever fires (desktop always returns a
+  // boolean).
   {
     name: '@tauri-apps/plugin-autostart.isEnabled',
     category: 'auto',
     async fn() {
       const { isEnabled } = await import('@tauri-apps/plugin-autostart');
-      const result = await isEnabled();
+      let result: boolean;
+      try {
+        result = await isEnabled();
+      } catch (e) {
+        const m = String((e as Error)?.message ?? e);
+        assert(/isEnabled requires API level 21\+ on OpenHarmony/.test(m), `isEnabled should return a boolean or the unified version error, got: ${m}`);
+        return;
+      }
       assert(typeof result === 'boolean', `isEnabled should return boolean, got ${typeof result}`);
     },
   },
 
   // @tauri-apps/plugin-clipboard-manager
-  // category 'auto' (was 'side-effect'). On OHOS write_text is unsupported
-  // (only write_image via ArkTS is implemented), so this fails honestly as an
-  // auto case instead of silently skipping. Acceptable to stay ❌ until OHOS
-  // clipboard text support is implemented.
+  // category 'auto' (was 'side-effect'). On OHOS the write path works; reads
+  // are permission-gated by the restricted READ_PASTEBOARD permission
+  // (platform limitation #1) and the bridge resolves with an empty string when the
+  // grant is absent — skip honestly on an empty read instead of failing the
+  // round-trip. With the grant (and on desktop) the round-trip assertion
+  // holds.
   {
     name: '@tauri-apps/plugin-clipboard-manager.writeText+readText',
     category: 'auto',
     async fn() {
       const { writeText, readText } = await import('@tauri-apps/plugin-clipboard-manager');
+      const { platform } = await import('@tauri-apps/plugin-os');
       const testStr = `tauri-test-${Date.now()}`;
       await writeText(testStr);
+      if (platform() === 'ohos') {
+        // OHOS: clipboard reads are permission-gated (READ_PASTEBOARD).
+        // Without the grant the bridge resolves with an empty string
+        // (known platform limitation #1) — skip honestly; with the grant
+        // the round-trip still holds.
+        const result = await readText();
+        if (result === '') {
+          skip('readText resolved empty (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        } else {
+          assert(result === testStr, `clipboard mismatch: "${result}" vs "${testStr}"`);
+        }
+        return;
+      }
       const result = await readText();
       assert(result === testStr, `clipboard mismatch: "${result}" vs "${testStr}"`);
     },
@@ -371,6 +415,9 @@ export const pluginTests: TestCase[] = [
         assert(backRgba.length > 0, `readback rgba should be non-empty, got length ${backRgba.length}`);
       } catch (e) {
         if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        if (await isOhosClipboardReadDenied(e)) {
+          skip('readImage observed an empty pasteboard (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        }
         throw e;
       }
     },
@@ -509,6 +556,9 @@ export const pluginTests: TestCase[] = [
         assert(m3 === '', m3);
       } catch (e) {
         if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        if (await isOhosClipboardReadDenied(e)) {
+          skip('readImage observed an empty pasteboard (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        }
         throw e;
       }
     },
@@ -627,12 +677,17 @@ export const pluginTests: TestCase[] = [
   // placing them last ensures other side-effect tests run first)
   // ⚠️ IMPORTANT: Do NOT add new side-effect tests after this section.
   // These tests MUST remain at the end of the side-effect list because
-  // on OHOS they trigger startAbility() which sends the app to background,
-  // disrupting any subsequent automated test execution.
+  // on OHOS they trigger startAbility() which sends the app to background.
+  // 2026-10-08 Mate 70 forensics: on phone the backgrounded app is
+  // Doze-frozen by the system ~30s later (LifecycleDetectTimeoutProc →
+  // FreezeFreezeUnit) — the whole rest of the suite dies mid-test. The
+  // ArkTS plugin now refuses startAbility on phone form (returns "rejected
+  // the requested operation"), so enable/disable are mobile-skipped below.
   {
     name: '@tauri-apps/plugin-autostart.enable+disable (no throw)',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('enable()/disable() navigate to the system autostart settings page via startAbility — the pc_app_setup_settings URI is PC/2in1-only. Verified on Mate 70: startAbility LAUNCHES Settings and minimizes the calling UIAbility (MinimizeUIAbilityBySCB), backgrounding the app; the phone resource scheduler then freezes the process ~30s later, killing the rest of the suite. The plugin now refuses before startAbility on phone ("rejected the requested operation"), so the no-throw contract can no longer hold there');
       const { enable, disable, isEnabled } = await import('@tauri-apps/plugin-autostart');
       await enable();
       const enabled = await isEnabled();
@@ -646,6 +701,7 @@ export const pluginTests: TestCase[] = [
     name: '@tauri-apps/plugin-autostart.enable+isEnabled+disable',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('OHOS forbids programmatic autostart toggling: enable()/disable() only navigate to the system autostart settings page, and that settings URI (pc_app_setup_settings) is PC/2in1-only — on phone the plugin refuses before startAbility and answers "rejected the requested operation" (launching Settings on phone would only background the caller; see the enable+disable skip above for the Mate 70 freeze forensics)');
       const { enable, disable, isEnabled } = await import('@tauri-apps/plugin-autostart');
       await enable();
       const afterEnable = await isEnabled();
@@ -683,7 +739,7 @@ export const pluginTests: TestCase[] = [
     // NOTE: manual-category fn is never executed by runTests (test-runner.ts
     // marks manual as skip without calling fn) — the real verification is the
     // TestRunner button "Dialog.open (directory)" (manualDialogOpenDirectory),
-    // which self-asserts null-or-non-empty-string. See manual_tests.md §四.
+    // which self-asserts null-or-non-empty-string. See manual_tests.md §4.
     name: '@tauri-apps/plugin-dialog.open (directory, OHOS)',
     category: 'manual',
     async fn() {
@@ -1219,8 +1275,27 @@ export const pluginTests: TestCase[] = [
     category: 'auto',
     async fn() {
       const { isRegistered } = await import('@tauri-apps/plugin-deep-link');
+      const { platform } = await import('@tauri-apps/plugin-os');
+      if (platform() === 'ohos') {
+        // OHOS: schemes are statically declared in module.json5; the query
+        // rejects with the unified platform error instead of returning a
+        // constant false.
+        let rejected = false;
+        try {
+          await isRegistered('myapp');
+        } catch (e) {
+          rejected = true;
+          const m = String((e as Error)?.message ?? e);
+          assert(
+            m.includes('isRegistered is not supported on OpenHarmony'),
+            `isRegistered should reject with the unified platform error on OHOS, got: ${m}`,
+          );
+        }
+        assert(rejected, 'isRegistered should reject on OHOS (static scheme declaration)');
+        return;
+      }
       const result = await isRegistered('myapp');
-      assert(result === false, `isRegistered should return false on OHOS (no-op), got ${result}`);
+      assert(typeof result === 'boolean', `isRegistered should return boolean, got ${typeof result}`);
     },
   },
   {
@@ -1228,7 +1303,27 @@ export const pluginTests: TestCase[] = [
     category: 'auto',
     async fn() {
       const { register, unregister } = await import('@tauri-apps/plugin-deep-link');
-      // no-op on OHOS, should not throw
+      const { platform } = await import('@tauri-apps/plugin-os');
+      if (platform() === 'ohos') {
+        // OHOS: runtime registration is unsupported (static module.json5
+        // declaration); both calls reject with the unified platform error.
+        for (const [op, fn] of [['register', register], ['unregister', unregister]] as const) {
+          let rejected = false;
+          try {
+            await fn('myapp');
+          } catch (e) {
+            rejected = true;
+            const m = String((e as Error)?.message ?? e);
+            assert(
+              m.includes(`${op} is not supported on OpenHarmony`),
+              `${op} should reject with the unified platform error on OHOS, got: ${m}`,
+            );
+          }
+          assert(rejected, `${op} should reject on OHOS (static scheme declaration)`);
+        }
+        return;
+      }
+      // Desktop/mobile: runtime registration works, should not throw
       await register('myapp');
       await unregister('myapp');
     },
@@ -1539,6 +1634,153 @@ export const pluginTests: TestCase[] = [
     async fn() {
       console.log('[single-instance manual] Launch a second instance with the same argv');
       console.log('[single-instance manual] Expect: second instance exits; first receives callback with args/cwd');
+    },
+  },
+
+  // ─── nfc techLists fail-fast + zero residue (plugins#34 round-4/5 fix, on-device verified on Mate 70) ───
+  // NfcBarcode (guest-js TechKind 7) has no readerMode discovery carrier on OHOS, and a
+  // mixed list like [NfcA, NfcBarcode] can never match under AND-within-list semantics.
+  // Both scan() and write() must reject such techLists SYNCHRONOUSLY and leave zero
+  // session residue:
+  //  - pre-fix handleWrite armed pendingWriteInvoke/pendingWriteMessage BEFORE the
+  //    techLists validation, so a rejected write (a) locked every later legitimate
+  //    write behind a misleading 'connected tag not found' error, and (b) made the
+  //    next foreground switch register an UNFILTERED readerMode that would physically
+  //    write the rejected NDEF message to any discovered tag;
+  //  - the quantifier fix (some → length>0 && every) rejects mixed lists that some
+  //    wrongly accepted (those sessions would pend forever).
+  // No physical tag is required: the scenario completes through sync rejects plus one
+  // deliberately-pending legal write. Review round F4 moved handleScan's techLists
+  // guard ahead of its failPending* block — an invalid scan must leave a legitimate
+  // session untouched — so the drain is two-phase: the invalid scan proves the
+  // guard's zero side effects, then a LEGAL scan performs the session replacement
+  // that settles the write promise. That scan ends the case armed-but-replaceable
+  // (the round-4 anti-goal was a locked session, not a live one); its promise is
+  // caught so a later replacement cannot surface as an unhandled rejection.
+  {
+    name: 'nfc techLists fail-fast + zero session residue (OHOS)',
+    category: 'auto',
+    // 1s legal-write race + two 300ms settle windows fit the 5s default on a
+    // healthy device; 10s absorbs readerMode registration latency on a fresh install.
+    timeout: 10000,
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const TECH_NFC_A = 5; // guest-js TechKind.NfcA
+      const TECH_NFC_BARCODE = 7; // guest-js TechKind.NfcBarcode — no discovery carrier
+      const BAD_MSG = 'techLists can never match';
+
+      // Needs NFC hardware with NFC switched on (HAD-W32 has none → honest skip).
+      const avail = await invoke<{ available: boolean }>('plugin:nfc|is_available');
+      if (!avail.available) {
+        skip('no NFC hardware or NFC off — techLists scenario needs an NFC-capable device');
+      }
+
+      // Reject-message collector: returns the rejection text, or throws when the
+      // invoke unexpectedly RESOLVES (a regression must not pass silently).
+      const rejectMsg = async (label: string, p: Promise<unknown>): Promise<string> => {
+        try {
+          await p;
+        } catch (e) {
+          return String((e as Error)?.message ?? e);
+        }
+        throw new Error(`${label}: expected a synchronous reject, got resolve`);
+      };
+
+      // ① scan with a Barcode-only techList → sync reject, no pending armed.
+      let msg = await rejectMsg(
+        'scan [[NfcBarcode]]',
+        invoke('plugin:nfc|scan', { kind: { ndef: { techLists: [[TECH_NFC_BARCODE]] } } })
+      );
+      assert(msg.includes(BAD_MSG), `scan [[NfcBarcode]] unexpected reject: ${msg}`);
+
+      // ② scan with a MIXED list [NfcA, NfcBarcode] → must also reject
+      // (AND-within-list demands the barcode too). With the pre-fix `some`
+      // quantifier this list was accepted and the scan pended forever — a
+      // regression therefore surfaces as this test timing out here.
+      msg = await rejectMsg(
+        'scan [[NfcA, NfcBarcode]]',
+        invoke('plugin:nfc|scan', { kind: { ndef: { techLists: [[TECH_NFC_A, TECH_NFC_BARCODE]] } } })
+      );
+      assert(msg.includes(BAD_MSG), `scan [[NfcA, NfcBarcode]] unexpected reject: ${msg}`);
+
+      // Same NDEF text record shape as the manual NFC write button.
+      const enc = new TextEncoder();
+      const payload = Array.from(enc.encode('enTauri OHOS NFC'));
+      payload.unshift('en'.length); // NDEF text record: language-length status byte
+      const record = { format: 1, kind: [0x54], id: [], payload }; // TNF well-known + RTD "T"
+
+      // ③ write with a Barcode-only techList → sync reject BEFORE arming any
+      // session state (guard-before-arming fix).
+      msg = await rejectMsg(
+        'write [[NfcBarcode]]',
+        invoke('plugin:nfc|write', { records: [record], kind: { ndef: { techLists: [[TECH_NFC_BARCODE]] } } })
+      );
+      assert(msg.includes(BAD_MSG), `write [[NfcBarcode]] unexpected reject: ${msg}`);
+
+      // ④ repeat the rejected write — with the pre-fix residue this second
+      // write hit the pending check and failed with the misleading
+      // 'connected tag not found'; zero residue means the same BAD_MSG again.
+      msg = await rejectMsg(
+        'write [[NfcBarcode]] repeat',
+        invoke('plugin:nfc|write', { records: [record], kind: { ndef: { techLists: [[TECH_NFC_BARCODE]] } } })
+      );
+      assert(
+        msg.includes(BAD_MSG) && !msg.includes('connected tag not found'),
+        `rejected write left session residue (later write locked): ${msg}`
+      );
+
+      // ⑤ the lock-free proof (round-4 🔴 scenario A): a LEGAL write after the
+      // rejected ones must get past the pending check — it arms the
+      // scan-then-write session and stays PENDING (no tag nearby) instead of
+      // being rejected with 'connected tag not found'.
+      let legalRejected: string | null = null;
+      const legalWrite = invoke('plugin:nfc|write', { records: [record], kind: { ndef: {} } });
+      legalWrite.catch((e) => {
+        legalRejected = String((e as Error)?.message ?? e);
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+      if (legalRejected !== null) {
+        throw new Error(
+          legalRejected.includes('connected tag not found')
+            ? `legal write locked after rejected writes (round-4 residue bug): ${legalRejected}`
+            : `legal write rejected unexpectedly: ${legalRejected}`
+        );
+      }
+
+      // ⑥ guard-order proof (review F4: validate BEFORE cancelling — an
+      // invalid request must not disturb a legitimate session): the drain
+      // scan still rejects with the same BAD_MSG, but the pending legal
+      // write must stay UNSETTLED — the pre-F4 order settled it here
+      // ('cancelled' from a request that armed nothing in return).
+      msg = await rejectMsg(
+        'scan [[NfcBarcode]] (drain)',
+        invoke('plugin:nfc|scan', { kind: { ndef: { techLists: [[TECH_NFC_BARCODE]] } } })
+      );
+      assert(msg.includes(BAD_MSG), `drain scan unexpected reject: ${msg}`);
+      await new Promise((r) => setTimeout(r, 300));
+      if (legalRejected !== null) {
+        throw new Error(
+          `invalid scan settled the legitimate pending write (F4 guard-order regression): ${legalRejected}`
+        );
+      }
+
+      // ⑦ session replacement with a LEGAL scan: it fails the pending legal
+      // write ('Write cancelled by a new scan request'), settling that
+      // promise — the round-4 lock-free proof. The scan itself stays pending
+      // (no tag nearby); its promise is caught so a later replacement cannot
+      // surface as an unhandled rejection. Note a write cannot drain here:
+      // while a session is pending, handleWrite rejects with
+      // 'connected tag not found' — a legal scan is the only replacement.
+      const drainScan = invoke('plugin:nfc|scan', { kind: { ndef: {} } });
+      drainScan.catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 300));
+      if (legalRejected === null) {
+        throw new Error('pending legal write was never settled by the session replacement');
+      }
+      assert(
+        legalRejected.includes('cancelled'),
+        `legal write settled with an unexpected error: ${legalRejected}`
+      );
     },
   },
 ];

@@ -6,7 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@ohos-rs/ability": "file:../../../../../../../openharmony-ability/ability.har",
+    "@ohos-rs/ability": "file:{{{ability-har-rel}}}",
     "@tauri/app": "file:../tauri"
   }
 }

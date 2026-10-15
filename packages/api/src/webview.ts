@@ -587,7 +587,13 @@ class Webview {
    * @returns A promise indicating the success or failure of the operation.
    */
   async clearAllBrowsingData(): Promise<void> {
-    return invoke('plugin:webview|clear_all_browsing_data')
+    // `label` for cross-webview routing — same rationale as setBackgroundColor
+    // (without it the backend falls back to the invoking webview, so
+    // `Webview.getByLabel(x).clearAllBrowsingData()` would clear the caller's
+    // data instead of x's).
+    return invoke('plugin:webview|clear_all_browsing_data', {
+      label: this.label
+    })
   }
 
   /**
@@ -608,7 +614,12 @@ class Webview {
    * @since 2.1.0
    */
   async setBackgroundColor(color: Color | null): Promise<void> {
-    return invoke('plugin:webview|set_webview_background_color', { value: color })
+    // `label` for cross-webview routing — same rationale as Window.setBackgroundColor
+    // (without it the backend falls back to the invoking webview).
+    return invoke('plugin:webview|set_webview_background_color', {
+      label: this.label,
+      value: color
+    })
   }
 
   // Listeners

@@ -4,6 +4,7 @@
     "type": "entry",
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
+    "srcEntry": "./ets/abilitystage/EntryAbilityStage.ets",
     "deviceTypes": {{{form-device-types}}},
     "deliveryWithInstall": true,
     "installationFree": false,
@@ -18,7 +19,7 @@
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
-        "launchType": "singleton",
+        "launchType": "specified",
         "skills": [
           {
             "entities": [
@@ -74,14 +75,6 @@
       },
       {
         "name": "ohos.permission.PUBLISH_AGENT_REMINDER"
-      },
-      {
-        "name": "ohos.permission.READ_PASTEBOARD",
-        "reason": "$string:reason_read_pasteboard",
-        "usedScene": {
-          "abilities": ["EntryAbility"],
-          "when": "inuse"
-        }
       }
     ]
   }

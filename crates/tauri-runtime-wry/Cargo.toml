@@ -75,7 +75,6 @@ openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }
 openharmony-ability-plugin-window = { path = "../../../openharmony-ability/crates/plugin-window" }
 openharmony-ability-plugin-url = { path = "../../../openharmony-ability/crates/plugin-url" }
 napi-ohos = "1.2"
-futures-executor = "0.3"
 
 [features]
 default = ["x11", "dbus"]

@@ -25,7 +25,9 @@ anyhow = "1"
 tauri-plugin-sample = { path = "./tauri-plugin-sample/" }
 tauri-plugin-http = { path = "../../../../plugins-workspace/plugins/http" }
 tauri-plugin-os = { path = "../../../../plugins-workspace/plugins/os" }
-tauri-plugin-fs = { path = "../../../../plugins-workspace/plugins/fs" }
+tauri-plugin-fs = { path = "../../../../plugins-workspace/plugins/fs", features = [
+  "watch",
+] }
 tauri-plugin-persisted-scope = { path = "../../../../plugins-workspace/plugins/persisted-scope" }
 tauri-plugin-shell = { path = "../../../../plugins-workspace/plugins/shell" }
 tauri-plugin-clipboard-manager = { path = "../../../../plugins-workspace/plugins/clipboard-manager" }
@@ -89,6 +91,9 @@ tauri-plugin-accessibility = { path = "../../../../plugins-workspace/plugins/acc
 tauri-plugin-screenshot = { path = "../../../../plugins-workspace/plugins/screenshot" }
 # OHOS-only: passive app-continuation restore queries
 tauri-plugin-continuation = { path = "../../../../plugins-workspace/plugins/continuation" }
+# OHOS-only: IOTA Stronghold secret management (pure-Rust plugin, no bridge;
+# ohos builds need a prebuilt libsodium via SODIUM_LIB_DIR — see plugin README)
+tauri-plugin-stronghold = { path = "../../../../plugins-workspace/plugins/stronghold" }
 muda = { path = "../../../../muda" }
 tray-icon = { path = "../../../../tray-icon" }
 

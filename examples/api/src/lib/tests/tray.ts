@@ -1,4 +1,5 @@
 import type { TestCase } from '../test-runner';
+import { desktopOnlySuite } from '../test-runner';
 import { invoke } from '@tauri-apps/api/core';
 
 function assert(condition: boolean, msg: string) {
@@ -21,7 +22,7 @@ async function skipIfNoSimulate(): Promise<boolean> {
 
 let sharedTray: any = null;
 
-export const trayTests: TestCase[] = [
+const trayTestsInner: TestCase[] = [
   // ─── A 组：生命周期测试（涉及 create/destroy，保留 delay） ───
   {
     name: '@tauri-apps/api/tray.TrayIcon.new',
@@ -485,3 +486,10 @@ export const trayTests: TestCase[] = [
     },
   },
 ];
+/**
+ * Tray is a desktop-form feature on OHOS: lib.rs creates the shared tray
+ * only under cfg(desktop), so on a mobile-form build every plugin:tray| invoke
+ * fails ("plugin tray not found" / "sharedTray not initialized"). Wrap the
+ * whole suite.
+ */
+export const trayTests: TestCase[] = desktopOnlySuite(trayTestsInner, 'tray');

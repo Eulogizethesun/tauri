@@ -75,6 +75,7 @@ cargo tauri ohos build --app
 - pnpm、Rust + `aarch64-unknown-linux-ohos` target
 - hdc（设备连接工具，SDK 自带）
 - 设备已通过 USB 连接（`hdc list targets` 可见）
+- **SODIUM_LIB_DIR（仅当依赖树含 stronghold）**: libsodium 无法在 Windows 宿主上为 OHOS 交叉编译（`./configure` 报 os error 193），必须指向预编译库。`env.sh` 带守卫自动设置：仅当 `$PROJECT_ROOT/../libsodium-ohos/lib` 存在**且**未显式设置时生效；其他项目/无该库的环境保持未设，stronghold `build.rs` 会输出获取预编译库的指引报错（信息不丢失）。x86_64 模拟器构建须显式 export 指向 x86_64 版预编译库（显式值优先于默认）。
 
 首次使用如果 DevEco Studio 自动检测失败：
 ```bash

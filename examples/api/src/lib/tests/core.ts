@@ -1,4 +1,4 @@
-import type { TestCase } from '../test-runner';
+import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-runner';
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
 import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
@@ -156,6 +156,7 @@ export const coreTests: TestCase[] = [
     name: '@tauri-apps/api/window.currentMonitor',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the currentMonitor window command is upstream cfg(desktop) and absent from the mobile build');
       const monitor = await currentMonitor();
       assert(monitor !== null && monitor !== undefined, 'currentMonitor returned null (device should always have a display)');
       assert(typeof monitor.size.width === 'number' && monitor.size.width > 0, `monitor.size.width should be positive, got ${monitor.size.width}`);
@@ -708,6 +709,7 @@ export const coreTests: TestCase[] = [
     name: 'window.isDecorated returns boolean',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the isDecorated window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       const decorated = await win.isDecorated();
       assert(typeof decorated === 'boolean', `isDecorated() should return boolean, got ${typeof decorated}`);
@@ -717,6 +719,7 @@ export const coreTests: TestCase[] = [
     name: 'window.setDecorations toggles decorations state',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the setDecorations window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       // Save original state
       const original = await win.isDecorated();
@@ -738,6 +741,7 @@ export const coreTests: TestCase[] = [
     name: 'create_borderless_window command',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
       const windowId = 'test-borderless-' + Date.now();
       await invoke('create_borderless_window', { windowId });
       // Wait for window to be created
@@ -757,6 +761,7 @@ export const coreTests: TestCase[] = [
     name: 'create_transparent_borderless_window command',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the create_transparent_borderless_window command is cfg(desktop)-only in cmd.rs');
       const windowId = 'test-transparent-borderless-' + Date.now();
       await invoke('create_transparent_borderless_window', { windowId });
       // Wait for window to be created
@@ -777,6 +782,7 @@ export const coreTests: TestCase[] = [
     name: 'window.is_maximized returns boolean',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the isMaximized window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       const maximized = await win.isMaximized();
       assert(typeof maximized === 'boolean', `isMaximized() should return boolean, got ${typeof maximized}`);
@@ -786,6 +792,7 @@ export const coreTests: TestCase[] = [
     name: 'window.is_minimized returns boolean',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the isMinimized window command is upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       const minimized = await win.isMinimized();
       assert(typeof minimized === 'boolean', `isMinimized() should return boolean, got ${typeof minimized}`);
@@ -796,6 +803,7 @@ export const coreTests: TestCase[] = [
     name: 'window.maximize then is_maximized reflects state',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the maximize/unmaximize window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await win.maximize();
       await new Promise((r) => setTimeout(r, 500));
@@ -807,6 +815,7 @@ export const coreTests: TestCase[] = [
     name: 'window.unmaximize (recover) then is_maximized reflects state',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the maximize/unmaximize window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
       await win.maximize();
       await new Promise((r) => setTimeout(r, 500));
@@ -918,6 +927,7 @@ export const coreTests: TestCase[] = [
     name: 'on_new_window: Deny blocks window.open()',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the phone ArkWeb native layer returns a null URL for window.open (nweb_handler_delegate native return nullptr), so the event URL is null on mobile — known platform gap');
       // Set handler to Deny mode
       await invoke('set_deny_new_window', { deny: true });
       // Attempt to open a new window
@@ -938,6 +948,7 @@ export const coreTests: TestCase[] = [
     name: 'on_new_window: window.open triggers event with correct URL',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the phone ArkWeb native layer returns a null URL for window.open (nweb_handler_delegate native return nullptr), so the event URL is null on mobile — known platform gap');
       // The `new-window-requested` event is emitted unconditionally in the
       // OHOS handler (lib.rs) BEFORE the Allow/Create/Deny decision, so it fires
       // regardless of mode. We use Create mode (create=true) here rather than
@@ -1003,6 +1014,27 @@ export const coreTests: TestCase[] = [
     name: 'webview.createPdf (default A4)',
     category: 'auto',
     async fn() {
+      // C5 (round 2): the runtime gate rejects below API 14 with the unified
+      // version error — cmd.rs propagates it (`window.create_pdf(...)?`), so
+      // the invoke rejects. Previously this tier was a silent skip and the
+      // rejection was never positively asserted anywhere; assert it now.
+      // At/above API 14 (the verified devices are API 23/26) the normal
+      // event round-trip below runs.
+      const api = await ohosSdkApiVersion();
+      if (api !== null && api < 14) {
+        let err: unknown = null;
+        try {
+          await invoke('test_create_pdf');
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'createPdf must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `createPdf below API 14 must carry the version error, got: ${String(err)}`
+        );
+        return;
+      }
       let result = '';
       const unlisten = await listen<string>('create-pdf-result', (event) => {
         result = event.payload;
@@ -1019,6 +1051,81 @@ export const coreTests: TestCase[] = [
       unlisten();
       assert(result.startsWith('true:'), `Expected success, got: ${result}`);
       assert(result.includes('.pdf'), `Expected path in result, got: ${result}`);
+    },
+  },
+
+  // Review C4 companion: Webview.clearAllBrowsingData must carry `label` so a cross-webview
+  // call routes to the TARGET webview (plugin.rs get_webview: label → manager lookup,
+  // WebviewNotFound on miss; a missing label silently falls back to the CALLING webview,
+  // which made `Webview.getByLabel(x).clearAllBrowsingData()` clear the caller instead —
+  // the same defect shape as the setBackgroundColor fix in this PR).
+  //
+  // T166C-N1 attribution — the three legs pin DIFFERENT layers:
+  // - frontend-revert leg (the discriminator): the high-level method is called on a
+  //   Webview OBJECT carrying a bogus label (constructed with the internal `skip`
+  //   option, so no webview is created — pure label carrier). With the label fix in
+  //   place the backend lookup misses → WebviewNotFound REJECTION. If the api package
+  //   reverted to dropping `label`, the backend would silently fall back to the
+  //   CALLING webview and RESOLVE — the rejection below is the only behavioral
+  //   difference between the two wires, so this leg fails on a frontend revert.
+  // - backend leg (raw invoke, explicit bogus label): pins that the plugin command
+  //   consults `label` at all (the pre-fix backend ignored the field and resolved,
+  //   clearing the caller). This leg bypasses the frontend, so it cannot see a
+  //   frontend revert — that is what the leg above is for.
+  // - liveness leg (real float webview): the call resolves on a real non-caller
+  //   target. Non-discriminating by design (the pre-fix wire also resolved — on the
+  //   caller); it only proves the command path works end-to-end.
+  // Why a behavioral oracle instead of a wire spy: every JS seam on the invoke chain
+  // is deliberately non-writable (core.js/ipc.js/ipc-protocol.js define `invoke`,
+  // `ipc`, and `postMessage` via non-configurable Object.defineProperty, and
+  // `window.ipc` on OHOS is a native ArkWeb proxy object), so the payload cannot be
+  // intercepted from JS — the fake-label object is the observable equivalent.
+  // Data-layer note: WHICH storage got wiped is not observable from JS here
+  // (same-origin ArkWeb instances may share DOM storage), so routing is pinned by
+  // resolve/reject semantics, not by observing cleared data. The float window is
+  // left for the manual Close All cleanup.
+  {
+    name: 'webview.clearAllBrowsingData routes to the labeled target',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      const label = 'test-clear-' + Date.now();
+      await invoke('create_borderless_window', { windowId: label });
+      await new Promise((r) => setTimeout(r, 500));
+      const w = await Webview.getByLabel(label);
+      assert(w !== null, `Float webview "${label}" should exist`);
+
+      // Liveness leg: resolving on a real non-caller target (see header — not a
+      // routing assertion).
+      await w!.clearAllBrowsingData();
+
+      // Frontend-revert leg: bogus-label carrier object must REJECT — a dropped
+      // label would fall back to the caller and resolve instead.
+      const bogus = `no-such-webview-${Date.now()}`;
+      const carrier = new Webview(getCurrentWindow(), bogus, { skip: true } as never);
+      let rejectedHigh = false;
+      try {
+        await carrier.clearAllBrowsingData();
+      } catch {
+        rejectedHigh = true;
+      }
+      assert(
+        rejectedHigh,
+        `high-level clearAllBrowsingData must route by its label "${bogus}" (frontend label fix reverted? a dropped label falls back to the caller and resolves)`
+      );
+
+      // Backend leg: the raw invoke with the same bogus label must also reject
+      // (the command consults `label`; pre-fix it ignored the field).
+      let rejected = false;
+      try {
+        await invoke('plugin:webview|clear_all_browsing_data', { label: bogus });
+      } catch {
+        rejected = true;
+      }
+      assert(
+        rejected,
+        `clearAllBrowsingData on unknown label "${bogus}" must reject (label not consulted — caller-fallback regression?)`
+      );
     },
   },
 
@@ -1330,6 +1437,7 @@ export const coreTests: TestCase[] = [
     name: '@tauri-apps/api/window.cursorPosition',
     category: 'auto',
     async fn() {
+      await skipOnMobile('the cursorPosition window command is upstream cfg(desktop) and absent from the mobile build');
       const pos = await cursorPosition();
       assert(typeof pos.x === 'number', `pos.x should be number, got ${typeof pos.x}`);
       assert(typeof pos.y === 'number', `pos.y should be number, got ${typeof pos.y}`);
@@ -1537,6 +1645,7 @@ export const coreTests: TestCase[] = [
     name: 'window.setEffects (Blur/Acrylic) — no throw',
     category: 'side-effect',
     async fn() {
+      await skipOnMobile('the setEffects window command is upstream cfg(desktop) and absent from the mobile build');
       const windowId = 'test-vibrancy-auto-' + Date.now();
       await invoke('create_transparent_window', { windowId });
       const win = await WebviewWindow.getByLabel(windowId);
@@ -1613,9 +1722,26 @@ export const coreTests: TestCase[] = [
       const windowId = 'autotest-' + Date.now();
       const diag = await invoke<{
         label: string;
+        window_id: string;
         webview_acquired: boolean;
         all_webview_labels: string[];
+        mobile_form: boolean;
+        mobile_fail_fast: string | null;
       }>('create_transparent_ui_ability_window', { windowId });
+
+      // Mobile form: the desktop-only gate rejects additional UIAbility
+      // windows (multi-uiability-windows OQ1 keeps the mobile entry
+      // singleton) — the command reports the fail-fast marker and this
+      // records a skip. A mobile-form build whose spawn SUCCEEDED (gate
+      // regression) or a desktop failure fails loudly below.
+      if (diag.mobile_form) {
+        if (diag.mobile_fail_fast === null) {
+          throw new Error(
+            `mobile-form build let the transparent UIAbility spawn through (desktop-only gate regressed): ${JSON.stringify(diag)}`
+          );
+        }
+        skip(`UIAbility spawn fail-fast on mobile form (desktop-only, tao gate): ${diag.mobile_fail_fast}`);
+      }
 
       assert(
         diag.webview_acquired === true,

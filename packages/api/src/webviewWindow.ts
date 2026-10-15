@@ -220,8 +220,16 @@ class WebviewWindow {
    * @since 2.1.0
    */
   async setBackgroundColor(color: Color): Promise<void> {
-    return invoke('plugin:window|set_background_color', { value: color }).then(() => {
-      return invoke('plugin:webview|set_webview_background_color', { value: color })
+    // `label` for cross-window routing — same rationale as Window.setBackgroundColor
+    // (without it the backend falls back to the invoking window).
+    return invoke('plugin:window|set_background_color', {
+      label: this.label,
+      value: color
+    }).then(() => {
+      return invoke('plugin:webview|set_webview_background_color', {
+        label: this.label,
+        value: color
+      })
     })
   }
 }

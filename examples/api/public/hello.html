@@ -6,13 +6,15 @@
   <title>Hello World</title>
   <style>
 
-    /* 只给这个盒子设置居中样式，不影响任何其他元素 */
+    /* Centering styles apply to this box only; no other element is affected */
     .center-box {
       display: flex;
+      flex-direction: column;
+      gap: 12px;
       justify-content: center;
       align-items: center;
-      
-      /* 让盒子占满整个屏幕，实现全屏居中 */
+
+      /* Make the box fill the whole screen to center it full-screen */
       position: fixed;
       top: 0;
       left: 0;
@@ -27,14 +29,45 @@
     h1 {
       color: #333;
     }
+
+    /* multi-uiability-windows 4.3 acceptance-probe surface: click counter + IME echo.
+       Events are logged to console only (ARKWEB-CONSOLE); layout semantics are unchanged. */
+    .probe-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
   </style>
 </head>
 <body>
 
-  <!-- 只有这里面的内容会居中 -->
+  <!-- Only the content inside here gets centered -->
   <div class="center-box">
     <h1>Hello World</h1>
+    <div class="probe-row">
+      <button id="probe-btn">clicked 0 times</button>
+      <input id="probe-input" placeholder="IME probe" />
+    </div>
   </div>
+
+  <script>
+    // 4.3 evidence (openspec multi-uiability-windows): the spawned UIAbility
+    // window's own webview must consume its clicks (counter rises, main window
+    // unaffected) and its IME input while it holds focus.
+    (function () {
+      var count = 0;
+      var btn = document.getElementById('probe-btn');
+      btn.addEventListener('click', function () {
+        count += 1;
+        btn.textContent = 'clicked ' + count + ' times';
+        console.log('[spawned-page] click #' + count);
+      });
+      var input = document.getElementById('probe-input');
+      input.addEventListener('input', function () {
+        console.log('[spawned-page] ime input: ' + JSON.stringify(input.value));
+      });
+    })();
+  </script>
 
 </body>
 </html>
