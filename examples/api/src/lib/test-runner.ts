@@ -105,11 +105,16 @@ export function desktopOnlySuite(tests: TestCase[], feature: string): TestCase[]
 // Several OHOS window/webview operations are version-gated in
 // tauri-runtime-wry (`ohos_requires_api`): print/createPdf/setAlwaysOnTop
 // need SDK API 14+, startResizeDragging 20+, setCursorGrab 22+ — below the
-// threshold the facade returns Err BY DESIGN because the underlying
-// ArkTS/NDK API does not exist there. The suite's verified devices are API
-// 23 (2in1) and API 26 (phone), where every gate passes; this helper keeps
-// the suite honest on lower-API devices by recording a skip with the
-// threshold in the reason instead of a red "not supported" failure.
+// threshold the facade rejects with the unified version error because the
+// underlying ArkTS/NDK API does not exist there. The suite's verified
+// devices are API 23 (2in1) and API 26 (phone), where every gate passes, so
+// the low-tier rejection is unreachable on them. Gated cases therefore probe
+// DUAL-MODE: below the threshold they positively ASSERT the version error
+// (message matched, not merely tolerated by a catch-all), at/above it they
+// run the normal path — the Err side fires automatically whenever a low-API
+// device runs the suite. It is disclosed in the PR text that no low-API
+// device was available in this round, so the assertion below the threshold
+// has not been observed firing on hardware yet.
 
 let cachedSdkApiVersion: number | null = null;
 
@@ -128,18 +133,6 @@ export async function ohosSdkApiVersion(): Promise<number | null> {
     }
   }
   return cachedSdkApiVersion < 0 ? null : cachedSdkApiVersion;
-}
-
-/**
- * Skip the current test when the device's OHOS SDK API level is below
- * `minApi`. Use at the top of a case whose Rust facade gate returns a
- * version error below that level.
- */
-export async function skipBelowOhosApi(minApi: number, reason: string): Promise<void> {
-  const v = await ohosSdkApiVersion();
-  if (v !== null && v < minApi) {
-    skip(`OHOS API ${v} < ${minApi} (facade returns a version error there) — ${reason}`);
-  }
 }
 
 const TEST_TIMEOUT_MS = 5000;

@@ -1,4 +1,4 @@
-import { skip, skipOnMobile, skipBelowOhosApi, type TestCase } from '../test-runner';
+import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-runner';
 import { getCurrentWindow, currentMonitor, Window } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -632,10 +632,26 @@ export const windowOpsTests: TestCase[] = [
     category: 'auto',
     async fn() {
       await skipOnMobile('the setAlwaysOnTop window command is upstream cfg(desktop) and absent from the mobile build');
-      // smoke() fails on any throw, and the Rust facade returns a version
-      // error below API 14 (setWindowTopmost does not exist there) — record
-      // the tier as a skip instead of a red failure on low-API devices.
-      await skipBelowOhosApi(14, 'setAlwaysOnTop dispatches to setWindowTopmost (API 14+)');
+      // C5 (round 2): smoke() fails on any throw, and the Rust facade
+      // rejects below API 14 (setWindowTopmost does not exist there). That
+      // tier was previously a silent skip — the rejection was never
+      // positively asserted anywhere — so assert it here; at/above API 14
+      // (the verified devices are API 23/26) the normal smoke path runs.
+      const topmostApi = await ohosSdkApiVersion();
+      if (topmostApi !== null && topmostApi < 14) {
+        let err: unknown = null;
+        try {
+          await getCurrentWindow().setAlwaysOnTop(true);
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'setAlwaysOnTop must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `setAlwaysOnTop below API 14 must carry the version error, got: ${String(err)}`
+        );
+        return;
+      }
       const win = getCurrentWindow();
       // set_always_on_top dispatches to OHOS setWindowTopmost (API 14+,
       // ohos.permission.WINDOW_TOPMOST; main window, freeform mode) — but
@@ -643,6 +659,58 @@ export const windowOpsTests: TestCase[] = [
       // self-proving and the z-order effect is not asserted.
       await smoke(() => win.setAlwaysOnTop(true), 'setAlwaysOnTop(true)');
       await smoke(() => win.setAlwaysOnTop(false), 'setAlwaysOnTop(false)');
+    },
+  },
+  {
+    name: 'version-gate negative probes (print API 14 / setCursorGrab API 22)',
+    category: 'auto',
+    async fn() {
+      // C5 (round 2): the print (14) and setCursorGrab (22) facade gates have
+      // no other hand-written case — print's only automated coverage is the
+      // fault-injection timeout probe (error is the injected fault, not the
+      // gate), setCursorGrab lives in the generated blind-call file where any
+      // outcome passes — so their low-tier rejections are asserted here:
+      // below the threshold the facade must reject with the unified version
+      // error, positively matched. At/above both thresholds (the verified
+      // devices are API 23 desktop and API 26 phone) the Err side is
+      // unreachable; record a skip naming the tier so the report shows why
+      // instead of a silent pass.
+      const api = await ohosSdkApiVersion();
+      if (api === null) {
+        skip('non-OHOS platform — version gates do not apply');
+      }
+      let probed = false;
+      if (api < 14) {
+        let err: unknown = null;
+        try {
+          await invoke('plugin:webview|print', { label: 'main' });
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'print must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `print below API 14 must carry the version error, got: ${String(err)}`
+        );
+        probed = true;
+      }
+      if (api < 22) {
+        let err: unknown = null;
+        try {
+          await getCurrentWindow().setCursorGrab(false);
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'setCursorGrab must reject below API 22');
+        assert(
+          /requires API level 22/.test(String(err)),
+          `setCursorGrab below API 22 must carry the version error, got: ${String(err)}`
+        );
+        probed = true;
+      }
+      if (!probed) {
+        skip(`API ${api} ≥ 22 — both gates pass here; the Err sides only assert on lower-API devices`);
+      }
     },
   },
   {
@@ -728,7 +796,7 @@ export const windowOpsTests: TestCase[] = [
       //    Float branch (win.showWindow()).
       await w.minimize();
       await delay(500);
-      assert((await w.isMinimized()) === true, 'Float minimize should reflect in live window status');
+      assert((await w.isMinimized()) === true, 'Float minimize round-trip (tao local mirror — not live OS state, see ③)');
       await w.show();
       await delay(500);
       assert((await w.isMinimized()) === false, 'Float show (showWindowMethod Float branch) should restore from minimized');

@@ -1,4 +1,4 @@
-import type { TestCase } from '../test-runner';
+import { ohosSdkApiVersion, type TestCase } from '../test-runner';
 import {
   getCurrentWindow,
   currentMonitor,
@@ -154,11 +154,27 @@ export const windowOpsExtraTests: TestCase[] = [
       try {
         // 无鼠标按住时 OHOS 大概率拒绝 → 错误分支点亮即达标
         await attempt('startDragging', () => w.startDragging());
-        // startResizeDragging is facade-gated at API 20+ (ohos_requires_api):
-        // on lower-API devices this attempt records the version error, which
-        // is the correct error-branch outcome under attempt semantics — no
-        // skip, so the startDragging coverage above stays live at every tier.
-        await attempt('startResizeDragging', () => w.startResizeDragging('East'));
+        // startResizeDragging is facade-gated at API 20+ (ohos_requires_api).
+        // C5 (round 2): below the threshold the version rejection is now
+        // ASSERTED — under plain attempt() semantics any error (version or
+        // not) passed, so the gate itself was unproven. At/above API 20 (the
+        // verified devices are API 23/26) the attempt coverage stays as-is.
+        const api = await ohosSdkApiVersion();
+        if (api !== null && api < 20) {
+          let err: unknown = null;
+          try {
+            await w.startResizeDragging('East');
+          } catch (e) {
+            err = e;
+          }
+          assert(err !== null, 'startResizeDragging must reject below API 20');
+          assert(
+            /requires API level 20/.test(String(err)),
+            `startResizeDragging below API 20 must carry the version error, got: ${String(err)}`
+          );
+        } else {
+          await attempt('startResizeDragging', () => w.startResizeDragging('East'));
+        }
         await delay(300);
         await attempt('float setFocus', () => w.setFocus());
         await attempt('float setFocusable', () => w.setFocusable(true));

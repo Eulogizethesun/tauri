@@ -101,13 +101,19 @@
 
       // start dragging if the element has a `tauri-drag-region` data attribute and maximize on double-clicking it
       const cmd = e.detail === 2 ? 'internal_toggle_maximize' : 'start_dragging'
-      // The rejection is swallowed: on OpenHarmony `start_dragging` is a
-      // documented Err (no programmatic window-drag API; dragging is handled
-      // at the UI layer), and this auto-injected script must not turn every
-      // drag-region click into an unhandled promise rejection inside apps
-      // with error reporting hooked up. Other platforms resolve, so the
-      // catch is inert there.
-      window.__TAURI_INTERNALS__.invoke('plugin:window|' + cmd).catch(() => {})
+      // On OpenHarmony `start_dragging` is a documented Err (OHOS startMoving
+      // must run inside a touch-down callback, so the command cannot work
+      // from here; dragging is handled at the UI layer), and this
+      // auto-injected script must not turn every drag-region click into an
+      // unhandled promise rejection inside apps with error reporting hooked
+      // up — swallow exactly that case. Every other rejection (other
+      // platforms, or the maximize command on OpenHarmony) is unexpected and
+      // surfaces on the console instead of being silently dropped.
+      window.__TAURI_INTERNALS__.invoke('plugin:window|' + cmd).catch((err) => {
+        if (!(osName === 'ohos' && cmd === 'start_dragging')) {
+          console.warn('[tauri] ' + cmd + ' failed:', err)
+        }
+      })
     }
   })
 

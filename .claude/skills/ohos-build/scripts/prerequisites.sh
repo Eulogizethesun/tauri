@@ -56,42 +56,66 @@ ohos_prerequisites() {
     echo ">>> [prereq] Checking ACL permission consistency..."
     bash "$SCRIPT_DIR/../../acl-check/scripts/clean-stale-acl.sh" "$SRC_TAURI"
 
-    # ─── 5. sibling checkouts（[patch.crates-io] path 依赖存在性）───
+    # ─── 5. sibling checkouts（[patch.crates-io] path 依赖 + examples path 依赖存在性）───
     # Cargo 在依赖解析阶段校验 [patch.crates-io] 的每一项——即使被 patch 的
-    # crate 不在本次构建图里——所以缺一个 sibling 检出就会以与所编代码无关的
-    # 解析错误失败。提前检查并给出获取提示。（examples/api/src-tauri 另有直连
-    # plugins-workspace 的 path 依赖，一并检查；stronghold-runtime 经
-    # .cargo/config.toml 的 Artifactory 源替换解析，无需本地检出。）
-    local parent rel target name missing
+    # crate 不在本次构建图里——且会加载 workspace 每个 member 的 path 依赖
+    # （examples/api 是 member），所以缺一个 sibling 检出就会以与所编代码无关的
+    # 解析错误失败。提前检查并给出获取提示。path 条目有两处来源，都扫：
+    #   a. workspace 根 Cargo.toml（wry/tao/muda/tray-icon/openharmony-ability/
+    #      cargo-mobile2/window-vibrancy 的 [patch.crates-io] 条目）
+    #   b. examples/api/src-tauri/Cargo.toml 的直接 path 依赖（plugins-workspace
+    #      各插件、sentry-tauri、muda/tray-icon/openharmony-ability）
+    # 同一顶层仓的多条 entry 只查一次（plugins-workspace 有 ~30 条）。
+    # （stronghold-runtime 经 .cargo/config.toml 的 Artifactory 源替换解析，
+    # 无需本地检出。）
+    # 分支选择与 CI（.github/workflows/ohos-pr-review.yml 的 sibling checkout
+    # 步骤）一致：联动 PR 集共享 fork owner 与分支名，优先 PR head 的
+    # owner/ref，否则用 fork 的 ohdev 分支——fork 的默认分支（dev/v2/master）
+    # 不带 OHOS 适配或 OHOS-only 插件。
+    local parent manifest rel top target seen missing
     parent="$(dirname "$PROJECT_ROOT")"
+    seen=""
     missing=""
     # 本 workspace 的 path 条目不含空格，按词拆分遍历安全。
-    for rel in $(awk '/^\[patch\.crates-io\]/{f=1;next} /^\[/{f=0} f' \
-        "$PROJECT_ROOT/Cargo.toml" \
-        | grep -oE 'path = "\.\./[^"]+"' \
-        | sed -e 's/^path = "//' -e 's/"$//') ../plugins-workspace; do
-        target="$parent/${rel#../}"
-        if [ ! -d "$target" ]; then
-            missing="$missing $rel"
-        fi
+    for manifest in "$PROJECT_ROOT/Cargo.toml" "$SRC_TAURI/Cargo.toml"; do
+        for rel in $(grep -oE 'path = "\.\./[^"]+"' "$manifest" \
+            | sed -e 's/^path = "//' -e 's/"$//'); do
+            top="$(printf '%s' "$rel" | sed -e 's|^\(\.\./\)*||' | cut -d/ -f1)"
+            case " $seen " in
+                *" $top "*) continue ;;
+            esac
+            seen="$seen $top"
+            target="$(cd "$(dirname "$manifest")/$rel" 2>/dev/null && pwd)"
+            # target 为空 = 路径解析失败（检出缺失）；解析成功即存在——仓库内
+            # 的 ../ 逃逸（如 src-tauri 的 ../../../crates/tauri）随本检出必然
+            # 存在，自然不会进 missing，无需特判。
+            if [ -z "$target" ]; then
+                missing="$missing $top"
+            fi
+        done
     done
     if [ -n "$missing" ]; then
         echo "" >&2
         echo "ERROR: sibling checkout(s) required for cargo dependency" >&2
-        echo "resolution are missing ([patch.crates-io] path entries are" >&2
-        echo "validated during resolution even when the patched crate is not" >&2
-        echo "part of the build):" >&2
-        for rel in $missing; do
-            echo "  - $rel" >&2
+        echo "resolution are missing — cargo validates [patch.crates-io] path" >&2
+        echo "entries during resolution even when the patched crate is not part" >&2
+        echo "of the build graph, and loads every workspace member's path" >&2
+        echo "dependencies (examples/api is a member):" >&2
+        for top in $missing; do
+            echo "  - $top" >&2
         done
         echo "" >&2
         echo "Clone the missing repositories next to this one, under:" >&2
         echo "  $parent" >&2
-        for name in $(printf '%s\n' $missing | sed 's|^\.\./||' | cut -d/ -f1 | sort -u); do
-            echo "  git clone https://github.com/Eulogizethesun/${name}.git" >&2
-        done
         echo "" >&2
-        echo "Branch note: plugins-workspace is used from its v2 branch." >&2
+        echo "Branch selection (same as CI, ohos-pr-review.yml): a coordinated" >&2
+        echo "PR set shares the fork owner and branch name, so prefer the PR" >&2
+        echo "head's owner/ref; otherwise use the forks' 'ohdev' branch — the" >&2
+        echo "default branches (dev/v2/master) do NOT carry the OHOS" >&2
+        echo "adaptation or the OHOS-only plugins:" >&2
+        for top in $missing; do
+            echo "  git clone --depth 1 --branch ohdev https://github.com/Eulogizethesun/${top}.git" >&2
+        done
         return 1
     fi
     echo ">>> [prereq] Sibling checkouts present."

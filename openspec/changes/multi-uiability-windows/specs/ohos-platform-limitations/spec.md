@@ -1,6 +1,12 @@
-<!-- 有意镜像（TA3 双写）：本 delta 之 Requirement/Scenario 正文与 live spec
-     openspec/specs/ohos-platform-limitations/spec.md 的同名小节逐字相同——归档（archive）
-     本 change 时按 openspec 流程去重，勿在 delta 侧单独演化。 -->
+<!-- 有意镜像（TA3 双写，tauri#166 D7 第二轮复核收口）：本 delta 之
+     Requirement/Scenario 正文与 live spec
+     openspec/specs/ohos-platform-limitations/spec.md 的同名小节逐字相同。
+     归档去重方式已定并落地为可执行步骤：
+     bash openspec/changes/multi-uiability-windows/archive-dedup.sh
+     —— 漂移校验（两者不一致即中止）→ 剥离 live 先行落盘内容 →
+     openspec archive 重新合入 → 回填汇总表行 → 往返校验（终态与起始
+     内容逐字一致，失败即回滚）。加 --dry-run 可随时演练/在 CI 里做
+     双写漂移检查。勿在 delta 侧单独演化正文（守卫会拦）。 -->
 
 ## ADDED Requirements
 

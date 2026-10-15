@@ -1,4 +1,4 @@
-import { skip, skipOnMobile, skipBelowOhosApi, type TestCase } from '../test-runner';
+import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-runner';
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
 import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
@@ -1014,10 +1014,27 @@ export const coreTests: TestCase[] = [
     name: 'webview.createPdf (default A4)',
     category: 'auto',
     async fn() {
-      // The runtime gate rejects below API 14 with the unified version error
-      // (test_create_pdf would surface it as a `false:` result → red). Record
-      // the tier as a skip on low-API devices instead.
-      await skipBelowOhosApi(14, 'ArkWeb createPdf is API 14+');
+      // C5 (round 2): the runtime gate rejects below API 14 with the unified
+      // version error — cmd.rs propagates it (`window.create_pdf(...)?`), so
+      // the invoke rejects. Previously this tier was a silent skip and the
+      // rejection was never positively asserted anywhere; assert it now.
+      // At/above API 14 (the verified devices are API 23/26) the normal
+      // event round-trip below runs.
+      const api = await ohosSdkApiVersion();
+      if (api !== null && api < 14) {
+        let err: unknown = null;
+        try {
+          await invoke('test_create_pdf');
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, 'createPdf must reject below API 14');
+        assert(
+          /requires API level 14/.test(String(err)),
+          `createPdf below API 14 must carry the version error, got: ${String(err)}`
+        );
+        return;
+      }
       let result = '';
       const unlisten = await listen<string>('create-pdf-result', (event) => {
         result = event.payload;
@@ -1042,6 +1059,31 @@ export const coreTests: TestCase[] = [
   // WebviewNotFound on miss; a missing label silently falls back to the CALLING webview,
   // which made `Webview.getByLabel(x).clearAllBrowsingData()` clear the caller instead —
   // the same defect shape as the setBackgroundColor fix in this PR).
+  //
+  // T166C-N1 attribution — the three legs pin DIFFERENT layers:
+  // - frontend-revert leg (the discriminator): the high-level method is called on a
+  //   Webview OBJECT carrying a bogus label (constructed with the internal `skip`
+  //   option, so no webview is created — pure label carrier). With the label fix in
+  //   place the backend lookup misses → WebviewNotFound REJECTION. If the api package
+  //   reverted to dropping `label`, the backend would silently fall back to the
+  //   CALLING webview and RESOLVE — the rejection below is the only behavioral
+  //   difference between the two wires, so this leg fails on a frontend revert.
+  // - backend leg (raw invoke, explicit bogus label): pins that the plugin command
+  //   consults `label` at all (the pre-fix backend ignored the field and resolved,
+  //   clearing the caller). This leg bypasses the frontend, so it cannot see a
+  //   frontend revert — that is what the leg above is for.
+  // - liveness leg (real float webview): the call resolves on a real non-caller
+  //   target. Non-discriminating by design (the pre-fix wire also resolved — on the
+  //   caller); it only proves the command path works end-to-end.
+  // Why a behavioral oracle instead of a wire spy: every JS seam on the invoke chain
+  // is deliberately non-writable (core.js/ipc.js/ipc-protocol.js define `invoke`,
+  // `ipc`, and `postMessage` via non-configurable Object.defineProperty, and
+  // `window.ipc` on OHOS is a native ArkWeb proxy object), so the payload cannot be
+  // intercepted from JS — the fake-label object is the observable equivalent.
+  // Data-layer note: WHICH storage got wiped is not observable from JS here
+  // (same-origin ArkWeb instances may share DOM storage), so routing is pinned by
+  // resolve/reject semantics, not by observing cleared data. The float window is
+  // left for the manual Close All cleanup.
   {
     name: 'webview.clearAllBrowsingData routes to the labeled target',
     category: 'auto',
@@ -1052,11 +1094,28 @@ export const coreTests: TestCase[] = [
       await new Promise((r) => setTimeout(r, 500));
       const w = await Webview.getByLabel(label);
       assert(w !== null, `Float webview "${label}" should exist`);
-      // Positive: clearing a webview OTHER than the caller resolves — the label routes to it.
+
+      // Liveness leg: resolving on a real non-caller target (see header — not a
+      // routing assertion).
       await w!.clearAllBrowsingData();
-      // Negative: an unknown label must reject (WebviewNotFound). Under the pre-fix no-label
-      // wire this call RESOLVED and cleared the caller's — this suite's own — data instead.
+
+      // Frontend-revert leg: bogus-label carrier object must REJECT — a dropped
+      // label would fall back to the caller and resolve instead.
       const bogus = `no-such-webview-${Date.now()}`;
+      const carrier = new Webview(getCurrentWindow(), bogus, { skip: true } as never);
+      let rejectedHigh = false;
+      try {
+        await carrier.clearAllBrowsingData();
+      } catch {
+        rejectedHigh = true;
+      }
+      assert(
+        rejectedHigh,
+        `high-level clearAllBrowsingData must route by its label "${bogus}" (frontend label fix reverted? a dropped label falls back to the caller and resolves)`
+      );
+
+      // Backend leg: the raw invoke with the same bogus label must also reject
+      // (the command consults `label`; pre-fix it ignored the field).
       let rejected = false;
       try {
         await invoke('plugin:webview|clear_all_browsing_data', { label: bogus });
@@ -1067,9 +1126,6 @@ export const coreTests: TestCase[] = [
         rejected,
         `clearAllBrowsingData on unknown label "${bogus}" must reject (label not consulted — caller-fallback regression?)`
       );
-      // Data-layer note: WHICH storage got wiped is not observable from JS here (same-origin
-      // ArkWeb instances may share DOM storage), so this case pins the routing layer the
-      // label fix touches. The float window is left for the manual Close All cleanup.
     },
   },
 
