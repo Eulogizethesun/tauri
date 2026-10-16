@@ -239,13 +239,17 @@ cp ${PROJECT_ROOT}/tauri/.claude/skills/ohos-build/templates/testtrayability/Tes
 
 `module.json5` 会被模板覆盖，需要手动补充 `TestTrayAbility` 扩展和**模板缺失的权限**。
 
-> **模板现状**（`crates/tauri-cli/templates/.../module.json5`）已内置：`INTERNET`、`SET_WINDOW_TRANSPARENT`、`WINDOW_TOPMOST`、`LOCK_WINDOW_CURSOR`、`PRINT`（desktop 带 reason/usedScene，mobile 不带）。模板**未内置**下列 5 个权限——它们只存在于本地 `gen/ohos` 生成产物中（被 gitignore，未提交、不会随 PR 上游）。重新 `tauri ohos init` 后这 5 个会被清掉，必须手动补回，否则对应功能静默失败：
+> **模板现状**（`crates/tauri-cli/templates/.../module.json5`，经 `{{#if (eq form "desktop")}}` 条件块区分两形态；2026-10-15 #166 合入后定局）：两形态都内置 `INTERNET`、`SET_WINDOW_TRANSPARENT`、`PREPARE_APP_TERMINATE`、`PRIVACY_WINDOW`、`PUBLISH_AGENT_REMINDER`；仅 desktop 形态内置 `WINDOW_TOPMOST`、`LOCK_WINDOW_CURSOR`、`PRINT`（带 reason/usedScene）。`READ_PASTEBOARD` **模板已完全不声明**（#166 的 C8 决策：受限权限在无 ACL 的默认签名 profile 下装不了机，新脚手架须开箱可装）——需要剪贴板读取的应用自行加回：它是受限开放权限（system_basic/user_grant），PC/2in1 应用均可申请，非 PC/2in1 设备（手机/平板等）仅银行卡号复制/口令复制/文档编辑类/系统级输入法等特殊场景可通过 AGC 审核申请（约 3 个工作日），官方免权限替代是 PasteButton 粘贴控件；自行声明须 reason/usedScene + 签名 profile acls 覆盖，否则装机 9568289。`PUBLISH_AGENT_REMINDER` 是 normal 级 system_grant 开放权限（不在受限清单），模板无条件声明；注意其管控是「代理提醒开放能力申请」（AGC 互动中心，覆盖手机/平板/PC/2in1 **全形态**，通过后须重新生成 Profile 并手动签名），与是否声明无关。entry_desktop 模板另含 `srcEntry`（EntryAbilityStage）与 `launchType: "specified"`（多 UIAbility），entry_mobile 为 `"singleton"`——**两模板自 #166 起不再字节一致**。模板**未内置**下列 5 个权限——它们只存在于本地 `gen/ohos` 生成产物中（被 gitignore，未提交、不会随 PR 上游）。重新 `tauri ohos init` 后这 5 个会被清掉，必须手动补回，否则对应功能静默失败：
 > - `VIBRATE` → §十三 haptics 失败
 > - `LOCATION` / `APPROXIMATELY_LOCATION` → §二十八 geolocation 失败（需 `reason` + `usedScene`，否则 ACL 校验拒绝）
 > - `CAMERA` → 相机功能失败（需 `reason` + `usedScene`）
 > - `ACCESS_BIOMETRIC` → §三十一 biometric 失败
+>
+> 另外 init 后 `READ_PASTEBOARD` 两形态都要自行补回（模板不再下发，见上）；demo 的手机端剪贴板用例（#102 readText）依赖它（reason/usedScene + 签名 profile acls 覆盖，否则装机 9568289）。`PUBLISH_AGENT_REMINDER` 模板已无条件声明，无需手动补。
+>
+> 指引持久载体：模板根的 `README.md`（随 init 落到 `gen/ohos/` 项目根）——module.json5 里的指引注释会在**首次 build** 即被 entry deviceTypes 对齐重写丢掉（`write_entry_device_types` 的 json5 round-trip 不保留注释，每次 build 都跑），README 不经该路径、不会被重写。
 
-补充后的完整配置（`gen/ohos/entry_desktop/src/main/module.json5` 和 `gen/ohos/entry_mobile/src/main/module.json5` 都要补，mobile 的 PRINT 不带 reason/usedScene）：
+补充后的完整配置（`gen/ohos/entry_desktop/src/main/module.json5` 和 `gen/ohos/entry_mobile/src/main/module.json5` 都要补；desktop 形态在模板 8 项基础上补，mobile 形态在模板 5 项基础上补——「模板缺失」5 项 + `READ_PASTEBOARD`）：
 
 ```json5
 // gen/ohos/entry_desktop/src/main/module.json5
@@ -274,14 +278,24 @@ cp ${PROJECT_ROOT}/tauri/.claude/skills/ohos-build/templates/testtrayability/Tes
       }
     ],
     "requestPermissions": [
-      // ── 模板已内置（init 后保留，无需补）──
+      // ── 模板已内置（init 后保留，无需补；两形态 5 项）──
       { "name": "ohos.permission.INTERNET" },
       { "name": "ohos.permission.SET_WINDOW_TRANSPARENT" },
+      { "name": "ohos.permission.PREPARE_APP_TERMINATE" },
+      { "name": "ohos.permission.PRIVACY_WINDOW" },
+      { "name": "ohos.permission.PUBLISH_AGENT_REMINDER" },
+      // ── 模板仅 desktop 形态内置（mobile init 后被清掉）──
       { "name": "ohos.permission.WINDOW_TOPMOST" },
       { "name": "ohos.permission.LOCK_WINDOW_CURSOR" },
       {
         "name": "ohos.permission.PRINT",
-        "reason": "$string:reason_print",            // ← mobile 模板无此两行，desktop 模板有
+        "reason": "$string:reason_print",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
+      // ── 模板完全不声明（#166 C8），需要剪贴板读取的应用自行加回 ──
+      {
+        "name": "ohos.permission.READ_PASTEBOARD",
+        "reason": "$string:reason_read_pasteboard",
         "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
       },
       // ── 模板缺失，init 后必须手动补回 ──

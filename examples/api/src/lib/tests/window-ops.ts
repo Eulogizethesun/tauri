@@ -356,7 +356,7 @@ export const windowOpsTests: TestCase[] = [
       await delay(400);
     },
   },
-  // ─── Real read-back verification (Float sub-window) ───
+  // ─── Real read-back verification (main window) ───
   {
     name: 'window.setInnerSize actually resizes (main window)',
     category: 'auto',
@@ -522,6 +522,7 @@ export const windowOpsTests: TestCase[] = [
       }
     },
   },
+  // ─── Real read-back verification (Float sub-window) ───
   {
     // issue#97 scenario 2: exact read-back on a Float sub-window (decor=0, constructively zero chrome).
     // Follows core.ts's float-window convention: do not destroy it here; leave cleanup to the manual Close All;
@@ -541,6 +542,7 @@ export const windowOpsTests: TestCase[] = [
       );
     },
   },
+  // ─── Main-window position / maximize (not float cases) ───
   {
     // On OHOS, setOuterPosition's "actual move" effect **cannot be reliably verified from JS read-back**:
     // outerPosition() reads from window_rect, which is filled by the ArkTS window_rect_change callback
