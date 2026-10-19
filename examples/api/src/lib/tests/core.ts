@@ -43,15 +43,26 @@ function assert(condition: boolean, msg: string) {
 // invoke('echo') via __TAURI_INTERNALS__ and reports back over the NATIVE
 // window.postMessage channel — which is NOT the transport under test, so the
 // probe stays observable even when Tauri IPC routing is broken.
+interface IframeIpcInvokeReport {
+  settled: boolean;
+  result?: unknown;
+  error?: string;
+  thrown?: string;
+  phase?: string;
+}
 interface IframeIpcProbe {
   __iframeIpcChild?: boolean;
   phase?: string;
+  role?: string;
   internalsType: string;
   hasInternalsPostMessage: boolean;
   hasTransformCallback: boolean;
   hasIpc: boolean;
   hasGlobalTauri: boolean;
-  invoke: { settled: boolean; result?: unknown; error?: string; thrown?: string; phase?: string };
+  invoke: IframeIpcInvokeReport;
+  invokeError: IframeIpcInvokeReport;
+  grandchildInvoke: IframeIpcInvokeReport | null;
+  forgedIgnored?: boolean;
 }
 function runIframeIpcProbe(): Promise<IframeIpcProbe> {
   return new Promise((resolve, reject) => {
@@ -183,6 +194,28 @@ export const coreTests: TestCase[] = [
       const echoed = probe.invoke.result as { message?: unknown } | undefined;
       assert(echoed !== undefined && echoed.message === 'from-iframe',
         `echo roundtrip mismatch from iframe: ${JSON.stringify(probe.invoke.result)}`);
+
+      // 3. Error path: the error-callback id must be relayed too — invoking a
+      //    command that does not exist has to settle via reject (the error
+      //    callback receives the response), not time out.
+      assert(probe.invokeError.settled === true
+        && typeof probe.invokeError.error === 'string'
+        && probe.invokeError.error.length > 0,
+        `invoke of a missing command from the iframe did not reject through the relay (settled=${probe.invokeError.settled}, report=${JSON.stringify(probe.invokeError)})`);
+
+      // 4. Nested frame chain: main -> child -> grandchild, two relay hops.
+      const grand = probe.grandchildInvoke;
+      assert(grand !== null && grand.settled === true,
+        `invoke from the grandchild frame never settled (${JSON.stringify(probe.grandchildInvoke)}) — chained relay does not reach nested frames`);
+      const grandEchoed = probe.grandchildInvoke?.result as { message?: unknown } | undefined;
+      assert(grandEchoed !== undefined && grandEchoed.message === 'from-grandchild',
+        `echo roundtrip mismatch from grandchild: ${JSON.stringify(probe.grandchildInvoke?.result)}`);
+
+      // 5. Forged-message guard: a __TAURI_FRAME_CALLBACK__ message whose
+      //    source is not the direct parent must be delivered but ignored by
+      //    the relay listener (the target callback never fires).
+      assert(probe.forgedIgnored === true,
+        `forged __TAURI_FRAME_CALLBACK__ message (source ≠ parent) was not ignored by the relay listener (forgedIgnored=${probe.forgedIgnored})`);
     },
   },
 
