@@ -38,6 +38,65 @@ function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
 }
 
+// Probe IPC response routing into a same-origin iframe child frame.
+// The child page (public/iframe-ipc-child.{html,js}) runs a hand-rolled
+// invoke('echo') via __TAURI_INTERNALS__ and reports back over the NATIVE
+// window.postMessage channel — which is NOT the transport under test, so the
+// probe stays observable even when Tauri IPC routing is broken.
+interface IframeIpcProbe {
+  __iframeIpcChild?: boolean;
+  phase?: string;
+  internalsType: string;
+  hasInternalsPostMessage: boolean;
+  hasTransformCallback: boolean;
+  hasIpc: boolean;
+  hasGlobalTauri: boolean;
+  invoke: { settled: boolean; result?: unknown; error?: string; thrown?: string; phase?: string };
+}
+function runIframeIpcProbe(): Promise<IframeIpcProbe> {
+  return new Promise((resolve, reject) => {
+    const iframe = document.createElement('iframe');
+    iframe.src = '/iframe-ipc-child.html';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '240px';
+    iframe.style.height = '140px';
+    iframe.style.zIndex = '1';
+    iframe.style.border = '1px solid rgba(0,0,0,.25)';
+    iframe.setAttribute('data-test', 'iframe-ipc-probe');
+
+    let ready = false;
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error(`iframe IPC probe timed out: child page never reported (ready=${ready})`));
+    }, 15000);
+
+    function cleanup() {
+      clearTimeout(timeoutId);
+      window.removeEventListener('message', handleMessage);
+      iframe.remove();
+    }
+
+    function handleMessage(event: MessageEvent) {
+      const data = event.data as IframeIpcProbe | null;
+      if (!data || data.__iframeIpcChild !== true) return;
+      if (data.phase === 'ready' && !ready) {
+        ready = true;
+        iframe.contentWindow?.postMessage({ __iframeIpcParent: true, phase: 'run' }, '*');
+        return;
+      }
+      if (data.phase === 'result') {
+        cleanup();
+        resolve(data);
+      }
+    }
+
+    window.addEventListener('message', handleMessage);
+    document.body.appendChild(iframe);
+  });
+}
+
 export const coreTests: TestCase[] = [
   // OHOS version info (prints to console on OHOS, skipped on other platforms)
   {
@@ -95,6 +154,35 @@ export const coreTests: TestCase[] = [
       }
 
       assert(received.length === 1000, `expected 1000 messages, got ${received.length}`);
+    },
+  },
+  {
+    // IPC response routing into a child frame: an invoke issued inside a
+    // same-origin iframe must settle there. On OHOS the response is routed
+    // back via webview eval (runCallback) which targets the MAIN frame only —
+    // when the callback was registered inside the iframe the response is lost
+    // and the main-frame console shows "[TAURI] Couldn't find callback id".
+    name: '@tauri-apps/api/core.invoke (iframe child frame routing)',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      const probe = await runIframeIpcProbe();
+
+      // 1. Init scripts must reach the iframe document at all.
+      assert(probe.internalsType === 'object',
+        `init scripts did not reach the iframe: typeof __TAURI_INTERNALS__ is "${probe.internalsType}"`);
+      assert(probe.hasTransformCallback, '__TAURI_INTERNALS__.transformCallback missing in iframe (core.js not injected)');
+      assert(probe.hasInternalsPostMessage, '__TAURI_INTERNALS__.postMessage missing in iframe (ipc-protocol.js not injected)');
+      assert(probe.hasIpc, 'window.ipc.postMessage missing in iframe (wry ipc bridge not injected)');
+
+      // 2. The invoke itself must settle and roundtrip.
+      assert(probe.invoke.settled === true,
+        `invoke('echo') from the iframe never settled (${probe.invoke.phase ?? 'no phase'}) — IPC response routing does not reach child frames`);
+      assert(probe.invoke.error === undefined && probe.invoke.thrown === undefined,
+        `invoke('echo') from the iframe rejected: ${probe.invoke.error ?? probe.invoke.thrown}`);
+      const echoed = probe.invoke.result as { message?: unknown } | undefined;
+      assert(echoed !== undefined && echoed.message === 'from-iframe',
+        `echo roundtrip mismatch from iframe: ${JSON.stringify(probe.invoke.result)}`);
     },
   },
 
