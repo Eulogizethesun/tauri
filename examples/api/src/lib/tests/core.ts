@@ -50,6 +50,31 @@ interface IframeIpcInvokeReport {
   thrown?: string;
   phase?: string;
 }
+// Phase A diagnostics: per-frame origin view reported by the probe page.
+interface IframeIpcEnv {
+  href: string;
+  protocol: string;
+  origin: string;
+  isTop: boolean;
+  parentIsTop: boolean;
+  frames: number;
+  secureContext: boolean;
+  parentAccess: string;
+  parentOrigin: string | null;
+  parentHref: string | null;
+  topAccess: string;
+  topOrigin: string | null;
+}
+interface IframeIpcDiag {
+  matrix?: Record<string, { eventOrigin: string; sourceIsParent: boolean } | null>;
+  relaySeen?: {
+    eventOrigin: string;
+    sourceIsParent: boolean;
+    idType: string;
+    dataMarker: string;
+  } | null;
+  messageLog?: Array<{ o: string; src: string; d: string }>;
+}
 interface IframeIpcProbe {
   __iframeIpcChild?: boolean;
   phase?: string;
@@ -63,6 +88,11 @@ interface IframeIpcProbe {
   invokeError: IframeIpcInvokeReport;
   grandchildInvoke: IframeIpcInvokeReport | null;
   forgedIgnored?: boolean;
+  env?: IframeIpcEnv;
+  diag?: IframeIpcDiag;
+  parentEnv?: Record<string, unknown>;
+  matrixThrows?: Record<string, string>;
+  matrixTargets?: Record<string, string>;
 }
 function runIframeIpcProbe(): Promise<IframeIpcProbe> {
   return new Promise((resolve, reject) => {
@@ -78,6 +108,12 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
     iframe.setAttribute('data-test', 'iframe-ipc-probe');
 
     let ready = false;
+    const matrixThrows: Record<string, string> = {};
+    const matrixTargets: Record<string, string> = {
+      origin: window.location.origin ?? 'null',
+      slash: '/',
+      star: '*'
+    };
     const timeoutId = setTimeout(() => {
       cleanup();
       reject(new Error(`iframe IPC probe timed out: child page never reported (ready=${ready})`));
@@ -95,17 +131,67 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
       if (data.phase === 'ready' && !ready) {
         ready = true;
         iframe.contentWindow?.postMessage({ __iframeIpcParent: true, phase: 'run' }, '*');
+        // Phase A targetOrigin matrix: same payload shape as the core.js relay
+        // broadcast, three targetOrigin variants — which copies the child
+        // receives settles the origin semantics of the custom-protocol origin.
+        for (const mark of ['origin', 'slash', 'star'] as const) {
+          try {
+            iframe.contentWindow?.postMessage(
+              { __iframeIpcParent: true, phase: 'matrix', matrix: mark },
+              matrixTargets[mark]
+            );
+          } catch (e) {
+            matrixThrows[mark] = String(e);
+          }
+        }
         return;
       }
       if (data.phase === 'result') {
         cleanup();
-        resolve(data);
+        resolve({
+          ...data,
+          matrixThrows,
+          matrixTargets,
+          parentEnv: parentIpcEnv()
+        });
       }
     }
 
     window.addEventListener('message', handleMessage);
     document.body.appendChild(iframe);
   });
+}
+
+// Parent-side (test document) view of the same environment facts the probe
+// reports, so both ends of the link are in one evidence record.
+function parentIpcEnv(): Record<string, unknown> {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__?: { __TAURI_PATTERN__?: { pattern?: string } };
+  }).__TAURI_INTERNALS__;
+  const isolationFrame = document.querySelector('iframe#__tauri_isolation__') as HTMLIFrameElement | null;
+  return {
+    href: String(window.location.href),
+    protocol: String(window.location.protocol),
+    origin: String(window.location.origin ?? 'null'),
+    isTop: window.top === window,
+    frames: window.frames.length,
+    secureContext: window.isSecureContext === true,
+    tauriPattern: internals?.__TAURI_PATTERN__?.pattern ?? 'missing',
+    isolationIframe: isolationFrame ? String(isolationFrame.src) : 'absent'
+  };
+}
+
+// One-line evidence blob for report/hilog consumption. `|` is scrubbed so the
+// markdown table row cannot be broken by the payload.
+function iframeIpcEvidence(probe: IframeIpcProbe): string {
+  const blob = JSON.stringify({
+    parentEnv: probe.parentEnv,
+    matrixTargets: probe.matrixTargets,
+    matrixThrows: probe.matrixThrows,
+    childEnv: probe.env,
+    childDiag: probe.diag
+  });
+  return blob.replace(/\|/g, '/');
 }
 
 export const coreTests: TestCase[] = [
@@ -178,17 +264,21 @@ export const coreTests: TestCase[] = [
     timeout: 25000,
     async fn() {
       const probe = await runIframeIpcProbe();
+      // Phase A: dump the origin/matrix evidence once — hilog (ARKWEB-CONSOLE)
+      // and the failure message below both carry it.
+      const evidence = iframeIpcEvidence(probe);
+      console.log('[iframe-ipc-diag] ' + evidence);
 
       // 1. Init scripts must reach the iframe document at all.
       assert(probe.internalsType === 'object',
-        `init scripts did not reach the iframe: typeof __TAURI_INTERNALS__ is "${probe.internalsType}"`);
+        `init scripts did not reach the iframe: typeof __TAURI_INTERNALS__ is "${probe.internalsType}" | diag: ${evidence}`);
       assert(probe.hasTransformCallback, '__TAURI_INTERNALS__.transformCallback missing in iframe (core.js not injected)');
       assert(probe.hasInternalsPostMessage, '__TAURI_INTERNALS__.postMessage missing in iframe (ipc-protocol.js not injected)');
       assert(probe.hasIpc, 'window.ipc.postMessage missing in iframe (wry ipc bridge not injected)');
 
       // 2. The invoke itself must settle and roundtrip.
       assert(probe.invoke.settled === true,
-        `invoke('echo') from the iframe never settled (${probe.invoke.phase ?? 'no phase'}) — IPC response routing does not reach child frames`);
+        `invoke('echo') from the iframe never settled (${probe.invoke.phase ?? 'no phase'}) — IPC response routing does not reach child frames | diag: ${evidence}`);
       assert(probe.invoke.error === undefined && probe.invoke.thrown === undefined,
         `invoke('echo') from the iframe rejected: ${probe.invoke.error ?? probe.invoke.thrown}`);
       const echoed = probe.invoke.result as { message?: unknown } | undefined;
@@ -201,12 +291,12 @@ export const coreTests: TestCase[] = [
       assert(probe.invokeError.settled === true
         && typeof probe.invokeError.error === 'string'
         && probe.invokeError.error.length > 0,
-        `invoke of a missing command from the iframe did not reject through the relay (settled=${probe.invokeError.settled}, report=${JSON.stringify(probe.invokeError)})`);
+        `invoke of a missing command from the iframe did not reject through the relay (settled=${probe.invokeError.settled}, report=${JSON.stringify(probe.invokeError)}) | diag: ${evidence}`);
 
       // 4. Nested frame chain: main -> child -> grandchild, two relay hops.
       const grand = probe.grandchildInvoke;
       assert(grand !== null && grand.settled === true,
-        `invoke from the grandchild frame never settled (${JSON.stringify(probe.grandchildInvoke)}) — chained relay does not reach nested frames`);
+        `invoke from the grandchild frame never settled (${JSON.stringify(probe.grandchildInvoke)}) — chained relay does not reach nested frames | diag: ${evidence}`);
       const grandEchoed = probe.grandchildInvoke?.result as { message?: unknown } | undefined;
       assert(grandEchoed !== undefined && grandEchoed.message === 'from-grandchild',
         `echo roundtrip mismatch from grandchild: ${JSON.stringify(probe.grandchildInvoke?.result)}`);

@@ -29,6 +29,72 @@
   // to an error response, which exercises the error-callback relay path.
   var MISSING_CMD = '__tauri_iframe_probe_missing_cmd__';
 
+  // ---------------------------------------------------------------------------
+  // Phase A origin diagnostics (p1-iframe-ipc-response-routing follow-up).
+  //
+  // The relay's downlink (parent -> child postMessage) died silently on device
+  // while the '*' targetOrigin handshake worked, so the prime suspect is the
+  // targetOrigin semantics of the custom-protocol origin. Every frame reports
+  // its own origin view, and the parent sends the same payload three times
+  // with targetOrigin = [location.origin, '/', '*'] ("matrix"); this page
+  // records which copies arrive and with what event.origin/event.source.
+  // ---------------------------------------------------------------------------
+  var diag = {
+    // matrix[mark] = arrival record, null while not seen
+    matrix: { origin: null, slash: null, star: null },
+    // first __TAURI_FRAME_CALLBACK__ message seen, even if the relay guard
+    // would reject it (origin/source mismatch) — distinguishes "never arrives"
+    // from "arrives but the guard drops it"
+    relaySeen: null,
+    // compact log of every message event (bounded)
+    messageLog: []
+  };
+
+  function probeEnv() {
+    var parentAccess = 'ok';
+    var parentOrigin = null;
+    var parentHref = null;
+    var topAccess = 'ok';
+    var topOrigin = null;
+    try {
+      parentOrigin = String(window.parent.location.origin);
+      parentHref = String(window.parent.location.href);
+    } catch (e) {
+      parentAccess = 'ERR:' + (e && e.name ? e.name : String(e));
+    }
+    try {
+      topOrigin = String(window.top.location.origin);
+    } catch (e) {
+      topAccess = 'ERR:' + (e && e.name ? e.name : String(e));
+    }
+    var origin = window.location.origin;
+    if (origin === undefined || origin === null) {
+      origin = 'MISSING:' + window.location.protocol + '//' + window.location.host;
+    }
+    return {
+      href: String(window.location.href),
+      protocol: String(window.location.protocol),
+      origin: String(origin),
+      isTop: window.top === window,
+      parentIsTop: window.parent === window.top,
+      frames: window.frames.length,
+      secureContext: window.isSecureContext === true,
+      parentAccess: parentAccess,
+      parentOrigin: parentOrigin,
+      parentHref: parentHref,
+      topAccess: topAccess,
+      topOrigin: topOrigin
+    };
+  }
+
+  function reportDiag() {
+    return {
+      matrix: diag.matrix,
+      relaySeen: diag.relaySeen,
+      messageLog: diag.messageLog.slice(0, 12)
+    };
+  }
+
   // `?role=grandchild` turns this page into the nested probe: same flow, one
   // level deeper (its "parent" is then the child probe page).
   var isGrandchild = window.location.search.indexOf('role=grandchild') !== -1;
@@ -168,7 +234,8 @@
       hasInternalsPostMessage: !!(internals && typeof internals.postMessage === 'function'),
       hasTransformCallback: !!(internals && typeof internals.transformCallback === 'function'),
       hasIpc: !!(window.ipc && typeof window.ipc.postMessage === 'function'),
-      hasGlobalTauri: typeof window.__TAURI__ !== 'undefined'
+      hasGlobalTauri: typeof window.__TAURI__ !== 'undefined',
+      env: probeEnv()
     };
   }
 
@@ -178,6 +245,7 @@
     invokeFromIframe('echo', { message: 'from-grandchild' }).then(function (inv) {
       var probe = baseProbe();
       probe.invoke = inv;
+      probe.diag = reportDiag();
       setStatus('iframe-ipc-grandchild: invoke settled=' + inv.settled);
       send(probe);
     });
@@ -198,6 +266,7 @@
       probe.invokeError = r[1];
       probe.grandchildInvoke = r[2];
       probe.forgedIgnored = r[3];
+      probe.diag = reportDiag();
       setStatus('iframe-ipc-child: invoke settled=' + probe.invoke.settled);
       send(probe);
     });
@@ -206,6 +275,41 @@
   window.addEventListener('message', function (event) {
     var data = event.data;
     if (!data) { return; }
+
+    // Phase A diagnostics: record every message before any role logic, so
+    // guard-rejected deliveries stay observable.
+    try {
+      diag.messageLog.push({
+        o: String(event.origin),
+        src: event.source === window.parent
+          ? 'parent'
+          : (event.source === window ? 'self' : 'other'),
+        d: typeof data === 'object' && data !== null
+          ? Object.keys(data).slice(0, 5).join('+')
+          : String(data).slice(0, 24)
+      });
+    } catch (e) { /* diagnostics must never break the probe */ }
+    if (
+      data.__TAURI_FRAME_CALLBACK__ === true
+      && diag.relaySeen === null
+    ) {
+      diag.relaySeen = {
+        eventOrigin: String(event.origin),
+        sourceIsParent: event.source === window.parent,
+        idType: typeof data.id,
+        dataMarker: data.__iframeIpcParent === true ? String(data.matrix || 'run') : 'none'
+      };
+    }
+    if (
+      data.__iframeIpcParent === true
+      && data.phase === 'matrix'
+      && !diag.matrix[data.matrix]
+    ) {
+      diag.matrix[data.matrix] = {
+        eventOrigin: String(event.origin),
+        sourceIsParent: event.source === window.parent
+      };
+    }
 
     if (isGrandchild) {
       // The child probe page (our parent) tells us to run.
