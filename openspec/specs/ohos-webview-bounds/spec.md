@@ -1,4 +1,9 @@
-## ADDED Requirements
+# ohos-webview-bounds Specification
+
+## Purpose
+OHOS 平台 webview 几何语义:set_bounds/bounds 下发链路、WebviewStyle 宽高消费、自然布局兜底。(2026-10-19 由 change ohos-webview-sizing 规范化节头;原文件误用 delta 节头导致 requirements 不可解析。)
+
+## Requirements
 
 ### Requirement: wry OHOS set_bounds SHALL call OHA NAPI
 wry OHOS 后端的 `InnerWebView::set_bounds` SHALL 调用 `openharmony_ability::Webview::set_bounds()` 将 bounds 传递到 ArkTS 层，而非返回 no-op。
