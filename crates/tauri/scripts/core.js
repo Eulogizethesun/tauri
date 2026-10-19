@@ -44,7 +44,75 @@
       console.warn(
         `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
       )
+      if (relayEnabled && isTopFrame) {
+        // The id belongs to a callback registered inside a child frame —
+        // relay the response down to the direct child frames.
+        relayToChildFrames(id, data)
+      }
     }
+  }
+
+  // IPC callback relay (OHOS only). On OHOS the IPC runs in postMessage mode
+  // (see scripts/ipc-protocol.js: the custom-protocol fetch channel excludes
+  // `ohos` just like `android`) and the Rust-side response — invoke results,
+  // channel messages and events all funnel into
+  // `window.__TAURI_INTERNALS__.runCallback(id, data)` — is replayed through a
+  // webview eval that only executes in the MAIN document (ArkWeb has no
+  // frame-targeted eval). Init scripts run in every frame, so callbacks
+  // registered inside an iframe would never receive their response. When the
+  // top frame misses the callback id it relays `{ id, data }` to its direct
+  // child frames; each child frame replays it against its own local `Map` and
+  // relays further down when nesting deeper. Delivery stays same-origin:
+  // `postMessage` drops the message when the target origin does not match, so
+  // cross-origin frames keep the pre-relay behavior (no delivery, no data
+  // leak). Android shares the upstream defect but stays untouched here —
+  // extending the activation list is left for an upstream PR.
+  const relayEnabled = osName === 'ohos'
+  const isTopFrame = window.top === window
+
+  function relayToChildFrames(id, data) {
+    const message = { __TAURI_FRAME_CALLBACK__: true, id: id, data: data }
+    // A frame may already be detached by the app; give each `postMessage` its
+    // own `try` so one dead frame cannot abort the broadcast to the others.
+    for (let i = 0; i < window.frames.length; i++) {
+      try {
+        window.frames[i].postMessage(message, window.location.origin)
+      } catch (e) {
+        // frame is gone — keep relaying to the remaining ones
+      }
+    }
+  }
+
+  if (relayEnabled && !isTopFrame) {
+    // Child-frame side of the relay: accept only same-origin messages from the
+    // DIRECT parent (any other source or origin is ignored, so hand-posted or
+    // forged `__TAURI_FRAME_CALLBACK__` messages cannot reach the callback
+    // table), then execute the callback against the local `Map` — the exact
+    // path an eval response takes, once semantics included. A miss with own
+    // child frames relays further down; a miss without them is a dead end
+    // (already unregistered or foreign id).
+    window.addEventListener('message', function (event) {
+      if (
+        event.origin !== window.location.origin
+        || event.source !== window.parent
+      ) {
+        return
+      }
+      const data = event.data
+      if (!data || data.__TAURI_FRAME_CALLBACK__ !== true) {
+        return
+      }
+      const callback = callbacks.get(data.id)
+      if (callback) {
+        callback(data.data)
+      } else if (window.frames.length > 0) {
+        relayToChildFrames(data.id, data.data)
+      } else {
+        console.warn(
+          `[TAURI] Couldn't find callback id ${data.id} forwarded from the parent frame. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
+        )
+      }
+    })
   }
 
   // Maybe let's rename it to `registerCallback`?
