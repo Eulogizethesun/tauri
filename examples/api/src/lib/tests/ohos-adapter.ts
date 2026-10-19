@@ -199,4 +199,43 @@ export const ohosAdapterTests: TestCase[] = [
       console.log('[manual] restore: setIgnoreCursorEvents(false) on the overlay to re-enable event consumption');
     },
   },
+
+  // ohos-cursor-passthrough: injection-style cursor-position freshness truth
+  // test (manual / semi-automatic — the stimulus is host-side mouse
+  // injection, so it cannot be an auto case; the runner never executes
+  // manual fns, this body is the archived protocol). Segments map 1:1 to
+  // openspec task 1.2; the HEAD red-light record (2026-10-19), the uinput -M
+  // probe recipe, the graded fidelity-arbitration steps and the trace-gated
+  // re-run protocol are archived in doc/manual_tests.md
+  // ("OHOS cursor_position 契约与 app 侧 fail-safe 纪律" section).
+  {
+    name: 'ohos-adapter.window.cursor-position-freshness',
+    category: 'manual',
+    timeout: 20000,
+    async fn() {
+      // Step 0 (host, before anything): probe `hdc shell uinput` MOUSE mode
+      // (-M family — no project precedent, verify the syntax from the tool's
+      // own help). ArkUI onMouse is mouse-pointer semantics; touch injection
+      // synthesizing onMouse is unproven, so touch templates are retired.
+      // Degrade to the physical-mouse manual protocol ONLY on "-M
+      // unavailable / syntax mismatch" — never on "no onMouse trace" (at the
+      // red-light HEAD there is no feed instrumentation to trace).
+      // Ground truth sources: `hidumper -s WindowManagerService -a '-a'`
+      // (window rects) + outerPosition() readiness poll (the window_rect
+      // snapshot is seeded by windowRectChange only after content load —
+      // reading it right after creation can yield (0,0)).
+      console.log('[cursor-freshness] seg0 main-window feed path (before any Float sub-window exists): inject two known points >=100px apart inside the main window content area (below the menubar)');
+      console.log('[cursor-freshness]   red phase: cursorPosition() readings move with the injections (response increment = stimulus reached) BUT differ from the injected screen points by more than the +/-40px domain (component-relative vp feed — root cause 2)');
+      console.log('[cursor-freshness]   re-run phase (after the helper switch): readings ~= injected points (+/-40px) AND hilog shows cursor_feed lines (MainPage actually feeds through the shared helper)');
+      console.log('[cursor-freshness]   geometry guard: |main-window origin| + MainPage component offset must exceed 40px for the red discriminant to be meaningful, else record "red-light weakened" explicitly');
+      console.log('[cursor-freshness] seg1 sub-window freshness + origin-offset discriminant: create a Float sub-window, poll outerPosition() until non-zero, cross-check the rect with hidumper, inject at the window center');
+      console.log('[cursor-freshness]   assert cursorPosition() ~= injected point (+/-40px) AND the discriminant: |reading - in-window-offset hypothesis| >= |window origin| - 80px (weakened-result must be recorded, never silently passed, when the origin norm <= 80px)');
+      console.log('[cursor-freshness]   HEAD red: the snapshot stays at the last main-window coordinate (root cause 1: FloatPage had no onMouse at all)');
+      console.log('[cursor-freshness] seg2 press feed: move then mouse down (-M family) on the sub-window; assert reading ~= press point and stable after release (Move/Press feed, Release never feeds)');
+      console.log('[cursor-freshness] seg3 global-frame discriminant (window-move-free): inject a second known in-window point (e.g. the 1/4 point); assert reading ~= that point\'s global coords and the seg1 discriminant re-holds (reading follows the physical injection point, not the in-window offset)');
+      console.log('[cursor-freshness] seg4 finite-value guard (NOT device-executable): displayX is a declared-required field and NaN/undefined is unreachable per D2 — verify via the implementation-time debug variant (synthetic non-finite event straight into feedCursorFromMouse → skip + no cursor_feed trace) or code walkthrough');
+      console.log('[cursor-freshness] seg5 API20+ field source: helper hilog.debug (tag cursor_feed) names the adopted field — API 23 device asserts globalDisplayX; API<20 asserts displayX');
+      console.log('[cursor-freshness] fail-safe demo: cursorPosition() reject (untracked) → keep setIgnoreCursorEvents(true) (default pass-through); only a hit-test match may set touchable — and Err means untracked ONLY, independent of the pass-through chain\'s fire-and-forget error channel');
+    },
+  },
 ];
