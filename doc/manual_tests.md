@@ -862,7 +862,77 @@
 
 ---
 
-## 三十八、手动用例统计汇总
+## 三十八、OHOS cursor_position 契约与 app 侧 fail-safe 纪律手动用例
+
+> **背景**: openspec change `ohos-cursor-passthrough`——修复 OHOS 上 `cursor_position` 的两条根因（喂入源单一：Float 子窗宿主 `FloatPage.ets` 无 onMouse，光标在子窗上时快照停在主窗陈旧值；坐标系错位：MainPage 喂 `event.x/y` 组件相对 vp 而消费方按屏幕全局坐标命中测试）并契约化未跟踪 fail-safe（从未喂入 → 类型化 Err 全链传播，JS `cursorPosition()` reject）。改动落 openharmony-ability（ArkTS 喂点 ×2 + `helper/cursor_feed.ets` + `app.rs` 契约）与 tao（`cursor_position_from_app` Err 传播）两仓 fork + tauri 仓测试；**消费方业务代码零改动**（命中测试已按全局坐标写，同步 fork commit 重打 HAR+HAP 即工作）。
+>
+> **契约纪要（交付说明同步项）**：
+> - **语义**：`cursor_position()` 返回**屏幕全局物理 px**（设备屏幕左上角为原点），对齐 tao 上游 `Window::cursor_position`（Windows 实现 `GetCursorPos`）；喂入源为 ArkUI `onMouse` 的 `displayX/displayY`（设备屏幕系 vp，读出 ×scale）。
+> - **未跟踪 Err 契约（R5，行为变化）**：进程从未收到任何鼠标喂入时，`cursor_position` 返回 `Err`（tao 层 `ExternalError::NotSupported`，runtime-wry 映射 `FailedToGetCursorPosition`，tauri 命令 Err，desktop 形态 JS `cursorPosition()` reject；四处公开 Rust API `AppHandle`/`Window`/`Webview`/`WebviewWindow::cursor_position` 同契约透传）。HEAD 上未喂返回 `Ok((0,0))` 垃圾值——与真值不可区分，此为被消除的盲区。
+> - **app 侧 fail-safe 纪律**：捕获 untracked/Err 或坐标不可信 → 一律 `set_ignore_cursor_events(true)`（默认穿透），命中测试匹配才置 touchable。Err **只表示未跟踪**，与穿透链 fire-and-forget 错误通道（reject 不反向通知 Rust）互不影响。
+> - **静止悬停无 Move 属正常（D4/R7）**：穿透生效期间本窗收不到任何鼠标事件（事件落下层窗——其 onMouse 正是喂入源）；光标静止悬停时 Move 不触发，快照值即「到达时」坐标，位置未变、命中判定不受影响。**禁止**以「超过 N 秒未喂」判 stale——悬停 30s 后的点击会被误杀，恰好复刻本 change 修复的故障。
+> - **多显示器已知限制（R4）**：`displayX` 参照系在多显示器 + API<20 下未定论；helper 已留 API≥20 优先 `globalDisplayX` 分支。本 change 验收面为单显 2in1 PC。
+> - **方向 B 备选记录（D6）**：按 `snapshot.interactive` 并集矩形收窗几何、整窗可命中——不进 runtime（圆形工具栏 bbox 四角死区挡下层 canvas 书写窗）；触发条件：①真机仲裁否定 `displayX` 全局语义（R1 fallback）；②工具栏退化为纯矩形侧栏（死区问题消失，可作 app 侧优化自行采纳，runtime 无需配合）。
+
+> **自动化测试位**：
+> - **权威验证位（冷启动未喂 → reject）**：openharmony-ability 设备 UT `cursor_position_with_untracked_feed_returns_untracked_error`（纯函数 `cursor_position_with`，套件无冷启动面故归 UT）+ `cursor_position_with_tracked_feed_multiplies_scale_by_scale`（tracked 分支）+ `cursor_position_with_scale_one_identity_and_fed_zero_is_legal`（守卫矩阵负面位）。
+> - **套件用例**：`@tauri-apps/api/window.cursorPosition`（core.ts，try/catch 双分支容忍性合约——resolve 断言有限数且在 monitor 域内，catch 仅容忍接受不判败）。
+> - **注入式真值用例**：`ohos-adapter.window.cursor-position-freshness`（ohos-adapter.ts，manual 类，segments 0-5 归档于用例体）。
+
+> **注入式验证配方（鼠标模式 uinput，真机 2in1 `3QC0124C11000038` 实测定论）**：
+> - **第 0 步定论（2026-10-19 session 实证）**：`uinput -M -m X Y` 每次调用新建虚拟鼠标、指针从 (0,0) 起步 → **`-m X Y` = 绝对屏幕物理坐标**（`hidumper -s MultimodalInput -a '-c'` 的 lastPhysicalX/Y 读回与注入值逐一相符）；复合动作（move+down+up）必须留在**单次调用**内（`uinput -M -m X Y -d 0 -i 300 -u 0`）以保持同一虚拟鼠标；读回行还有 **windowId 列 = 指针所在窗口**，可与 WMS dump 的 WinId 对照做命中窗口地面真值。负 delta 被 >=0 校验拒绝（绝对语义下无关）。**触摸注入模板（`uinput -T`）废除**——ArkUI onMouse 是鼠标指针语义，触摸注入是否合成 onMouse 未证。降级物理鼠标 manual 协议仅由「`-M` 不可用/语法不符」触发，**「onMouse 无痕」不是降级条件**（红灯阶段无喂入插桩，痕判据不可用）。
+> - **读数回收**：探针/用例的 `console.log` 走 hilog `ARKWEB-CONSOLE` 通道（实测可捕获 INFO 级）：宿主并行 `hdc shell hilog | grep --line-buffered "\[probe\]" > probe-readings.log`。**注意** shell 重定向文件须用绝对路径（宿主 cwd 跨调用重置曾致驱动 watching 错位超时）；外部 truncate 捕获文件会产生稀疏洞，重启捕获更稳。
+> - **时序协调**：以 **hilog 标记同步**（`[probe] PHASE0 begin` / `[probe] PHASE2 float-ready` / `[probe] PHASE3 done`），禁用固定偏移——探针是套件 row 1，以报告行/versionInfo 为 T0 会晚 ~26s 致注入全落空。驱动脚本 `cursor-exercise-driver.sh`（workspace 根，不入库）：tail -F 读数文件 → 等标记 → 注入；主窗 rect 转储必须在 **PHASE0 标记之后**（app 重启间窗位 y 漂移 281/343 实测，禁止复用上进程 dump）。
+> - **保真度仲裁步（分级）**：红灯级 = ①几何地面真值（WMS rect 确认注入点 ∈ 目标窗 rect；MultimodalInput 读回 windowId 交叉验证命中窗口）+ ②响应增量（两个相距 ≥100px 的注入点读数随注入变化）；痕门控级（3.3 完成后）= 同刺激复跑 hilog 出现 `cursor_feed` 喂入痕 ⇒ 归因闭合。**禁止无痕时把读数异常归因喂入链。**
+> - **地面真值双源**：`hidumper -s WindowManagerService -a '-a'`（窗 rect；Float 子窗 rect 为**屏幕绝对坐标**——[0,0,1140,760] 实测经读回 windowId=子窗 WinId 证实）+ outerPosition 就绪守卫（探针窗实测 outerPosition 恒 (0,0)，与 WMS 一致——创建期 x/y 位置参数被丢弃，`set_position` 已降级 smoke 家族）。
+
+> **HEAD 红灯记录（2026-10-19，红灯阶段判据存档）**：
+> - **UT 编译红（1.1）**：`cargo check -p openharmony-ability --lib --target aarch64-unknown-linux-ohos --tests` → 5×E0425（`cursor_position_with` ×4 + `CursorUntracked` ×1）——纯函数在 HEAD 不存在（设计内红）；行为红并证：HEAD `cursor_position()` 未喂返回 `Ok((0,0))`（探针 P0.0 冷启动读数 0.0,0.0，即被 D3 契约消除的哨兵垃圾值）。
+> - **e2e 读数-注入对照（1.2，驱动 v3，套件 head 39f31aff4 + 8 uncommitted 含探针）**：
+>
+> | 段 | 注入（读回证lastPhysical/windowId） | 读数 | 判定 |
+> |---|---|---|---|
+> | 段0 A | (1750,800) → winId 616=api0 主窗 | (1235.0,449.0) | 读数 = 注入 − (515,351) 组件系——**根因二红**（全局偏差 √(515²+351²)≈623px ≫ 40px） |
+> | 段0 B | (1950,800)（+200,0 vs A） | (1435.0,449.0) | **+200px 精确响应增量 = 刺激已达证**（仲裁②过） |
+> | 段0 A-repeat | (1750,800) | (1235.0,449.0) | 锚点可重复性 |
+> | 冷启动 | 无注入 | (0.0,0.0) | HEAD 未喂 `Ok((0,0))` 哨兵（被消除的盲区） |
+> | 段1 center | (570,380) → winId 618=探针 float 窗 | (1235.0,449.0) 不动 | **根因一红**：光标在子窗上快照停主窗陈旧值 |
+> | SEG-control | (2000,1000) → winId 616=主窗 | (1485.0,649.0) = (2000−515, 1000−351) | **主窗喂入活性对照**（float 点不动非「注入失灵」） |
+> | 段3 quarter | (285,190) → winId 618 | (1485.0,649.0) 不动 | 第二已知点同样不跟随——**freshness 红** |
+> | 段2 press | (570,380)+down+up → winId 618 | (1485.0,649.0) 不动 | HEAD 子窗 Press 无喂入——**红** |
+>
+> - **段 0 几何守卫（残余 finding #1 实测）**：主窗 api0 = [515,281,2090,1394]（本次实测，pid 30535；前 session [515,343,2090,1394]——**y 跨重启漂移，守卫须每次注入前实测量取**）→ 原点模长 ≈587px（前值 619px）≫ 40px，红灯判别式有效。组件系原点 y=351 恒定（窗顶 + 70px≈35vp 标题栏，y=281 时 +70 / y=343 时 +8，内容区原点两次一致）。
+> - **判别弱化明示（1.2 段 1 判别断言）**：探针 float 窗 WMS rect [0,0,1140,760] → 原点模长 0 ≤ 80px；创建期参数（x:400,y:400）已尝试且 hidumper 复核仍 (0,0)（`set_position` 降级家族）→ **「窗内相对假设 vs 全局假设」判别在本窗位上弱化**，不静默视为判别通过；全局系判别由段 0（主窗原点 587px）与 SEG-control 对照承载，green 复跑相若需复立判别应先以可靠手段拉开窗位并 hidumper 复核。
+
+> **green 复跑记录（2026-10-19 21:55，HAP = 实现后 + 探针 45s 超时版，驱动 v3 标记同步）**：
+> - **链路**：ability HAR 21:34（含 helper/cursor_feed.ets）→ HAP 重打安装 → `run-tests.sh` 自动启动套件，watcher 于 Step 3 安装窗口臂动捕获+驱动（捕获先于 aa start ~8s，PHASE0 标记 0.9s 内命中——v1 的 Step-4 触发晚 <1s 漏标记、驱动 90s 超时空转的竞态已修）。
+> - **读数-注入对照（探针读数 ARKWEB-CONSOLE 通道全程捕获）**：
+>
+> | 段 | 注入（读回 winId 地面真值） | 读数 | 判定 |
+> |---|---|---|---|
+> | 冷启动 | 无注入 | P0.0/P0.1 **REJECT** `failed to get cursor position` | **untracked fail-safe 契约真机实证**（HEAD 哨兵 `Ok((0,0))` 已消除；tao NotSupported → runtime `FailedToGetCursorPosition` → JS reject 全链贯通） |
+> | 段0 A | (1750,800) → winId 658 主窗 | (1750.0,800.0) | **读数=注入点零偏差**（≪±40px）——根因二修复 |
+> | 段0 B | (1950,800) | (1950.0,800.0) | +200px 精确响应增量保持 |
+> | 段0 A-repeat | (1750,800) | (1750.0,800.0) | 锚点可重复 |
+> | 段1 center | (1330,1140) → winId 660 float | (1330.0,1140.0)（P2.3 起） | **光标在子窗上读数跟随注入**——根因一修复（R2 归因闭合：痕+读数双证） |
+> | SEG-control | (2000,1000) → winId 658 主窗 | (2000.0,1000.0) | 主窗喂入活性对照 |
+> | 段3 quarter | (1045,950) → winId 660 | (1045.0,950.0) | 第二已知点跟随，判别复立 |
+> | 段2 press | (1330,1140)+down+up 单调用 | (1330.0,1140.0)，P25.x 期间保持稳定 | Press 喂入 + Release 后稳定 |
+> | PHASE2.5 穿透 | (1330,1140) ignore=true → **读回 winId 658 主窗** | P25.0-4 = (1330.0,1140.0) | **穿透端到端实证**：ignore=true 下注入落主窗（WMS windowId 658），主窗喂全局坐标、读数继续跟随——消费方命中测试模式在穿透开启时工作 |
+>
+> - **判别断言（本轮完整成立，不再弱化）**：float rect [760,760,1140,760] 原点模长 ≈1075px ≫ 80px（本轮创建期位置未被丢弃——窗位落位随布局非确定，红灯轮 [0,0,…] 与本轮 [760,760,…] 两次实测不同）；窗内相对假设读数应为 (570,380)，实际 (1330,1140)，与窗内假设之差 = 原点模长 1075px ≥ 1075−80 → **读数跟随物理注入点而非窗内偏移**。
+> - **R1 仲裁（闭合，无需修正）**：喂入痕 `feed globalDisplayX=(注入px/1.9)`（23/23 行）× 读出 ×scale → 读数=注入点**零偏差**——`globalDisplayX` 为**屏幕全局 vp**、设备 scale=1.9 实证（(2000,1000)→痕 (1052.63,526.32)→读数 (2000,1000) 逐一反推自洽），D1「vp 直喂 + 读出乘 scale」语义正确，**「读出侧删乘法」px 修正分支不触发**，「窗口系参照」分支不触发（不移窗段无需回补）。
+> - **R2 仲裁（闭合）**：hilog `cursor_feed: feed` 痕 23 行（0 行 skip）——段 0（主窗）/段 1/3/2（float 窗 winId 660 上的读数跟随）→ FloatPage onMouse 冒泡喂入实证 + 共用 helper 真实路径覆盖（3.2/3.3 生效）。
+> - **段 5（API20+ 字段来源）**：23/23 痕采用字段 = `globalDisplayX`（API 23 设备）✓。
+> - **瞬态注记**：11 行 `feed globalDisplayX=(0,0)` —— 每次注入调用新建虚拟鼠标自 (0,0) 起步，创建瞬态 Move 事件为**真实事件**（指针确曾瞬时在屏原点）被如实喂入；读数窗口（800ms 间隔）内恒被后续目标值覆盖，套件 4.1 用例（probe 之后读 (1045,950)）未受扰。命中测试侧由 ±40px 容差吸收，与撕裂读注记同类（真实事件喂入的固有瞬态，非缺陷）。
+> - **套件结果（同轮）**：308✅/1❌/7⏭——唯一 ❌ `RunEvent::WindowEvent::Destroyed fires` 为 **window-destroy 家族既有 flaky（#291 型）**：21:08 首轮（本 change 产品变更部署前、同探针 HAP）同 row 同错误已 ❌（先于实现存在=非回归），今晨 11:20 前序 change 验证轮 308✅/0❌ 通过——flaky 定性成立；无探针基线（Run B）终判。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|------|------|
+| ohos | cursor-passthrough | freshness/全局系 | cursor-position-freshness 注入式真值（段 0-3 真机段）✅ | **T0** | 应用已启动（desktop 形态，含 1.2 探针或等效读数出口）；宿主驱动 `cursor-exercise-driver.sh` + hilog 捕获已就绪；uinput -M 可用 | 1. 启动 hilog `[probe]` 捕获 2. 重启 app 触发套件（探针为 row 1）3. 驱动按 hilog 标记注入：段 0 主窗两点(≥100px)+A-repeat → 段 1 float center → SEG-control 主窗独占点 → 段 3 float 1/4 点 → 段 2 float center press(down+up 单调用) 4. 每注入点以 MultimodalInput 读回证 lastPhysicalX/Y + windowId 5. 拉取读数对照 | **green 复跑相（3.3 后）**：①float 点读数 ≈ 注入点全局坐标(±40px) ②段 0 读数 ≈ 注入点(±40px) ③press 点读数 ≈ 按下点且 Release 后稳定 ④hilog 出现 helper `cursor_feed` 喂入痕(段 0/1/2/3 均有=3.2/3.3 真实路径覆盖) ⑤判别断言复立(需窗位原点模长 >80px,弱化须明示) | **HEAD 红灯 2026-10-19 记录见上表**（读数停主窗陈旧值/组件系值，float 点不跟随）。**green 复跑 2026-10-19 21:55 全部预期断言达成，见上节「green 复跑记录」**（R1 闭合=globalDisplayX 全局 vp×scale 语义正确；R2 闭合=cursor_feed 痕 23 行；判别断言本轮窗位 1075px 完整成立；穿透端到端 winId 658 实证）。R1 仲裁归因按 helper 实际采用字段（API 23 设备 `globalDisplayX`）；若判 px → 读出侧删乘法单点修正后复跑；若判窗口系 → 回补「hidumper 确认窗位真变」移窗段或触发 D6-B 裁定。R2 仲裁：float 点读数更新 + `cursor_feed` 痕 = FloatPage onMouse 冒泡实证；无痕且读数不动 → 修注入/查 R2（DefaultXComponent fallback 位） |
+| ohos | cursor-passthrough | fail-safe | cursorPosition reject → 保持穿透纪律 ✅ | **T1** | 应用已启动；能观察穿透链状态（hilog `setWindowTouchable`） | 1. （冷启动态）调 `cursorPosition()` → reject 2. 演示纪律：catch → `setIgnoreCursorEvents(true)`（默认穿透）3. 任意窗口 Move/Press 后再调 `cursorPosition()` → resolve 全局坐标 4. 验证 Err 只表示未跟踪：穿透链 fire-and-forget 错误与 cursor_position resolve 互不影响 | ①冷启动 reject（权威验证位=设备 UT，套件无冷启动面，catch 为容忍分支不判败）②喂入后 resolve 有限数且在 monitor 域内(+40px) ③fail-safe 纪律演示：命中测试匹配才置 touchable | 段 4（有限数值守卫）**非真机执行段**：`displayX` 声明必填、NaN/undefined 来源不可达（D2），实现期以 debug 变体合成 event 直调 `feedCursorFromMouse` 观察跳过+无痕，或代码走查级。段 5（API20+ 字段来源）：hilog.debug(tag `cursor_feed`) 显示实际采用字段，API 23 设备应为 `globalDisplayX` |
+
+## 三十九、手动用例统计汇总
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -921,6 +991,7 @@
 | Key Repeat Detection（key-synthesis 长按/点按） | 2 | 2 | **4** |
 | OHOS — 窗口能力手动按钮（§三十六，ohos-window-test-buttons A 区合并） | 20 | 21 | **41** |
 | OHOS 多 UIAbility 窗口（§三十七，multi-uiability-windows 系统级场景） | 3 | 3 | **6** |
-| **合计** | **121** | **108** | **229** |
+| OHOS — cursor_position 契约与 fail-safe（§三十八，cursor-passthrough 注入式） | 1 | 1 | **2** |
+| **合计** | **122** | **109** | **231** |
 
 > **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。2026-09-09 新增 §三十五 Stronghold（1 T0 + 2 T1，快照 scrypt debug ~107s/次归手动档），原 §三十五 统计汇总顺延为 §三十六，合计 95 T0 / 82 T1 / 177；同日三例真机验证通过（HAD-W32 release HAP，release 下快照读写 ~1-2s）。2026-09-15 新增 5 例：§四 Dialog.open (directory)（#99，T0）、§九 预关闭探针（#103，T0）+ danger-mode exit（#100，T0）/ restart（#101，T0）、§二十一 隐私模式（#115，T1），合计 98 T0 / 81 T1 / 179。2026-09-15 新增 §三十六（ohos-window-test-buttons.md A 区"有手动按钮的窗口能力"整体合并入本文件，41 例 = 20 T0 + 21 T1，grep 实核；已由既有章节覆盖的 6 组按钮以交叉引用表列出不计例：透明+无边框→§十、vibrancy→§十九、setFocus→§十八、on_new_window Allow→§十一、IgnoreCursor→§二十八、window-state→§二十一），原统计汇总顺延为 §三十七，合计 115 T0 / 103 T1 / 218（grep 行数实核一致）。合并时剔除源文档两条过时结论（"Run All 触发事件风暴勿跑"已随 serializeOp 修复过时；多 UIAbility 两按钮 "deferred" 已随 multi-uiability-windows Phase 1-5 落地可用）。2026-09-16 新增 §三十七（multi-uiability-windows 系统级场景 6 例 = 3 T0 + 3 T1：每窗最小化/任务卡片切换/IME 差分/tray 恢复目标/二次拉起守护/Float 级联语义；§36.6 两按钮为创建入口不重复计例），原统计汇总顺延为 §三十八，合计 118 T0 / 106 T1 / 224（grep 行数实核一致）。同日修正 §36.5 最小化备注（"按 app 聚合"误读按 6.5 每窗对称定性更正）与 §36.6 实例窗加载页（hello.html，OQ5 定案，非 MainPage）。2026-09-28 新增 1 例：§九 应用层退出确认 Exit Confirm（#103 之上的应用 UX，T1）；移除 1 例：§九 预关闭探针开启态 T0（裸拦截测试由 Exit Confirm 按钮用例取代，关键判据/权限信息已并入该行备注），合计 97 T0 / 82 T1 / 179。2026-09-28 rebase 并轨：上游 2026-09-15/09-28 五例（#99/#100/#101/#103/#115）与本文 §三十五（1 T0/2 T1）、§三十六（20 T0/21 T1）、§三十七（3 T0/3 T1）分谱系并轨，合计 121 T0 / 108 T1 / 229（上游表格行 98/81 为陈旧值，已按逐行 grep 实数修正；首版并轨算式漏计本文 §三十五 Stronghold 3 例，本行已订正）。

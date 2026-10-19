@@ -197,6 +197,8 @@ export const ohosAdapterTests: TestCase[] = [
       console.log('[manual] API version: setWindowTouchable requires API 15+ (HarmonyOS 5.0.0+); demo targets API 12 → verify device API first');
       console.log('[manual] if touch passes but hover does not → add hitTestBehavior(HitTestMode.Transparent) fallback (design R1)');
       console.log('[manual] restore: setIgnoreCursorEvents(false) on the overlay to re-enable event consumption');
+      console.log('[manual] fail-safe discipline (ohos-cursor-passthrough 4.2): a cursorPosition() reject/untracked → MUST keep ignore=true (default pass-through); only a hit-test match on a trusted reading may set touchable=false');
+      console.log('[manual] fail-safe scope: cursor_position Err means "untracked" ONLY — it is independent of this chain\'s fire-and-forget error channel (a setIgnoreCursorEvents failure never rejects the cursor read, and vice versa; R3: pass-through rejects do not notify Rust)');
     },
   },
 
