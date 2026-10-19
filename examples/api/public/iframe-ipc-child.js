@@ -9,17 +9,45 @@
 //   2. whether an invoke('echo') issued FROM this iframe settles — i.e.
 //      whether the Rust-side response (runCallback via webview eval) is
 //      routed back to the frame that registered the callback
-//   3. whether the ERROR callback id is relayed too: a hand-rolled invoke of a
-//      command that does not exist must settle via reject (error callback),
-//      not time out
+//   3. whether the ERROR callback id is relayed too: an invoke of a command
+//      that does not exist must settle via reject (error callback), not time
+//      out
 //   4. whether the relay chains down to a grandchild iframe (same probe page,
 //      ?role=grandchild) — two postMessage hops
 //   5. whether the relay listener ignores a forged __TAURI_FRAME_CALLBACK__
 //      message whose source is not the direct parent
 //
-// The invoke below is hand-rolled from transformCallback + postMessage: it is
-// the exact non-isolation path @tauri-apps/api's invoke() takes, without
-// depending on the isolation layer that only the main document sets up.
+// Phase B (2026-10-19): the invokes go through the REAL invoke path —
+// `window.__TAURI_INTERNALS__.invoke(cmd, args)`, the exact seam that
+// @tauri-apps/api's invoke() delegates to. An earlier revision hand-rolled
+// transformCallback + __TAURI_INTERNALS__.postMessage on the assumption that
+// the isolation layer is only set up by the main document; both halves of
+// that premise are wrong for this app, and three rounds of device + source
+// evidence (see the Phase B addendum in
+// openspec/changes/p1-iframe-ipc-response-routing/design.md) pin why:
+//
+//   * examples/api builds with `"pattern": {"use": "isolation"}`, and
+//     isolation.js attaches its own sandboxed isolation iframe in EVERY frame
+//     that is not the isolation source — child frames included. Device proof:
+//     the ghost-callback flow shows the child's own isolation machine running
+//     end to end (queue → READY → AES-GCM flush → response → relayed back).
+//   * with Pattern=Isolation, Rust validates every window.ipc.postMessage
+//     body as an AES-GCM IsolationMessage
+//     (crates/tauri/src/ipc/protocol.rs, handle_ipc_message): a raw
+//     `{cmd, callback, error, payload}` body fails to deserialize
+//     ("missing field `nonce`", captured on device in the ARKWEB-CONSOLE
+//     hilog) and is discarded by design — bare IPC must not bypass the
+//     isolation layer. The hand-rolled path therefore never produces a
+//     response, which is exactly what the red-light runs showed: the probe's
+//     registered ids never reached the main-frame relay, and the only
+//     end-to-end traffic belonged to a ghost caller that used the real
+//     invoke path.
+//
+// The real invoke path is pattern-agnostic: brownfield apps take the bare
+// postMessage wire, isolation apps queue through their own per-frame
+// isolation iframe — in both cases the response evaluates runCallback in the
+// MAIN frame and is relayed back down to this frame by core.js, which is the
+// mechanism under test.
 (function () {
   var INVOKE_TIMEOUT_MS = 6000;
   var GRANDCHILD_TIMEOUT_MS = 8000;
@@ -30,14 +58,54 @@
   // and child-side times are directly comparable in the evidence blob.
   function t() { return Date.now(); }
 
-  // Callback ids this frame registered for the probe invokes, plus live
-  // pending flags the message diagnostics can read on every relay arrival.
+  // VESTIGIAL since Phase B: the probe's callback ids are registered INSIDE
+  // __TAURI_INTERNALS__.invoke (core.js registerCallback) and cannot be
+  // observed from here, so this list stays empty and relayArrivals'
+  // registeredByProbe is always false. Ghost-caller attribution now comes
+  // from the Map.set registration stacks below (ghostRegistrations).
   var registeredIds = [];
+
+  // Live pending flags for the probe's own invokes (set true at dispatch,
+  // flipped false in the settle handler, which runs as a microtask AFTER the
+  // message listeners). relayArrivals therefore records whether the echo /
+  // error invoke was still unsettled when that message was dispatched —
+  // pending-window traffic (ghost or the probe's own response) reads true.
   window.__iframeIpcProbeState = { echoPending: false, errorPending: false };
 
   // A command name that is not registered anywhere: the Rust ACL resolves it
   // to an error response, which exercises the error-callback relay path.
   var MISSING_CMD = '__tauri_iframe_probe_missing_cmd__';
+
+  // ---------------------------------------------------------------------------
+  // Phase B ghost-caller attribution. Previous runs showed an unknown
+  // invoke-shaped caller registering a callback pair in this frame and
+  // completing end-to-end through the isolation machine while the probe's own
+  // hand-rolled invokes were rejected by Rust. transformCallback / invoke /
+  // postMessage are sealed with non-writable defineProperty (core.js), so
+  // they cannot be wrapped — but every registration lands in this frame's
+  // callback Map through Map.prototype.set (core.js registerCallback), which
+  // IS patchable. Read-only shim: the original set() always runs and its
+  // return value is preserved, so this can never change registration
+  // behavior. Stacks containing invokeFromIframe/runForgedCheck are the
+  // probe's own; anything else is the ghost caller.
+  // ---------------------------------------------------------------------------
+  var ghostLog = [];
+  try {
+    var targetMap = window.__TAURI_INTERNALS__.callbacks;
+    var origMapSet = Map.prototype.set;
+    Map.prototype.set = function (key, value) {
+      try {
+        if (this === targetMap && ghostLog.length < 32) {
+          ghostLog.push({
+            t: t(),
+            id: typeof key === 'number' || typeof key === 'string' ? key : String(typeof key),
+            stack: String(new Error().stack || '').replace(/\s+/g, ' ').slice(0, 400)
+          });
+        }
+      } catch (e) { /* diagnostics must never break registrations */ }
+      return origMapSet.call(this, key, value);
+    };
+  } catch (e) { /* diagnostics must never break the probe */ }
 
   // ---------------------------------------------------------------------------
   // Phase A origin diagnostics (p1-iframe-ipc-response-routing follow-up).
@@ -67,6 +135,18 @@
   function reportDiag() {
     return {
       registeredIds: registeredIds,
+      // Phase B: registrations in this frame's callback Map whose stack does
+      // NOT originate from the probe itself — the ghost caller, if it
+      // registered after this script evaluated. An empty list alongside
+      // registrationCount > probe registrations means the ghost registered
+      // at document-start (before this script), i.e. from init scripts.
+      ghostRegistrations: ghostLog
+        .filter(function (r) {
+          return r.stack.indexOf('invokeFromIframe') === -1
+            && r.stack.indexOf('runForgedCheck') === -1;
+        })
+        .slice(0, 4),
+      registrationCount: ghostLog.length,
       matrix: diag.matrix,
       relayArrivals: diag.relayArrivals.slice(0, 8),
       isolationCallbackIds: diag.isolationCallbackIds,
@@ -131,12 +211,15 @@
     if (el) { el.textContent = text; }
   }
 
-  // Minimal invoke(): register resolve/reject callbacks, then hand the message
-  // to __TAURI_INTERNALS__.postMessage (ipc-protocol.js's sendIpcMessage —
-  // on OHOS it always routes through window.ipc.postMessage).
+  // Phase B: the REAL invoke path (see the file header for why the
+  // hand-rolled raw postMessage path cannot work under the isolation
+  // pattern). __TAURI_INTERNALS__.invoke registers its callback pair inside
+  // core.js (ids unobservable from here), queues through this frame's own
+  // isolation iframe, and the response comes back as a main-frame
+  // runCallback eval — the relay under test delivers it back here.
   // Resolves { settled: true, result } / { settled: true, error } /
   // { settled: false, phase: 'timeout' }.
-  function invokeFromIframe(cmd, args) {
+  function invokeFromIframe(cmd, args, pendingKey) {
     return new Promise(function (resolve) {
       var done = false;
       var sentAt = t();
@@ -148,6 +231,9 @@
         // Record the true settle time even when the timeout already fired:
         // a relay execution after the timeout is the late-delivery signature.
         value.settledAt = t();
+        // The pending flag flips on settle only — a timeout deliberately
+        // leaves it true, because a late relay can still arrive afterwards.
+        if (pendingKey) { window.__iframeIpcProbeState[pendingKey] = false; }
         if (done) { return; }
         done = true;
         clearTimeout(timer);
@@ -155,24 +241,11 @@
       }
 
       try {
-        var internals = window.__TAURI_INTERNALS__;
-        var cb = internals.transformCallback(function (data) {
-          window.__iframeIpcProbeState.echoPending = false;
-          finish({ settled: true, result: data });
-        }, true);
-        var err = internals.transformCallback(function (e) {
-          window.__iframeIpcProbeState.errorPending = false;
-          finish({ settled: true, error: String(e) });
-        }, true);
-        registeredIds.push(cb, err);
-
-        internals.postMessage({
-          cmd: cmd,
-          callback: cb,
-          error: err,
-          payload: args,
-          options: {}
-        });
+        if (pendingKey) { window.__iframeIpcProbeState[pendingKey] = true; }
+        window.__TAURI_INTERNALS__.invoke(cmd, args).then(
+          function (data) { finish({ settled: true, result: data }); },
+          function (e) { finish({ settled: true, error: String(e) }); }
+        );
       } catch (e) {
         finish({ settled: true, thrown: String(e) });
       }
@@ -266,7 +339,7 @@
   // Grandchild flow: report a single echo invoke back to the child probe page.
   function startGrandchildProbe() {
     setStatus('iframe-ipc-grandchild: invoking echo...');
-    invokeFromIframe('echo', { message: 'from-grandchild' }).then(function (inv) {
+    invokeFromIframe('echo', { message: 'from-grandchild' }, 'echoPending').then(function (inv) {
       var probe = baseProbe();
       probe.invoke = inv;
       probe.diag = reportDiag();
@@ -281,8 +354,8 @@
     setStatus('iframe-ipc-child: probing invoke/error/grandchild/forged...');
 
     Promise.all([
-      invokeFromIframe('echo', { message: 'from-iframe' }),
-      invokeFromIframe(MISSING_CMD, {}),
+      invokeFromIframe('echo', { message: 'from-iframe' }, 'echoPending'),
+      invokeFromIframe(MISSING_CMD, {}, 'errorPending'),
       runGrandchildProbe(),
       runForgedCheck()
     ]).then(function (r) {

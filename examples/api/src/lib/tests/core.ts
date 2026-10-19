@@ -39,10 +39,13 @@ function assert(condition: boolean, msg: string) {
 }
 
 // Probe IPC response routing into a same-origin iframe child frame.
-// The child page (public/iframe-ipc-child.{html,js}) runs a hand-rolled
-// invoke('echo') via __TAURI_INTERNALS__ and reports back over the NATIVE
-// window.postMessage channel — which is NOT the transport under test, so the
-// probe stays observable even when Tauri IPC routing is broken.
+// The child page (public/iframe-ipc-child.{html,js}) runs invoke('echo')
+// through the real __TAURI_INTERNALS__.invoke path (the isolation pattern
+// rejects hand-rolled raw postMessage payloads by design — see the probe
+// header and the Phase B addendum in the openspec change) and reports back
+// over the NATIVE window.postMessage channel — which is NOT the transport
+// under test, so the probe stays observable even when Tauri IPC routing is
+// broken.
 interface IframeIpcInvokeReport {
   settled: boolean;
   result?: unknown;
