@@ -49,6 +49,8 @@ interface IframeIpcInvokeReport {
   error?: string;
   thrown?: string;
   phase?: string;
+  sentAt?: number;
+  settledAt?: number;
 }
 // Phase A diagnostics: per-frame origin view reported by the probe page.
 interface IframeIpcEnv {
@@ -65,15 +67,23 @@ interface IframeIpcEnv {
   topAccess: string;
   topOrigin: string | null;
 }
+interface IframeIpcRelayArrival {
+  t: number;
+  eventOrigin: string;
+  sourceIsParent: boolean;
+  id: number | string;
+  registeredByProbe: boolean;
+  echoPending: boolean;
+  errorPending: boolean;
+  mapSize: number;
+}
 interface IframeIpcDiag {
-  matrix?: Record<string, { eventOrigin: string; sourceIsParent: boolean } | null>;
-  relaySeen?: {
-    eventOrigin: string;
-    sourceIsParent: boolean;
-    idType: string;
-    dataMarker: string;
-  } | null;
-  messageLog?: Array<{ o: string; src: string; d: string }>;
+  registeredIds?: Array<number | string>;
+  matrix?: Record<string, { t: number; eventOrigin: string; sourceIsParent: boolean } | null>;
+  relayArrivals?: IframeIpcRelayArrival[];
+  isolationCallbackIds?: Array<{ t: number; callback: string }>;
+  messageLog?: Array<{ t: number; o: string; src: string; d: string }>;
+  runReceivedAt?: number;
 }
 interface IframeIpcProbe {
   __iframeIpcChild?: boolean;
@@ -93,6 +103,7 @@ interface IframeIpcProbe {
   parentEnv?: Record<string, unknown>;
   matrixThrows?: Record<string, string>;
   matrixTargets?: Record<string, string>;
+  runSentAt?: number;
 }
 function runIframeIpcProbe(): Promise<IframeIpcProbe> {
   return new Promise((resolve, reject) => {
@@ -114,6 +125,7 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
       slash: '/',
       star: '*'
     };
+    let runSentAt = 0;
     const timeoutId = setTimeout(() => {
       cleanup();
       reject(new Error(`iframe IPC probe timed out: child page never reported (ready=${ready})`));
@@ -130,6 +142,7 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
       if (!data || data.__iframeIpcChild !== true) return;
       if (data.phase === 'ready' && !ready) {
         ready = true;
+        runSentAt = Date.now();
         iframe.contentWindow?.postMessage({ __iframeIpcParent: true, phase: 'run' }, '*');
         // Phase A targetOrigin matrix: same payload shape as the core.js relay
         // broadcast, three targetOrigin variants — which copies the child
@@ -150,6 +163,7 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
         cleanup();
         resolve({
           ...data,
+          runSentAt,
           matrixThrows,
           matrixTargets,
           parentEnv: parentIpcEnv()
@@ -166,7 +180,10 @@ function runIframeIpcProbe(): Promise<IframeIpcProbe> {
 // reports, so both ends of the link are in one evidence record.
 function parentIpcEnv(): Record<string, unknown> {
   const internals = (window as unknown as {
-    __TAURI_INTERNALS__?: { __TAURI_PATTERN__?: { pattern?: string } };
+    __TAURI_INTERNALS__?: {
+      __TAURI_PATTERN__?: { pattern?: string };
+      callbacks?: { size: number };
+    };
   }).__TAURI_INTERNALS__;
   const isolationFrame = document.querySelector('iframe#__tauri_isolation__') as HTMLIFrameElement | null;
   return {
@@ -177,18 +194,26 @@ function parentIpcEnv(): Record<string, unknown> {
     frames: window.frames.length,
     secureContext: window.isSecureContext === true,
     tauriPattern: internals?.__TAURI_PATTERN__?.pattern ?? 'missing',
-    isolationIframe: isolationFrame ? String(isolationFrame.src) : 'absent'
+    isolationIframe: isolationFrame ? String(isolationFrame.src) : 'absent',
+    mainMapSize: internals?.callbacks?.size ?? -1
   };
 }
 
 // One-line evidence blob for report/hilog consumption. `|` is scrubbed so the
 // markdown table row cannot be broken by the payload.
-function iframeIpcEvidence(probe: IframeIpcProbe): string {
+function iframeIpcEvidence(
+  probe: IframeIpcProbe,
+  extra?: { testStart: number; missWarns: Array<{ t: number; id: string }> }
+): string {
   const blob = JSON.stringify({
+    testStart: extra?.testStart,
+    runSentAt: probe.runSentAt,
+    missWarns: extra?.missWarns,
     parentEnv: probe.parentEnv,
     matrixTargets: probe.matrixTargets,
     matrixThrows: probe.matrixThrows,
     childEnv: probe.env,
+    childInvoke: probe.invoke,
     childDiag: probe.diag
   });
   return blob.replace(/\|/g, '/');
@@ -263,10 +288,26 @@ export const coreTests: TestCase[] = [
     category: 'auto',
     timeout: 25000,
     async fn() {
+      // Phase A v2: capture the main frame's runCallback miss warns with
+      // absolute timestamps — correlating them with the child's relay-arrival
+      // timestamps decomposes the round trip into uplink/Rust vs downlink.
+      const missWarns: Array<{ t: number; id: string }> = [];
+      const prevWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        try {
+          const text = args.map((a) => String(a)).join(' ');
+          const m = text.match(/Couldn't find callback id (\d+)/);
+          if (m) missWarns.push({ t: Date.now(), id: m[1] });
+        } catch { /* diag only */ }
+        prevWarn(...args);
+      };
+
+      const testStart = Date.now();
       const probe = await runIframeIpcProbe();
-      // Phase A: dump the origin/matrix evidence once — hilog (ARKWEB-CONSOLE)
-      // and the failure message below both carry it.
-      const evidence = iframeIpcEvidence(probe);
+      console.warn = prevWarn;
+      // Phase A: dump the origin/matrix/timeline evidence once — hilog
+      // (ARKWEB-CONSOLE) and the failure message below both carry it.
+      const evidence = iframeIpcEvidence(probe, { testStart, missWarns });
       console.log('[iframe-ipc-diag] ' + evidence);
 
       // 1. Init scripts must reach the iframe document at all.
