@@ -83,6 +83,8 @@
     "allow-get-tracked-menu-events",
     "allow-get-tracked-run-events",
     "allow-clear-tracked-events",
+    "allow-track-webview-viewport-probe",
+    "allow-get-tracked-webview-viewport-probes",
     "allow-emit-test-event",
     "allow-setup-app-listener",
     "allow-test-async-spawn",

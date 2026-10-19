@@ -2,7 +2,7 @@ import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-ru
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
 import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { getCurrentWindow, currentMonitor, cursorPosition, Effect, PhysicalPosition, LogicalSize } from '@tauri-apps/api/window';
+import { getCurrentWindow, currentMonitor, cursorPosition, Effect, PhysicalPosition, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
 import { appCacheDir } from '@tauri-apps/api/path';
@@ -220,6 +220,116 @@ function iframeIpcEvidence(
     childDiag: probe.diag
   });
   return blob.replace(/\|/g, '/');
+}
+
+// ─── Webview viewport probe (openspec ohos-webview-sizing, case-first) ───
+//
+// The cases below assert the ArkTS RENDER-layer truth (the webview page's
+// window.innerWidth/innerHeight via public/webview-viewport-probe.{html,js}
+// → track_webview_viewport_probe), not the Rust bounds cache — the multi-webview
+// cache round-trips were exactly the blind spot that let "Rust records correct,
+// ArkTS renders full-window" ship (consumer Tab-content-layer defect signature).
+//
+// Red-light contract (task 1.5): on the pre-fix HEAD, case a and case b must
+// FAIL (probe ≈ full-window size instead of the requested geometry) and case c
+// must fail on the flip leg only — the natural-follow legs are expected green
+// on HEAD (the "always 100%" fallback follows the container) and act as the
+// anti-regression guard for the D1 geometry migration.
+
+interface ViewportProbeSample {
+  tag: string;
+  innerWidth: number;
+  innerHeight: number;
+  docWidth: number;
+  docHeight: number;
+}
+
+// Latest sample reported by the webview labeled `tag` (the probe page reports
+// its own webview label; resize re-reports supersede the load-time sample).
+async function latestViewportProbe(tag: string): Promise<ViewportProbeSample | null> {
+  const probes = await invoke<ViewportProbeSample[]>('get_tracked_webview_viewport_probes');
+  let latest: ViewportProbeSample | null = null;
+  for (const p of probes) {
+    if (p.tag === tag) latest = p;
+  }
+  return latest;
+}
+
+function describeProbe(p: ViewportProbeSample | null): string {
+  return p
+    ? `${p.innerWidth}×${p.innerHeight} (doc ${p.docWidth}×${p.docHeight})`
+    : 'no sample';
+}
+
+// Polls until the tag's probe reports the expected viewport within a ±1px
+// measurement tolerance. Device-measured (2in1 3QC0124C11000038, 2026-10-20
+// green-run calibration): ArkWeb reports window.innerWidth/innerHeight as the
+// component size + 1px on BOTH axes, systematically, for every geometry —
+// 300×200→301×201, 400×300→401×301, 320×240→321×241, natural 600×450→601×451,
+// main window→1101×657. The +1 is ArkWeb viewport-report semantics, not a
+// geometry error — the defect this suite pins (full-window inflation) is two
+// orders of magnitude larger (e.g. +800 wide). Tolerance must stay ≤1 so the
+// distinct set_bounds legs in case b (400×300 vs 250×150) cannot alias.
+async function pollViewportProbe(
+  tag: string,
+  expectW: number,
+  expectH: number,
+  budgetMs: number,
+  what: string
+): Promise<ViewportProbeSample> {
+  const start = Date.now();
+  let last: ViewportProbeSample | null = null;
+  while (Date.now() - start < budgetMs) {
+    last = await latestViewportProbe(tag);
+    if (
+      last &&
+      Math.abs(last.innerWidth - expectW) <= 1 &&
+      Math.abs(last.innerHeight - expectH) <= 1
+    ) {
+      return last;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `${what}: probe "${tag}" never reported ${expectW}×${expectH} (±1) within ${budgetMs}ms — last sample: ${describeProbe(last)}`
+  );
+}
+
+// Polls until the tag's probe has produced any sample (page load + IPC uplink
+// settled) — used where the acceptance is a transition, not the initial size.
+async function pollViewportProbeSettled(
+  tag: string,
+  budgetMs: number,
+  what: string
+): Promise<ViewportProbeSample> {
+  const start = Date.now();
+  while (Date.now() - start < budgetMs) {
+    const sample = await latestViewportProbe(tag);
+    if (sample) return sample;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `${what}: probe "${tag}" produced no sample within ${budgetMs}ms — probe page load or IPC uplink broken`
+  );
+}
+
+// Fails fast on child-webview creation errors instead of letting the probe
+// poll time out with an indirect symptom.
+function waitForWebviewCreated(child: Webview, what: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what}: webview creation timed out after 5000ms`)),
+      5000
+    );
+    child.once('tauri://created', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.once('tauri://error', (e: unknown) => {
+      clearTimeout(timer);
+      reject(new Error(`${what}: webview creation failed: ${String(e)}`));
+    });
+  });
 }
 
 export const coreTests: TestCase[] = [
@@ -1591,6 +1701,203 @@ export const coreTests: TestCase[] = [
       // Intentionally NOT closing — leave for manual Close All cleanup.
     },
   },
+  // ─── Webview viewport probe cases (helpers above; red-light contract in the
+  // section header before coreTests) ───
+
+  {
+    // Case a (S1/S3/S4/S5/S6): explicit-bounds children render at the requested
+    // size, two non-overlapping children each keep their own geometry, and the
+    // Rust readback agrees with the rendered truth. Oversized rendering (probe
+    // == main-window viewport M) is the defect signature the red-light run pins.
+    name: 'webview child created with explicit bounds renders at requested size',
+    category: 'auto',
+    // 20s: two probe legs (7s each) + two creation waits must fit inside the
+    // case budget so a failure reports the leg message, not the outer timeout.
+    timeout: 20000,
+    async fn() {
+      const mainWindow = getCurrentWindow();
+      const M = window.innerWidth;
+      console.log(`[viewport-probe] main window viewport M=${window.innerWidth}×${window.innerHeight}`);
+      const tagA = 'test-sizing-child-a-' + Date.now();
+      const tagB = 'test-sizing-child-b-' + Date.now();
+      const childA = new Webview(mainWindow, tagA, {
+        url: '/webview-viewport-probe.html',
+        x: 50,
+        y: 50,
+        width: 300,
+        height: 200,
+      });
+      const childB = new Webview(mainWindow, tagB, {
+        url: '/webview-viewport-probe.html',
+        x: 400,
+        y: 300,
+        width: 250,
+        height: 180,
+      });
+      try {
+        await waitForWebviewCreated(childA, 'child A');
+        await waitForWebviewCreated(childB, 'child B');
+        // Both children: probe must equal the REQUESTED geometry (S1/S4), which
+        // on HEAD reports ≈M (full-window inflation) — the failure message
+        // carries the actual sample so the red-light evidence is self-describing.
+        await pollViewportProbe(tagA, 300, 200, 7000, 'child A (bounds 50,50,300×200) rendered geometry');
+        await pollViewportProbe(tagB, 250, 180, 7000, 'child B (bounds 400,300,250×180) rendered geometry');
+        // S6 defect-signature discriminator (positive form, post-fix): the
+        // rendered viewport must not be the container/full-window size.
+        const probeA = await latestViewportProbe(tagA);
+        assert(
+          probeA !== null && probeA.innerWidth !== M,
+          `child A viewport ${describeProbe(probeA)} equals the full-window width M=${M} — oversized rendering (defect signature)`
+        );
+        // S5: two non-overlapping children keep their own geometry — already
+        // asserted above via the two independent polls; the Rust readback is the
+        // second truth source (bounds cache must agree with the rendered truth).
+        // position()/size() are documented PHYSICAL APIs: creation x/y/width/
+        // height are logical (webview plugin create_webview wraps them in
+        // LogicalPosition/LogicalSize), and the getters multiply by the window
+        // scale factor (device-measured sf=1.9 → 50,50 logical reads back as
+        // 95,95 physical). Expected readback is therefore round(logical × sf),
+        // not the raw request — the same IEEE product both sides compute.
+        const sf = await getCurrentWindow().scaleFactor();
+        const handleA = await Webview.getByLabel(tagA);
+        const handleB = await Webview.getByLabel(tagB);
+        assert(handleA !== null, `child A "${tagA}" not found by label`);
+        assert(handleB !== null, `child B "${tagB}" not found by label`);
+        const posA = await handleA!.position();
+        const sizeA = await handleA!.size();
+        const posB = await handleB!.position();
+        const sizeB = await handleB!.size();
+        assert(
+          posA.x === Math.round(50 * sf) && posA.y === Math.round(50 * sf),
+          `child A Rust position (${posA.x},${posA.y}) ≠ requested (50,50) logical × sf=${sf} (expected ${Math.round(50 * sf)},${Math.round(50 * sf)} physical)`
+        );
+        assert(
+          sizeA.width === Math.round(300 * sf) && sizeA.height === Math.round(200 * sf),
+          `child A Rust size (${sizeA.width},${sizeA.height}) ≠ requested 300×200 logical × sf=${sf} (expected ${Math.round(300 * sf)}×${Math.round(200 * sf)} physical)`
+        );
+        assert(
+          posB.x === Math.round(400 * sf) && posB.y === Math.round(300 * sf),
+          `child B Rust position (${posB.x},${posB.y}) ≠ requested (400,300) logical × sf=${sf} (expected ${Math.round(400 * sf)},${Math.round(300 * sf)} physical)`
+        );
+        assert(
+          sizeB.width === Math.round(250 * sf) && sizeB.height === Math.round(180 * sf),
+          `child B Rust size (${sizeB.width},${sizeB.height}) ≠ requested 250×180 logical × sf=${sf} (expected ${Math.round(250 * sf)}×${Math.round(180 * sf)} physical)`
+        );
+      } finally {
+        try { await childA.close(); } catch { /* cleanup best-effort */ }
+        try { await childB.close(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    // Case b (S7/S8): runtime setSize/setPosition change the RENDERED viewport,
+    // and consecutive set_bounds calls — last one wins.
+    name: 'webview child setSize/setPosition change rendered geometry (last call wins)',
+    category: 'auto',
+    // 25s: settled wait + two probe legs (7s each) must fit inside the case
+    // budget so a failure reports the leg message, not the outer timeout.
+    timeout: 25000,
+    async fn() {
+      const tag = 'test-sizing-resize-' + Date.now();
+      const child = new Webview(getCurrentWindow(), tag, {
+        url: '/webview-viewport-probe.html',
+        x: 30,
+        y: 40,
+        width: 300,
+        height: 200,
+      });
+      try {
+        await waitForWebviewCreated(child, 'case b child');
+        // Wait for the create to settle at whatever it renders (the create-size
+        // acceptance is case a's; this case isolates the runtime transition).
+        const initial = await pollViewportProbeSettled(tag, 7000, 'child created');
+        console.log(`[viewport-probe] case b initial rendered: ${describeProbe(initial)}`);
+        await child.setSize(new LogicalSize(400, 300));
+        await child.setPosition(new LogicalPosition(60, 70));
+        await pollViewportProbe(tag, 400, 300, 7000, 'setSize(400,300) rendered geometry');
+        // S8: consecutive set_bounds — the final call must win, no merge/drop.
+        await child.setSize(new LogicalSize(250, 150));
+        await pollViewportProbe(tag, 250, 150, 7000, 'setSize(250,150) after consecutive calls (last-wins)');
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    // Case c (S2/S10/S11/S9): a bounds-less (natural-layout) sub-window webview
+    // viewport equals its container content area and follows window resize
+    // WITHOUT Rust re-issue; the first explicit set_bounds flips it to explicit
+    // sizing. The follow legs are the anti-regression guard (green on HEAD —
+    // the "always 100%" fallback follows the container); the flip leg is the
+    // red-light discriminator.
+    name: 'sub-window natural webview follows container then flips explicit via set_bounds',
+    category: 'auto',
+    // 25s: three probe legs (7s each) + sub-window creation must fit inside the
+    // case budget so a failure reports the leg message, not the outer timeout.
+    timeout: 25000,
+    async fn() {
+      // Float sub-window via the existing demo command — JS `new WebviewWindow`
+      // defaults to the OHOS UIAbility kind which conflicts with the main window
+      // (see the vibrancy NOTE). Its single webview is the window content:
+      // created bounds-less → natural layout. inner_size(800,600) is the
+      // creation anchor for the coarse container checks below.
+      const actualLabel = await invoke<string>('create_isolated_window', {
+        windowId: 'test-sizing-sub',
+        dataSuffix: 'sizing',
+        url: '/webview-viewport-probe.html',
+      });
+      let win: WebviewWindow | null = null;
+      try {
+        const M = window.innerWidth;
+        // S2/S10: the natural webview's viewport equals ITS OWN container content
+        // area — plausibility band around the creation params (decorations/safe
+        // areas may offset the content rect, so no strict innerSize equality) and
+        // explicitly NOT the main window's viewport (wrong-container signature).
+        const initial = await pollViewportProbeSettled(actualLabel, 7000, 'sub-window webview created');
+        console.log(
+          `[viewport-probe] case c natural rendered: ${describeProbe(initial)}, sub innerSize≈` +
+          `${JSON.stringify(await (await WebviewWindow.getByLabel(actualLabel))?.innerSize())}`
+        );
+        assert(
+          initial.innerWidth >= 480 && initial.innerWidth <= 1120 &&
+          initial.innerHeight >= 360 && initial.innerHeight <= 840,
+          `natural sub-window viewport ${describeProbe(initial)} outside the 800×600 content plausibility band`
+        );
+        assert(
+          initial.innerWidth !== M,
+          `natural sub-window viewport width ${initial.innerWidth} equals the main window width M=${M} — probe page loaded into the wrong container`
+        );
+        // S11: window resize → the webview follows the new content area via
+        // container layout, no Rust bounds re-issue (autoresize is off for this
+        // bounds-less webview). Strict ±1 — design Test-Design S11 pins ±0; the
+        // measured +1px ArkWeb viewport constant (red-light-evidence.md, green
+        // calibration 1) absorbs exactly that, so a partial follow must FAIL here.
+        // The loose plausibility band above is only for the creation leg, where
+        // decorations/safe areas may offset the content rect.
+        win = await WebviewWindow.getByLabel(actualLabel);
+        assert(win !== null, `sub-window "${actualLabel}" not found by label`);
+        await win!.setSize(new LogicalSize(600, 450));
+        await pollViewportProbe(actualLabel, 600, 450, 7000, 'natural sub-window following window resize to 600×450');
+        // S9 (flip): the first explicit set_bounds overrides the natural layout —
+        // strict equality, the red-light discriminator on HEAD.
+        const subWebview = await Webview.getByLabel(actualLabel);
+        assert(subWebview !== null, `sub-window webview "${actualLabel}" not found by label`);
+        await subWebview!.setSize(new LogicalSize(320, 240));
+        await pollViewportProbe(actualLabel, 320, 240, 7000, 'set_bounds(320,240) overriding natural layout');
+      } finally {
+        if (!win) {
+          // Early-exit path (an assertion threw before `win` was assigned): the
+          // Float sub-window would otherwise leak into later cases (design test
+          // hygiene: finally must clean up regardless of where the case failed).
+          try { win = await WebviewWindow.getByLabel(actualLabel); } catch { /* already gone */ }
+        }
+        if (win) {
+          try { await win.destroy(); } catch { /* cleanup best-effort */ }
+        }
+      }
+    },
+  },
+
   // ─── Mouse Event Tests (OHOS desktop / 2in1) ───
   {
     name: 'DOM MouseEvent.dispatch (synthetic)',
@@ -1856,16 +2163,38 @@ export const coreTests: TestCase[] = [
 
   // set_bounds / bounds round-trip — desktop-only (Webview::bounds/set_bounds are #[cfg(desktop)]).
   // On OHOS mobile the command is not registered; skip silently via try/catch.
+  // Round-trips a DEDICATED explicit-bounds child, never the window-content
+  // webview: under ohos-webview-sizing D2 a runtime set_bounds flips a natural
+  // (bounds-less) webview to explicit sizing, so touching "main" would pin the
+  // window content to its stale bounds-cache value (observed 200×200) — the
+  // pre-D2 form of this test did exactly that as a silent side effect.
   {
     name: 'webview.set_bounds round-trip (OHOS desktop)',
     category: 'auto',
+    timeout: 15000,
     async fn() {
+      // Desktop-form only: bounds/set_bounds are #[cfg(desktop)]; skipping here
+      // (instead of relying on the invoke rejection below) keeps mobile from
+      // creating a throwaway child webview just to skip.
+      await skipOnMobile('Webview::bounds/set_bounds are cfg(desktop) and absent from the mobile build');
+      const label = 'test-set-bounds-roundtrip-' + Date.now();
+      const child = new Webview(getCurrentWindow(), label, {
+        url: '/webview-viewport-probe.html',
+        x: 40,
+        y: 40,
+        width: 220,
+        height: 160,
+      });
       try {
-        const report = await invoke('set_bounds_test');
+        await waitForWebviewCreated(child, 'set_bounds round-trip child');
+        const report = await invoke('set_bounds_test', { label });
         assert(report.set_ok === true, `set_bounds_test failed: ${JSON.stringify(report)}`);
-        assert(report.matches === true, `bounds should match after round-trip, got: ${JSON.stringify(report)}`);
-      } catch {
-        // Not on desktop — command not registered, skip silently
+        assert(
+          report.matches === true,
+          `bounds should match after round-trip, got: ${JSON.stringify(report)}`
+        );
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
       }
     },
   },

@@ -56,6 +56,70 @@ pub struct EventTracker {
   pub window_events: Mutex<Vec<String>>,
   pub menu_events: Mutex<Vec<String>>,
   pub run_events: Mutex<Vec<String>>,
+  /// Webview viewport probe samples (public/webview-viewport-probe.{html,js},
+  /// openspec ohos-webview-sizing): the RENDERED ArkWeb viewport of whichever
+  /// webview loaded the probe page, reported through the real invoke path.
+  /// Samples accumulate between `clear_tracked_events` calls — pollers take the
+  /// latest entry per tag, so resize re-reports supersede the load-time one;
+  /// cases create their webviews and poll within one test step, and the suite
+  /// runs steps sequentially, so a mid-run clear never races a live poller.
+  pub viewport_probes: Mutex<Vec<ViewportProbeSample>>,
+}
+
+/// One viewport probe report from a webview page.
+///
+/// Field names are camelCase to match the wire the probe page speaks: the JS
+/// side sends camelCase invoke args (tauri auto-maps them to these snake_case
+/// params on `track_webview_viewport_probe`) and core.ts reads the returned
+/// samples as `.innerWidth` etc. — hence `rename_all` for the Serialize side.
+/// Without the rename, the return JSON is snake_case and the poller reads
+/// `undefined` — the red-light run of 2026-10-19 failed exactly that way
+/// (every assertion saw `undefined×undefined`, a broken rig, not the designed
+/// red light).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportProbeSample {
+  /// Probe key — the reporting webview's label (frozen into
+  /// `__TAURI_INTERNALS__.metadata` by the init scripts).
+  pub tag: String,
+  pub inner_width: f64,
+  pub inner_height: f64,
+  pub doc_width: f64,
+  pub doc_height: f64,
+  pub reported_at_ms: u64,
+}
+
+#[command]
+pub fn track_webview_viewport_probe<R: Runtime>(
+  app: tauri::AppHandle<R>,
+  tag: String,
+  inner_width: f64,
+  inner_height: f64,
+  doc_width: f64,
+  doc_height: f64,
+) -> tauri::Result<()> {
+  let tracker = app.state::<EventTracker>();
+  tracker.viewport_probes.lock().unwrap().push(ViewportProbeSample {
+    tag,
+    inner_width,
+    inner_height,
+    doc_width,
+    doc_height,
+    reported_at_ms: std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|d| d.as_millis() as u64)
+      .unwrap_or(0),
+  });
+  Ok(())
+}
+
+#[command]
+pub fn get_tracked_webview_viewport_probes<R: Runtime>(
+  app: tauri::AppHandle<R>,
+) -> tauri::Result<Vec<ViewportProbeSample>> {
+  let tracker = app.state::<EventTracker>();
+  let probes = tracker.viewport_probes.lock().unwrap().clone();
+  Ok(probes)
 }
 
 #[command]
@@ -86,6 +150,7 @@ pub fn clear_tracked_events<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Resu
   let tracker = app.state::<EventTracker>();
   tracker.window_events.lock().unwrap().clear();
   tracker.menu_events.lock().unwrap().clear();
+  tracker.viewport_probes.lock().unwrap().clear();
   // Do NOT clear run_events — Ready fires only once and cannot be re-triggered
   Ok(())
 }
@@ -2140,9 +2205,16 @@ pub fn devtools_close_only<R: tauri::Runtime>(
   window.close_devtools();
   Ok(())
 }
-/// Test set_bounds / bounds round-trip for the main webview. Verifies that
-/// set_bounds calls ArkTS setBounds without error and bounds() returns
-/// consistent values after the round-trip.
+/// Test set_bounds / bounds round-trip on the webview named by `label`.
+/// Verifies that set_bounds calls ArkTS setBounds without error and bounds()
+/// returns consistent values after the round-trip.
+///
+/// The caller must pass a DEDICATED (explicit-bounds child) webview label, not
+/// the window-content webview: under the ohos-webview-sizing D2 semantics a
+/// runtime set_bounds flips a natural-layout (bounds-less) webview to explicit
+/// sizing — round-tripping "main" used to pin the window content to its stale
+/// bounds-cache value (observed 200×200) and opt it out of container-following.
+/// Re-asserting an explicit-bounds child's own geometry is side-effect-free.
 ///
 /// Desktop-only: `Webview::bounds`/`set_bounds` are in tauri's `#[cfg(desktop)]`
 /// impl block. On OHOS mobile the methods don't exist, so the command is not
@@ -2150,10 +2222,13 @@ pub fn devtools_close_only<R: tauri::Runtime>(
 #[cfg(desktop)]
 #[command]
 pub fn set_bounds_test<R: tauri::Runtime>(
-  window: tauri::WebviewWindow<R>,
+  app: tauri::AppHandle<R>,
+  label: String,
 ) -> tauri::Result<serde_json::Value> {
-  use tauri::webview::Webview;
-  let webview = window.as_ref();
+  use tauri::Manager;
+  let webview = app
+    .get_webview(&label)
+    .ok_or(tauri::Error::WebviewNotFound)?;
   let original = webview.bounds()?;
   // Round-trip: set_bounds with original → should not error
   webview.set_bounds(original)?;

@@ -1694,11 +1694,32 @@ Expected behavior:
   }
 
   // 7. set_bounds — set position+size round-trip at the webview layer
+  // Round-trips a DEDICATED explicit-bounds child: under ohos-webview-sizing D2
+  // a runtime set_bounds flips a natural (bounds-less) webview to explicit
+  // sizing, so touching the window-content webview would pin "main" to a stale
+  // bounds-cache value and break its container-following.
   async function manualSetBounds() {
     await wrapManual('set_bounds', async () => {
-      const report = await invoke('set_bounds_test');
-      const ok = report?.set_ok === true;
-      manualResult = `set_bounds_test → set_ok=${report?.set_ok}\n${ok ? '✓ PASS' : '✗ FAIL'}\n(webview 层 set position+size round-trip)`;
+      const label = 'manual-set-bounds-roundtrip-' + Date.now();
+      const child = new Webview(getCurrentWindow(), label, {
+        url: '/webview-viewport-probe.html',
+        x: 40,
+        y: 40,
+        width: 220,
+        height: 160,
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('child webview creation timed out (5s)')), 5000);
+          child.once('tauri://created', () => { clearTimeout(timer); resolve(); });
+          child.once('tauri://error', (e) => { clearTimeout(timer); reject(new Error(`child webview creation failed: ${String(e)}`)); });
+        });
+        const report = await invoke('set_bounds_test', { label });
+        const ok = report?.set_ok === true;
+        manualResult = `set_bounds_test(label=${label}) → set_ok=${report?.set_ok}\n${ok ? '✓ PASS' : '✗ FAIL'}\n(webview 层 set position+size round-trip,专用显式 bounds 子 webview)`;
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
+      }
       onMessage(manualResult);
     });
   }

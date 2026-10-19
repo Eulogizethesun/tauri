@@ -71,6 +71,11 @@ fn main() {
         "get_tracked_menu_events",
         "get_tracked_run_events",
         "clear_tracked_events",
+        // Webview viewport probe pair (openspec ohos-webview-sizing): invoked
+        // from child/sub-window probe pages (capability window "test-*") and
+        // polled from the main window.
+        "track_webview_viewport_probe",
+        "get_tracked_webview_viewport_probes",
         "emit_test_event",
         "setup_app_listener",
         "test_async_spawn",

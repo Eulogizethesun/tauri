@@ -5734,10 +5734,12 @@ You may have it installed on another user account, but it is not available for t
       None
     }
     // On OHOS, a webview created without explicit bounds must stay bounds-less:
-    // wry marks it natural-layout in WebViewStyle (no width/height → ArkTS
-    // "100%"), so it follows window resizes. Passing full-window pixel bounds
-    // here would make it explicit-size and desync its page layout on resize
-    // (BuilderNode.update does not notify ArkWeb to relayout).
+    // wry marks it natural-layout in WebViewStyle (no width/height → the ArkTS
+    // render layer renders the wrapper at "100%"), so it follows window resizes
+    // through container layout. Explicit bounds are consumed by the ArkTS render
+    // layer as the rendered geometry (create-time style.width/height drive the
+    // wrapper Stack; a runtime set_bounds applies the full geometry and flips a
+    // natural webview to explicit sizing — openspec ohos-webview-sizing).
     #[cfg(target_env = "ohos")]
     None
   };
