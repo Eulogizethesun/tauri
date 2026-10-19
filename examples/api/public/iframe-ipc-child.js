@@ -80,14 +80,17 @@
   // Phase B ghost-caller attribution. Previous runs showed an unknown
   // invoke-shaped caller registering a callback pair in this frame and
   // completing end-to-end through the isolation machine while the probe's own
-  // hand-rolled invokes were rejected by Rust. transformCallback / invoke /
-  // postMessage are sealed with non-writable defineProperty (core.js), so
-  // they cannot be wrapped — but every registration lands in this frame's
-  // callback Map through Map.prototype.set (core.js registerCallback), which
-  // IS patchable. Read-only shim: the original set() always runs and its
-  // return value is preserved, so this can never change registration
-  // behavior. Stacks containing invokeFromIframe/runForgedCheck are the
-  // probe's own; anything else is the ghost caller.
+  // hand-rolled invokes were rejected by Rust. transformCallback / invoke are
+  // sealed with non-writable defineProperty in core.js and postMessage in
+  // ipc-protocol.js, so they cannot be wrapped — but every registration lands
+  // in this frame's callback Map through Map.prototype.set (core.js
+  // registerCallback), which IS patchable. Read-only shim: the original set()
+  // always runs and its return value is preserved, so this can never change
+  // registration behavior. Scope note: this patches the WHOLE frame realm's
+  // Map.prototype.set (every Map in this document routes through it) — the
+  // strict pass-through is what keeps behavior identical. Stacks containing
+  // invokeFromIframe/runForgedCheck are the probe's own; anything else is the
+  // ghost caller.
   // ---------------------------------------------------------------------------
   var ghostLog = [];
   try {
@@ -121,9 +124,10 @@
     // matrix[mark] = arrival record, null while not seen
     matrix: { origin: null, slash: null, star: null },
     // every __TAURI_FRAME_CALLBACK__ arrival with full decision context
-    // (core.js's own listener runs first, so map/pending state is POST-call:
-    // a once-callback that executed is already deleted and the pending flag
-    // already flipped)
+    // (core.js's own listener runs first, so the map state is POST-call — a
+    // once callback that executed is already deleted — while the pending
+    // flags are still PRE-flip: they only flip in the invoke's settle
+    // microtask, after every message listener has run)
     relayArrivals: [],
     // callback id of any isolation-payload-shaped message (cmd+callback+...)
     isolationCallbackIds: [],
@@ -137,9 +141,15 @@
       registeredIds: registeredIds,
       // Phase B: registrations in this frame's callback Map whose stack does
       // NOT originate from the probe itself — the ghost caller, if it
-      // registered after this script evaluated. An empty list alongside
-      // registrationCount > probe registrations means the ghost registered
-      // at document-start (before this script), i.e. from init scripts.
+      // registered after this script evaluated. Interpretation: an empty
+      // list with registrationCount == 5 (the probe's own child-frame
+      // registrations: echo pair, missing-cmd pair, forged target) means the
+      // shim saw nothing foreign — either there is no ghost, or the ghost
+      // registered at document-start before the shim existed; attribute that
+      // case via mapSize deltas / missWarns instead. Requires function names
+      // in Error().stack — satisfied here because public/ assets ship
+      // unminified (a minified build could misfile probe registrations as
+      // ghosts: diagnostic noise only, never an assertion input).
       ghostRegistrations: ghostLog
         .filter(function (r) {
           return r.stack.indexOf('invokeFromIframe') === -1
@@ -228,8 +238,10 @@
       }, INVOKE_TIMEOUT_MS);
 
       function finish(value) {
-        // Record the true settle time even when the timeout already fired:
-        // a relay execution after the timeout is the late-delivery signature.
+        // Stamp the settle time before the done guard: on the late path (the
+        // timeout already fired) this value object is dropped below, so the
+        // observable late-delivery signature is the pending flag staying
+        // true, not a settledAt update on the resolved timeout value.
         value.settledAt = t();
         // The pending flag flips on settle only — a timeout deliberately
         // leaves it true, because a late relay can still arrive afterwards.
