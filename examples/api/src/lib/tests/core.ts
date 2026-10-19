@@ -1706,18 +1706,29 @@ export const coreTests: TestCase[] = [
       // in practice; the authoritative cold-start reject verification lives
       // in the ability device UT (cursor_position_with_untracked_feed_
       // returns_untracked_error).
+      let pos: { x: number; y: number };
       try {
-        const pos = await cursorPosition();
-        assert(Number.isFinite(pos.x), `pos.x should be a finite number, got ${pos.x}`);
-        assert(Number.isFinite(pos.y), `pos.y should be a finite number, got ${pos.y}`);
-        const monitor = await currentMonitor();
-        assert(
-          pos.x >= -40 && pos.x <= monitor.size.width + 40 && pos.y >= -40 && pos.y <= monitor.size.height + 40,
-          `pos (${pos.x},${pos.y}) should be within monitor physical size ${monitor.size.width}x${monitor.size.height} (+40px tolerance)`,
-        );
+        pos = await cursorPosition();
       } catch (e) {
-        console.warn(`[cursorPosition] rejected — tolerated as the untracked fail-safe contract (unreachable in suite runs): ${e}`);
+        // Only the invoke's own rejection is tolerated, as the untracked
+        // fail-safe contract (unreachable in suite runs — the suite always
+        // has mouse interaction before this case; the authoritative
+        // cold-start reject verification lives in the ability device UT).
+        console.warn(`[cursorPosition] rejected — tolerated as the untracked fail-safe contract: ${e}`);
+        return;
       }
+      // Resolve-branch asserts live OUTSIDE the try so they can actually fail
+      // the case: a NaN / out-of-domain reading silently passing would
+      // recreate the exact red-light blind spot this upgrade removes
+      // (audit round 1 major). monitor-null is covered by the dedicated
+      // currentMonitor case's assertions.
+      assert(Number.isFinite(pos.x), `pos.x should be a finite number, got ${pos.x}`);
+      assert(Number.isFinite(pos.y), `pos.y should be a finite number, got ${pos.y}`);
+      const monitor = await currentMonitor();
+      assert(
+        pos.x >= -40 && pos.x <= monitor.size.width + 40 && pos.y >= -40 && pos.y <= monitor.size.height + 40,
+        `pos (${pos.x},${pos.y}) should be within monitor physical size ${monitor.size.width}x${monitor.size.height} (+40px tolerance)`,
+      );
     },
   },
 
