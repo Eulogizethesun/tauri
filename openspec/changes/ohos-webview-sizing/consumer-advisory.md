@@ -1,9 +1,9 @@
 # 消费方交付面说明:zhkt60 教师端 Tab 内容层尺寸越界(ohos-webview-sizing)
 
 > 交付对象:消费方 zhkt60 教师端(HarmonyOS PC 2in1 真机,Eulogizethesun fork ohdev-git 分支)。
-> 机制表述以 change `ohos-webview-sizing` design Context「关键判读」为准;归属裁定(R1/R2)因
-> 消费方设备未接入而**未决**,本文档按双分支兜底交付(甲=适配层栈缺陷→升级路径;乙=app 侧
-> layout_content_rect 缺陷→app 侧修复建议)。设备接入后按 §5 配方复测,裁定结果决定 §3/§4 的适用侧重。
+> 机制表述以 change `ohos-webview-sizing` design Context「关键判读」为准;归属裁定(R1/R2)已于
+> **2026-10-20 在本机 2in1 上用客户真包(v6.0.0 hap 2026-10-19 / ohrs-ability@1.0.0-beta.1)复测完成:判定甲**(§7)。
+> §3 升级路径适用(含一处栈形态勘正);§4 乙分支被证伪为单独可行的修复。
 
 ## 1. 缺陷签名(消费方真机实测)
 
@@ -40,7 +40,7 @@ HEAD 新桥 ArkTS 渲染层(`WebviewPlugin.ets`)把「100% 兜底 + set_bounds �
   - create 显式 bounds → wrapper Stack 按请求 x/y/width/height 渲染(不再整窗兜底),命中区随几何收窄,页签带可点;
   - `set_bounds` 全量生效(x/y/width/height),连续调用最后一次为准;
   - 创建无尺寸 → 自然布局跟随容器,首次显式 set_bounds 翻转为显式尺寸(翻转后不再跟随窗口 resize,与桌面「set_bounds 打破 auto-dock」语义一致)。
-- **临时止血(不升级时)**:cherry-pick `d5308281`("restore explicit child webview bounds with naturalLayout guard")到其 fork——该提交在其 HAR webview 路径上恢复「创建显式尺寸生效」语义。
+- **临时止血(不升级时)**:cherry-pick `d5308281`("restore explicit child webview bounds with naturalLayout guard")到其 fork——该提交在其 HAR webview 路径上恢复「创建显式尺寸生效」语义。**勘正(2026-10-20 复测)**:beta.1 实测已是新桥 `WebviewPlugin.ets` 路径(§7 R2.2),`d5308281` 修的是旧 HAR 路径、对其不直接适用;新桥路径上的等价止血目标 = 本 change 四提交(openharmony-ability `5c4b5a9` + tauri `f62e5620b`/`dd4956b63` + wry `8e381e6`)。
 - 升级后其现形态(创建无尺寸 + 后续 set_bounds)**也可直接工作**(新语义 set_bounds 覆盖自然布局),无需改 app 代码。
 
 ## 4. 分支乙(app 侧 layout_content_rect 缺陷):app 侧修复建议
@@ -74,4 +74,27 @@ HEAD 新桥 ArkTS 渲染层(`WebviewPlugin.ets`)把「100% 兜底 + set_bounds �
 
 - 红灯先行:examples/api 套件新增 3 条 ArkTS 渲染真值用例(子 webview viewport 探针),HEAD 上实测红灯(case a/b 全红 + case c 翻转段红;实测值见同目录 `red-light-evidence.md`);
 - 修复后转绿 + desktop 基线全量回归(见同目录红灯/绿灯证据档);
-- 消费方复测(R1/R2):**待消费方设备接入**,双分支兜底未决(§5 配方备妥)。
+- 消费方复测(R1/R2):**已完成(2026-10-20,本机 2in1 + 客户真包),判定甲**,证据见 §7 与 `D:\xuqiu\tauri-3.0\r1-20261020\SYMPTOM-EVIDENCE-2026-10-20.md` §5。
+
+## 7. 归属复测结果(2026-10-20,已裁定:甲)
+
+复测环境:客户真包 `com.example.tauri_hello_ohos` v6.0.0(hap 2026-10-19,桥接 `@ylong-rs/ohrs-ability@1.0.0-beta.1`)运行于本机 2in1(3120×2080,主窗 912 = [515,281] 2090×1394,scale 1.9),用户真实鼠标点击,`hilog` 全程落盘(`hilog-app4.log`)。
+
+### R1 输入归属 —— 分支①命中:尺寸错误的 webview 是输入窃取者(原生输入层实证)
+
+- 页签带点击(CSS(138,24)/(177,24),物理 (777,327)/(851,327),即页签与页签关闭钮中心)全部送达 **web id 7 = 资源预览内容层**:`WebPattern::HandleMouseEvent, web id 7` ×3(15:56:05.755/06.356/06.881)+ chromium `InputRouterImpl MouseDown ack CONSUMED` + `ConsumePointerEventInner wid:912`;
+- 主壳(web id 1)在内容层创建(15:30:15.777 `ohos.webview/create`)之后**零鼠标事件**——id 1 最后事件 15:30:15.766 恰是触发创建预览的那次点击;
+- 期间「有反应」的最小化/最大化/关闭全部是**原生 container-modal chrome**:`AceAppBar container window double click → MaximizeFloating id:912`(15:56:15.408)/还原(15:56:16.926)、原生 `minimize button clicked → WindowSceneSessionImpl Minimize`(15:56:28.195)、close → `destroy-window`(15:56:40.317)→ 进程 exit 0。webview 内 DOM `.wc__group` 窗控组实际不可达(wrapper 命中区 + 原生 chrome 双重覆盖)——消费方症状①「窗口关闭按钮点不动」的 DOM 按钮部分与本指纹一致;
+- 课件内容区点击 → web id 7 自身 DOM → 翻页正常(窃取者就是内容层,点它自己的内容当然有反应)。
+- 执行偏差(不影响裁定):(a) ⑤ 关闭真实终止了 app,JS 探针随进程销毁,改用更底层的原生输入证据(AceWeb/chromium/InputKeyFlow)裁定;(b) 工具栏全屏窗 917/918 在场但已实证 click-through(SYMPTOM-EVIDENCE §3.2 判别实验),无输入污染;(c) 所点页签为当前活动页签(设计上无动作),但「点击被窃、未达主壳」的输入层证据先于该混淆成立;(d) 窗控钮测试教训:双击会命中原生标题栏双击语义(=最大化/还原),单击才测得到按钮本身。
+
+### R2 尺寸归属 —— 判甲
+
+1. **渲染真值(R2.1)**:CDP 读 Tab 内容层 viewport = **1101×734 CSS(= 2090×1394 物理)= 整窗**;NWeb 尺寸记录(15:30:15.808 创建):1×1 → 3120×2080 → **2090×1394**,全程无内容层高度(≈1302 物理)出现。§1 指纹在客户真包上复现。
+2. **栈考古(R2.2)**:提取 beta.1 HAR 的 webview 渲染层(`wv-beta1.ets`,2798 行):
+   - builder 中 Web 组件**无条件 `.width("100%").height("100%")`**——全文件仅有的 8 处 `.width/.height` 调用全部是 `"100%"` 字面量,注释自陈「only .position() below consumes style.{x,y}」;
+   - create 载荷 `style.width/height` 经 `normalizeStyle`(843-881)解析入 style 后**无任何消费者**;
+   - `setBounds()`(2364-2376)只写 `style.x/y`,注释「width/height are intentionally ignored」;bridge 侧 set-bounds 动作(2761-2767)校验四元数后仍丢弃宽高。
+   ⇒ beta.1 =「一律 100%」态(与 §2 所述 HEAD 修复前的新桥渲染层同构,连 `normalizeStyle` 透传后无人消费的行号结构都一致),**无 naturalLayout 概念**——app 无论创建时传不传 rect、set_bounds 传什么,都渲染整窗。按 §5 R2 判据(基线语义早于 `d5308281` 的「创建显式尺寸生效」):**直接判甲**;分支乙(app 侧补 rect)单独执行**无效**。
+3. **栈形态勘正**:§2 曾假设消费方「仍用已删除的 HAR webview 旧路径」——实测 beta.1 已是新桥 `WebviewPlugin.ets` 路径。§3 的 cherry-pick 止血项已相应勘正(见 §3)。
+4. 消费方当前形态实测 = 创建(15:30:15.777)后紧跟 set-bounds(15:30:15.829,四元数被丢宽高)——升级至含本 change 的 HAR 后**无需改 app 代码**即可工作(§3 末条)。
