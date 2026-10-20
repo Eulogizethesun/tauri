@@ -2221,6 +2221,10 @@ tauri::Builder::default()
   ///
   /// - **Windows**: If using decorations or shadows, you may want to try this workaround <https://github.com/tauri-apps/tao/issues/72#issuecomment-975607891>
   /// - **Linux**: Unsupported
+  /// - **OpenHarmony:** only `Effect::Blur` and `Effect::Acrylic` are applied;
+  ///   `Mica`/`Tabbed` variants are skipped with an info log, and macOS-specific
+  ///   effects fall back to a basic blur approximation. Requires the window to
+  ///   be `transparent` (see `crates/tauri/src/vibrancy/ohos.rs`).
   pub fn set_effects<E: Into<Option<WindowEffectsConfig>>>(&self, effects: E) -> crate::Result<()> {
     let effects = effects.into();
     let window = self.clone();
