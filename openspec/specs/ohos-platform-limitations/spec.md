@@ -3,7 +3,7 @@
 ## Purpose
 集中记录 Tauri 在 OHOS 平台上"需鸿蒙原生 API 但当前无 Tauri 插件对应、且短期内不实现"的功能降级判定。覆盖 R195（多进程）、R227（字体）、R228（应用接续）、R229（截图取色）、R230（无障碍）、R223/R224（全局托盘/菜单事件监听桌面特性）。本规范为降级报告，不定义新 API，仅声明契约边界。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: R195 多进程在 OHOS 降级为不支持
 OHOS 第三方应用 SHALL NOT 通过 Tauri API 派生任意子进程；OHOS 应用模型以 UIAbility / ExtensionAbility 为基本运行单元，每个 ability 实例可独立进程，但无通用 `spawn` 子进程能力。Tauri 的多进程 API（若存在）在 OHOS 上 SHALL 返回 `UnsupportedPlatform` 错误或通过 cfg 隔离不暴露。
@@ -73,16 +73,6 @@ OHOS 全局托盘与菜单栏仅在 `OHOS_DEVICE_TYPE=desktop` 时通过 `cfg(al
 - **THEN** 托盘/菜单行为 SHALL 由 `ohos-tray-*` / `ohos-menu-*` 规范定义
 - **AND** 本规范不重复定义
 
-## 平台限制汇总
-| 行 | 功能 | 判定 | 处置 |
-|----|------|------|------|
-| R195 | 多进程 | 平台限制降级 | 不支持，返回错误，引导 ExtensionAbility |
-| R223/224 | 全局托盘/菜单事件监听 | 桌面形态归 tray/menu 规范 | mobile 降级，desktop 归其他规范 |
-| R227 | 字体 | 平台限制降级 | 静态资源加载，无 Tauri API |
-| R228 | 应用接续 | 被动恢复 + 源端保存已提供 | 恢复查询/数据回传/源端快照保存归 continuation 插件规范；continuable 构建期门控（tauri-cli）；主动迁移系统 UI 独占不可用 |
-| R229 | 截图取色 | 最小 API 已提供 | 应用内 webview 截图/取色归 screenshot 插件规范；系统级 @ohos.screenshot 仅系统应用 |
-| R230 | 无障碍 | 最小 API 已提供 | 查询/事件归 accessibility 插件规范；服务提供方不可用，ARIA 归 ArkWeb |
-
 ### Requirement: ArkWeb 物理键盘 keydown 退化为 IME 插入管线（已由 key-synthesis 修复主窗口）
 ArkWeb 将物理键盘文本录入路由到 IME 插入管线：原生 DOM keydown/keyup 为无身份空壳事件（`key`/`code` 为空、`e.repeat` 恒 false、auto-repeat 以"每周期一对假 keydown/keyup"形式出现、`preventDefault` 无法阻止文字插入）。此为 ArkWeb 系统组件行为，应用层无 API 可直接纠正。主窗口（首实例 id=0）已由 `ohos-webview-key-synthesis`（openharmony-ability，onKeyPreIme 合成注入 + shim 抑制）修复；合成与 shim 注入均**仅限主窗口**——sub-UIAbility 实例窗口（id>0，加载同一 MainPage）与 Float 子窗口 SHALL NOT 注入 shim（无 key-synthesis 接线，注入会丢失全部按键事件），其 DOM key 事件维持原生退化行为，修复为后续增量。
 
@@ -97,12 +87,6 @@ ArkWeb 将物理键盘文本录入路由到 IME 插入管线：原生 DOM keydow
 - **THEN** DOM key 事件 SHALL 维持 ArkWeb 原生行为（空壳、无 repeat）
 - **AND** SHALL NOT 出现"事件被抑制但无合成替代"的丢失状态
 
-## 平台限制汇总（增补）
-| 行 | 功能 | 判定 | 处置 |
-|----|------|------|------|
-| R-arkweb-key | ArkWeb keydown 退化（IME 管线） | 系统组件行为，主窗口已合成修复 | 主窗口走 ohos-webview-key-synthesis；sub-UIAbility 实例与 Float 子窗口维持退化（后续增量） |
-| R-multiuiab-singleton | 多 UIAbility 下 cursor 全局单值 + 第二实例窗 raw_window_handle 缺失 | 已知限制，多实例事件路由不受影响 | cursor 维持 MainPage-relative 单值（per-window 追踪另行立项）；native_window 单句柄限主窗/Float，第二 UIAbility 窗 handle 暂缺（multi-uiability-windows NG2/NG7） |
-
 ### Requirement: 多 UIAbility 架构下 cursor 全局单值与第二窗口 raw_window_handle 为已知限制
 多 UIAbility 窗口支持（`multi-uiability-windows` change）落地后，两项单例残留因语义/优先级原因维持现状并标注为已知限制：① `CURSOR_POSITION_X/Y` 为进程级全局单值（app.rs），多窗口下不区分来源窗口——OHOS 鼠标位置语义为 MainPage-relative，per-window cursor 追踪另行立项；② `content_rect` 单 Rect / `native_window` 单句柄——第二 UIAbility 实例窗口（id>0）的 `raw_window_handle` 暂缺，依赖 raw window handle 的 API 在该类窗口上不可用。多实例事件路由（input/IME/axis/focus/destroy 按 windowId）不受影响。
 
@@ -115,3 +99,19 @@ ArkWeb 将物理键盘文本录入路由到 IME 插入管线：原生 DOM keydow
 - **WHEN** 第二 UIAbility 实例窗口（windowId>0）调用依赖 raw_window_handle 的 API
 - **THEN** 该窗口 SHALL 无 native_window 句柄可返回（已知限制，返回缺省/错误按各 API 既有降级路径）
 - **AND** 主窗口（windowId=0）与 Float 子窗口的 raw_window_handle SHALL 不受影响
+
+## 平台限制汇总
+| 行 | 功能 | 判定 | 处置 |
+|----|------|------|------|
+| R195 | 多进程 | 平台限制降级 | 不支持，返回错误，引导 ExtensionAbility |
+| R223/224 | 全局托盘/菜单事件监听 | 桌面形态归 tray/menu 规范 | mobile 降级，desktop 归其他规范 |
+| R227 | 字体 | 平台限制降级 | 静态资源加载，无 Tauri API |
+| R228 | 应用接续 | 被动恢复 + 源端保存已提供 | 恢复查询/数据回传/源端快照保存归 continuation 插件规范；continuable 构建期门控（tauri-cli）；主动迁移系统 UI 独占不可用 |
+| R229 | 截图取色 | 最小 API 已提供 | 应用内 webview 截图/取色归 screenshot 插件规范；系统级 @ohos.screenshot 仅系统应用 |
+| R230 | 无障碍 | 最小 API 已提供 | 查询/事件归 accessibility 插件规范；服务提供方不可用，ARIA 归 ArkWeb |
+
+## 平台限制汇总（增补）
+| 行 | 功能 | 判定 | 处置 |
+|----|------|------|------|
+| R-arkweb-key | ArkWeb keydown 退化（IME 管线） | 系统组件行为，主窗口已合成修复 | 主窗口走 ohos-webview-key-synthesis；sub-UIAbility 实例与 Float 子窗口维持退化（后续增量） |
+| R-multiuiab-singleton | 多 UIAbility 下 cursor 全局单值 + 第二实例窗 raw_window_handle 缺失 | 已知限制，多实例事件路由不受影响 | cursor 维持 MainPage-relative 单值（per-window 追踪另行立项）；native_window 单句柄限主窗/Float，第二 UIAbility 窗 handle 暂缺（multi-uiability-windows NG2/NG7） |
