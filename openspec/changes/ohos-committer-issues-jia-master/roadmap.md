@@ -32,8 +32,8 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 
 | Phase | 名称 | change | 状态 | 依赖 | 验证方式 | Wave |
 |-------|------|--------|------|------|---------|------|
-| p1 | 对账 + 第0波文档/披露批 | ohos-committer-issues-jia-p1 | ✓ 设计完成 | — | cargo check 四仓 + 对账表逐条证据核验 | W1 |
-| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | ○ 待设计 | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
+| p1 | 对账 + 第0波文档/披露批 | ohos-committer-issues-jia-p1 | ✓ 实现完成(待项目级验证) | — | cargo check 四仓 + 对账表逐条证据核验 | W1 |
+| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | ✓ 设计完成 | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
 | p3 | 第2波 M 级修复 | ohos-committer-issues-jia-p3 | ○ 待设计 | p2 | cargo test + 318 例回归 + 真机专项(#192 SPA / #198 vp 标定) | W3 |
 
 ### Phase 1: 对账 + 第0波文档/披露批
@@ -56,14 +56,14 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 - **目标**: S 级修复 ~13 条(视 p1 对账裁剪,已修条目剔除):
   - ability:#221(StageEventType From→TryFrom + unknown 日志忽略 + 单测)、#181(theme() per-module init 链尾主动灌入 getConfiguration,时序敏感必须真机)、#231(accelerator_matcher console 降级 hilog.debug 保 accel-inject-diag.sh 判读链 + WindowManager 成功日志删/失败保留 + **三副本同步**;不动 MenuBarComponent.ets——该文件归乙 #205,波次错开防同文件冲突)
   - tao:#184(bridge client 失败懒补取 + 成功覆盖,防 session 重建死句柄;p1 对账锚点纠偏——tao 无 OnceLock,实为 `window_client: Option<WindowClient>` 字段一次性捕获,修法/行号以 p1 ledger #184 行为准)、#173(WindowStateMirror 加 focused 位,初始 HAS_FOCUS 快照——p3 #180① 前置基建)、#178(setCursorGrab 异步失败 warn 结构化)
-  - wry:#190(format_set_cookie_value 补 Expires/Max-Age,cookie crate 现成读取器 + IMF-fixdate≠Rfc2822 注意)、#191(clearAllBrowsingData 加 clearAllCookiesSync @since 11)、#194(eval 失败 Err 分支以 "null" 回调)、#199(invoke url_cache 预填 initial_url)、#233(createPdf scale ArkTS cfg 构造补行,**两份源文件同步** + wry 错误注释更正)、#188(visible = wry 一行直传 create_req.style.visible,零闪帧)
-  - tauri:#225(set_enabled→Err,落点 dispatcher 层 runtime-wry lib.rs:2387 附近,套件无窗口 set_enabled 用例零翻红)
+  - wry:#190(format_set_cookie_value 补 Expires/Max-Age;p1 对账收窄——②实时化已被 #110 轨道闭合(cookies() 主线程同步桥 fetchCookieSync),残差=①Expires/Max-Age+③披露纠偏;IMF-fixdate≠Rfc2822 注意)、#191(clearAllBrowsingData 加 clearAllCookiesSync @since 11)、#194(eval 失败 Err 分支以 "null" 回调)、#199(invoke url_cache 预填 initial_url)、#233(createPdf scale ArkTS cfg 构造补行,**两份源文件同步** + wry 错误注释更正)、#188(visible = wry 一行直传 create_req.style.visible,零闪帧)
+  - tauri:#225(set_enabled→Err,落点 dispatcher 层 runtime-wry lib.rs:3889 附近(p1 对账锚重 derive,:2387→:3889),套件无窗口 set_enabled 用例零翻红)
   - #174(主窗 setFocusable 真机仲裁 id=0 可用性→去 gate 或 warn)
 - **预估文件**: ~25(每条改动面小,S 级单条 <0.5 人日;按 md 波次纪律单波一次回归,不按文件数再拆)
 - **Success Criteria**:
   1. 各条目按 md 核验动作落地,新用例随波并入 examples/api(新命令同步 build.rs AppManifest 四处)
   2. cargo test 四仓全绿(tao --lib,examples 不编)
-  3. 桌面 318 例回归不低于基线(311✅/7⏭,report: `examples/api/device-report-1020-desktop.md`;基数随新用例增长)
+  3. 桌面 318 例回归不低于基线(311✅/7⏭,report: `examples/api/device-report-1020-desktop.md`;基数随新用例增长);本波与 1020 基线两份 report 随波末 commit 收口(1015 先例,PM 裁定)
   4. #174、#181 真机仲裁/验证有结论(MateBook Pro)
 - **依赖**: p1(对账裁剪 + #169 latch 注释已落)
 - **关键风险**: #181 时序敏感(lifecycle 注册竞态,须真机深色冷启动验证);#231/#233 多副本同步漏拷(pack 单文件坑 + 两份 ArkTS 源);凡动 ArkTS 须清 oh_modules + CompileArkTS + 重打 HAR
@@ -72,7 +72,7 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 
 - **目标**: M 级修复 ~9 条(视对账裁剪):
   - #168 创建期参数残差:decoration/always_on_top 播种(S 半)→ 主窗创建后补发 fullscreen/maximized/focus(走既有 pending 队列)→ visible/icon/theme 披露;几何面已修(p1 对账:tao 15491f9d+823318fa / ability d7e8e3a0 / tauri 1a34b6b97)不重做——参数面 window_attrs.{fullscreen,maximized,focus,visible} 零消费已设计期实证
-  - #186 https 拦截字段三层扩展(method/headers/响应头;getRequestMethod@9/getRequestHeader@8/setResponseHeader@9 全 d.ts 实锤;body 平台无访问器→披露;保 CORS 4 例基线)
+  - #186 https 拦截字段三层扩展(method/headers/响应头;getRequestMethod@9/getRequestHeader@8 在本地 SDK20 副本;setResponseHeader 经 p1 对账(任务 1.3)在本地 SDK20 副本**缺席**——响应头半边须当次构建 SDK 复核可用性后再定修法;body 平台无访问器→披露;保 CORS 4 例基线)
   - #189 主 webview Drop no-op 修复:去 is_child 门控(ArkTS remove 幂等已就绪;bridge 15s 超时兜底;关窗链全量回归)
   - #192 url() 同步 get-url 桥(镜像 cookie 三态分流;url() 实际在主线程执行,同步桥是主路径必需件;须避开主线程 block_on 死锁族)
   - #195 open_devtools PendingOp 排队重放 + 进程级布尔(对齐 ArkWeb 语义)+ 注入/命令注册门控对齐
