@@ -50,7 +50,7 @@
 - [x] 5.5 #233 createPdf scale 透传 —— anchor: ability::plugins/webview/src/main/ets/plugins/webview/WebviewPlugin.ets:2536-2548(cfg 构造器补 `if (cfg.scale !== undefined) { pdfConfig.scale = cfg.scale; }`,接口 :627 已就绪)+ package 副本 *(双副本 diff 对称审计:仅 :28 import 行差异,其余逐字节同)*
 - [x] 5.6 accel-inject-diag.sh 判读链更新(工作区文件,不 commit)—— anchor: `D:\xuqiu\tauri-3.0\accel-inject-diag.sh`:17/:37(grep 区) *(捕获前 `hilog -b D` 使能 debug、收尾 `hilog -b I` 恢复;BridgeHost [DBG-*] 不动)*
 - [x] 5.7 HAR 全链重打 + 部署 —— 清 oh_modules + CompileArkTS + 重打 HAR(ability.har 缓存坑);hap 构建日志零 `module setup THREW`;以 #181 注入行 hilog 证据作为「新 HAR 已生效」探针(design R4)
-- [x] 5.8 commit ability-② —— 点名 8 文件(NativeAbility.ets ×2、accelerator_matcher.ets ×2、WindowManager.ets ×2、WebviewPlugin.ets ×2)提交 `fix(arkts): theme init injection + accelerator log hygiene + cookie clear + pdf scale (committer #181 #231 #191 #233)`
+- [x] 5.8 commit ability-② —— 点名 8 文件(NativeAbility.ets ×2、accelerator_matcher.ets ×2、WindowManager.ets ×2、WebviewPlugin.ets ×2)提交 `fix(arkts): theme init injection + accelerator log hygiene + cookie clear + pdf scale (committer #181 #231 #191 #233)` **(实现期事实修正:package/ 为 gitignore 的生成态 staging(commit 371d3d01,#87 minor-8,pack.bat xcopy 自 native_ability 再生)——实际入 commit=4 个 canonical 源文件,4 个 package 镜像仅工作区刷新+字节校验;commit 6e59c4b)**
 
 ## 6. 套件用例 + 设备回归 + 真机结论(tauri commit ② 素材)
 
