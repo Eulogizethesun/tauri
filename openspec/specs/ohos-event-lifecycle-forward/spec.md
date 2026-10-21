@@ -8,7 +8,7 @@
 - `SaveState`（`onAbilitySaveState`）因 tao `Event`/`StartCause` 枚举无对应语义，
   SHALL 显式降级为 `debug!` 日志（不再 `warn!`），并文档化平台限制。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: MainEvent::Start 转发为 Event::Resumed
 
