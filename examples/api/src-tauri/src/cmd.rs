@@ -2402,6 +2402,10 @@ pub fn get_ime_position_result() -> Result<String, String> {
 /// Create a test webview window with specific OHOS adapter flags.
 /// Used by manual test buttons in TestRunner to verify clipboard/zoom/https flags
 /// without needing to modify app config and rebuild.
+// OHOS-only: calls WebviewWindowBuilder::disable_clipboard_access, which exists
+// only under cfg(target_env = "ohos") — without this gate the host
+// `cargo test --all-targets` workspace build fails with E0599.
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn create_ohos_test_webview<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,

@@ -892,6 +892,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_persisted_scope,
       cmd::clear_persisted_scope,
       cmd::clear_window_state,
+      #[cfg(target_env = "ohos")]
       cmd::create_ohos_test_webview,
       cmd::create_isolated_window,
       cmd::dummy_command,
@@ -953,7 +954,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::set_download_test_mode,
       #[cfg(target_env = "ohos")]
       cmd::set_exit_confirmation,
-      #[cfg(desktop)]
+      #[cfg(all(desktop, not(test)))]
       tray::simulate_tray_click,
       #[cfg(debug_assertions)]
       cmd::sentry_test_panic,
