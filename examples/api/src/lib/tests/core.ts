@@ -1494,6 +1494,37 @@ export const coreTests: TestCase[] = [
     },
   },
 
+  // #191: clearAllBrowsingData must also wipe the cookie store — the plugin's
+  // pre-existing wipes (WebStorage.deleteAllData / HttpAuthCredentials /
+  // removeCache / clearHistory) never touched WebCookieManager, so a
+  // document.cookie survived a "clear all browsing data". The cookie wipe
+  // lives in the plugin (WebviewPlugin.ets clearAllBrowsingData →
+  // WebCookieManager.clearAllCookiesSync(false), guarded); this case pins the
+  // behavior end-to-end from JS. Degradation: if the cookie lifecycle is not
+  // observable on this build (set/read quirks), SKIP with disclosure instead
+  // of failing — the wipe itself is not directly asserted from JS otherwise
+  // (design R6: no new commands, no ❌ for an environment gap).
+  {
+    name: 'webview.clearAllBrowsingData clears document.cookie',
+    category: 'auto',
+    async fn() {
+      const marker = `c191_${Date.now()}`;
+      document.cookie = `${marker}=to-be-wiped; path=/`;
+      const before = document.cookie;
+      if (!before.includes(`${marker}=`)) {
+        skip(
+          `document.cookie set/read not observable on this build (before="${before}") — cookie wipe unverifiable from JS`
+        );
+      }
+      await getCurrentWebview().clearAllBrowsingData();
+      const after = document.cookie;
+      assert(
+        !after.includes(marker),
+        `document.cookie must be cleared by clearAllBrowsingData (before="${before}" after="${after}") — cookie store wipe missing (#191 regression?)`
+      );
+    },
+  },
+
   // ─── Download Intercept Tests (OHOS) ───
   {
     name: 'on_download: Requested event fires',
