@@ -620,6 +620,13 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   }
 
   /// Sets the window icon.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  ///   not consume a window icon during window creation (committer #168);
+  ///   there is no runtime `set_window_icon` on OHOS either, so the icon has
+  ///   no effect for the lifetime of the window.
   pub fn icon(mut self, icon: Image<'a>) -> crate::Result<Self> {
     self.window_builder = self.window_builder.icon(icon.into())?;
     Ok(self)
@@ -932,6 +939,14 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   }
 
   /// Whether the window should be immediately visible upon creation.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  ///   not consume a `visible: false` attribute during window creation
+  ///   (committer #168); windows are created visible. Toggle visibility with
+  ///   [`Window::set_visible`](crate::window::Window::set_visible) after
+  ///   creation instead.
   #[must_use]
   pub fn visible(mut self, visible: bool) -> Self {
     self.window_builder = self.window_builder.visible(visible);
@@ -943,6 +958,10 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **macOS**: Only supported on macOS 10.14+.
+  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  ///   not consume a preferred theme during window creation (committer #168);
+  ///   the window follows the system theme. `Window::set_theme` runtime
+  ///   requests are unaffected.
   #[must_use]
   pub fn theme(mut self, theme: Option<Theme>) -> Self {
     self.window_builder = self.window_builder.theme(theme);
