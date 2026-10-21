@@ -2401,6 +2401,15 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_enabled(&self, enabled: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // #225: OHOS has no window enabled/disabled API (tao returns Err from
+      // the main-thread arm, which the message handler discards) — fail at
+      // the dispatcher so the caller sees it.
+      let _ = enabled;
+      return Err(ohos_unsupported("setEnabled"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetEnabled(enabled)),
@@ -3987,7 +3996,11 @@ fn handle_user_message<T: UserEvent>(
             let _ = window.set_skip_taskbar(skip);
           }
           WindowMessage::SetCursorGrab(grab) => {
-            let _ = window.set_cursor_grab(grab);
+            // #178: the failure used to be silently discarded (`let _ =`);
+            // log-only change, the discarded Result semantics are unchanged.
+            if let Err(e) = window.set_cursor_grab(grab) {
+              log::warn!("failed to set cursor grab: {e}");
+            }
           }
           WindowMessage::SetCursorVisible(visible) => {
             window.set_cursor_visible(visible);

@@ -26,6 +26,8 @@ pub trait WindowExt {
   /// ## Platform-specific:
   ///
   /// - **Android / iOS**: Unsupported.
+  /// - **OpenHarmony**: Unsupported, returns an error (#225 — the dispatcher
+  ///   fails early instead of silently discarding the message).
   fn set_enabled(&self, enabled: bool);
 
   /// Whether the window is enabled or disabled.
@@ -33,6 +35,8 @@ pub trait WindowExt {
   /// ## Platform-specific:
   ///
   /// - **Android / iOS**: Unsupported, always returns `true`.
+  /// - **OpenHarmony**: Unsupported, always returns `true` (no system
+  ///   enabled/disabled state to query).
   fn is_enabled(&self) -> bool;
 
   /// Center the window
