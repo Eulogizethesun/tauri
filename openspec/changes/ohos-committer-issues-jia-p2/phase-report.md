@@ -108,3 +108,26 @@
 ## 8. openspec validate
 
 `openspec validate ohos-committer-issues-jia-p2 --strict` → **valid**（7.6）。
+
+## 9. PM 收尾注记（2026-10-21,W2 关口；developer 第 5 次中断后按 ④ 规则由 PM 从真相源重建收口）
+
+### 9.1 "回归链 exit 1" 定案：bot-gate pr profile + 磁盘满污染
+
+developer 收尾自检跑了 bot-gate（profile=pr，11:35 与 11:46 两轮）报 exit 1，其在定位中反复中断。PM 磁上取证定案：
+
+- **根因一：D 盘 0 字节可用**（600G 满）。tauri/target ~210G（debug 113G / aarch64-ohos 74G / release 12G / x86_64-ohos 7.6G）+ plugins-workspace/target 74G + 兄弟仓 target ~28G 慢性逼近满，gate 三步（clippy/test/metric 各一套 flag 的全 workspace 编译）压垮。11:46 轮 tauri-utils "could not compile due to 1 previous error"（零编码诊断）与 metric "analysis: partial" 均为 os error 112 的伪装。处置：删 `target/debug/incremental`（42G 纯缓存，可再生），不动 aarch64-ohos 交叉产物（设备部署依赖，重建 45min+）。
+- **根因二：两处 examples/api 存量 host `cargo test --all-targets` 编译断**（gate `cargo test --all-targets` 必炸，与 wave 改动面无关）：
+  - E0599 `create_ohos_test_webview` 调 ohos-only `disable_clipboard_access` 无 cfg 门 —— developer 11:41 已修（fn+注册双门，对齐同列表 test_create_pdf 惯用法），未及提交。
+  - E0433 `tray::simulate_tray_click` 注册（lib.rs:957）只门 `#[cfg(desktop)]`,而 tray.rs:5 内部属性 `#![cfg(all(desktop, not(test)))]` 在 test 构建把整个模块 cfg 掉——任何 cfg(test) 编译 api lib 必炸。11:35 轮 E0599 先炸致 build 取消未暴露，非 developer 编辑引入。PM 对齐为 `#[cfg(all(desktop, not(test)))]`（同 :330 setup 块惯用法）。
+  - 两修复合并 commit `d35ad55ba`;复验 `cargo test --all-targets -p api --no-run` Finished、api lib UT **1/0**、tauri-runtime-wry `--lib` UT **15/0**（4.4 数字此前未录，补齐）。
+- **残余 gate 红项（存量，非 wave 面，不修）**：tauri-utils `clippy::derivable_impls` @ config.rs:3292（上游代码在 gate `-D clippy::style/complexity/perf` flag 下的既有 lint）；metric BM002/BM004 unsafe-review 政策门（144+ 诊断遍布上游 crates/tauri）。后续 phase 跑 gate 前须先清磁盘余量。
+
+### 9.2 SC2 终态（四仓）
+
+ability host `--lib` **84/0** · wry host `--lib` **20/0** · tao 设备 UT **90/0**（aarch64-ohos 真机，tao-① 正文）· tauri-runtime-wry host `--lib` **15/0** —— 四仓全绿。
+
+### 9.3 concerns 留痕
+
+- developer 中断 ×5（watchdog ×3 / 网络 ×1 / Unknown ×1），返回值按 ④ 规则由 PM 从真相源（git log / tasks.md 44/44 / report 文件 / .botgate 日志）重建，零产物损失。
+- 磁盘事件对用户披露：见 9.1;进一步清理（plugins-workspace 74G、release 12G、x86_64 模拟器 target 7.6G 均可再生）留用户裁定。
+- E0433/E0599 两修复属 wave SC 外的 gate 基建修复，已入 d35ad55ba 正文披露。
