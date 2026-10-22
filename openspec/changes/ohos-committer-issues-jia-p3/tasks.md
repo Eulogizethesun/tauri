@@ -58,6 +58,6 @@
 
 ## 7. 波末回归 + phase report
 
-- [ ] 7.1 319 例桌面全量回归 —— run-tests.sh;footer `*Report generated at end of test run.*` 判跑完(跑前禁 hilog -r);**SC2 硬门槛:零新增 ❌(基线 311✅/8⏭/0❌,report examples/api/device-report-1021-desktop.md)**;CORS 4 例(#186 定向面)+ 关窗面(#189)+ 窗口命令面(#219)重点复核;任一新增 ❌ 即停下定性,禁止带病收口
-- [ ] 7.2 真机专项(SC3,roadmap) —— #192 SPA 路由 url() 真值、#198 vp≠1 设备 bounds 换算(如无 vp≠1 设备则记录桌面恒等结论)、#188 incognito 创建+cookie 隔离、#189 关窗链无残留窗日志
-- [ ] 7.3 phase-report.md —— 四仓 UT 数字、SDK setResponseHeader 当次构建复核结论(§5.1 门)、tao #219 消费核验结论(§1.6)、HEAD re-derive 三修正回执、319 回归 report 路径、concerns
+- [x] 7.1 319 例桌面全量回归 —— run-tests.sh;footer `*Report generated at end of test run.*` 判跑完(跑前禁 hilog -r);**SC2 硬门槛:零新增 ❌(基线 311✅/8⏭/0❌,report examples/api/device-report-1021-desktop.md)**;CORS 4 例(#186 定向面)+ 关窗面(#189)+ 窗口命令面(#219)重点复核;任一新增 ❌ 即停下定性,禁止带病收口
+- [x] 7.2 真机专项(SC3,roadmap) —— #192 SPA 路由 url() 真值、#198 vp≠1 设备 bounds 换算(如无 vp≠1 设备则记录桌面恒等结论)、#188 incognito 创建+cookie 隔离、#189 关窗链无残留窗日志
+- [x] 7.3 phase-report.md —— 四仓 UT 数字、SDK setResponseHeader 当次构建复核结论(§5.1 门)、tao #219 消费核验结论(§1.6)、HEAD re-derive 三修正回执、319 回归 report 路径、concerns
