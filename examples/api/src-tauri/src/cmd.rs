@@ -508,6 +508,10 @@ pub fn create_isolated_window<R: tauri::Runtime>(
   window_id: String,
   data_suffix: String,
   url: String,
+  // fix-variant M1: optional useHttpsScheme opt-in — the https://<scheme>.localhost
+  // intercept URL space only exists inside a use_https webview. Option so the
+  // pre-existing callers (which omit it) keep deserializing.
+  use_https: Option<bool>,
 ) -> tauri::Result<String> {
   // Append a unique sequence number to ensure window name is always unique
   let seq = WINDOW_SEQ.fetch_add(1, Ordering::SeqCst);
@@ -553,7 +557,8 @@ pub fn create_isolated_window<R: tauri::Runtime>(
   let mut builder = tauri::WebviewWindowBuilder::new(&app, &unique_window_id, webview_url)
     .title(format!("Isolated Window: {}", data_suffix))
     .data_directory(data_dir)
-    .inner_size(800.0, 600.0);
+    .inner_size(800.0, 600.0)
+    .use_https_scheme(use_https.unwrap_or(false));
   #[cfg(target_env = "ohos")]
   {
     builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);

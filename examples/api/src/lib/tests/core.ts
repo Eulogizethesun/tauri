@@ -2556,22 +2556,62 @@ export const coreTests: TestCase[] = [
 
   // ── fix-variant M1 (#186): the intercept response-header write path. The
   // Rust protocol handler sets ACAO + Expose-Headers + an echo header; before
-  // the write path those were dropped at the wry→ArkTS seam. The cross-origin
-  // fetch (page origin → https://myapp.localhost) only passes CORS when the
-  // ACAO header actually reached the WebResourceResponse, and the echo header
-  // is the JS-visible receipt of the full wry→wire→setResponseHeader chain.
+  // the write path those were dropped at the wry→ArkTS seam. The vehicle is a
+  // useHttpsScheme sub-window: the main window runs use_https=false, so the
+  // https://<scheme>.localhost URL space — and with it the ArkTS
+  // setResponseHeader chain — only exists inside a useHttpsScheme webview
+  // (device-proven: the same fetch from the main page is a real-DNS failure).
+  // The probe page (p3-m1-probe.js) fetches https://myapp.localhost
+  // cross-origin, reads the echo header from response.headers, and reports via
+  // document.title → the EXISTING document-title-changed emit (no IPC from the
+  // probe page needed).
   {
     name: 'https-intercept response headers reach the page (#186 M1)',
     category: 'auto',
-    timeout: 15000,
+    timeout: 25000,
     async fn() {
-      const resp = await fetch('https://myapp.localhost/p3-m1-header-probe');
-      assert(resp.ok, `expected ok scheme response, got status ${resp.status}`);
-      const echo = resp.headers.get('x-tauri-scheme-echo');
-      assert(
-        echo === 'p3-m1-response-header',
-        `Rust handler response header must reach the page, got x-tauri-scheme-echo=${echo}`
-      );
+      const label = await invoke<string>('create_isolated_window', {
+        windowId: 'p3-m1-probe',
+        dataSuffix: 'm1probe',
+        url: '/p3-m1-probe.html',
+        useHttps: true,
+      });
+      let unlisten: (() => void) | null = null;
+      try {
+        const title = await new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'M1 probe: no document-title-changed with M1- prefix within 18s ' +
+                  '(probe page load, https-intercept chain, or CSP blocked the fetch)'
+                )
+              ),
+            18000
+          );
+          listen<string>('document-title-changed', (event) => {
+            const t = String(event.payload ?? '');
+            if (t.startsWith('M1-')) {
+              clearTimeout(timer);
+              resolve(t);
+            }
+          }).then((u) => {
+            unlisten = u;
+          });
+        });
+        assert(
+          title.startsWith('M1-OK:'),
+          `M1 probe reported failure: ${title}`
+        );
+        assert(
+          title.includes('echo=p3-m1-response-header'),
+          `Rust handler response header must reach the page, probe title: ${title}`
+        );
+      } finally {
+        if (unlisten) unlisten();
+        const win = await WebviewWindow.getByLabel(label);
+        if (win) await win.destroy();
+      }
     },
   },
 ];
