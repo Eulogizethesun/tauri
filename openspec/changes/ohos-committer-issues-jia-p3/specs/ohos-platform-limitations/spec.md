@@ -26,6 +26,7 @@ https 拦截链的平台保真缺口 SHALL 以 SDK 事实为门并落披露,含�
 - **WHEN** 自定义协议 handler 在 `http::Response` 上设置响应头(如 `Access-Control-Allow-Origin`、`X-Tauri-Scheme-Echo`)
 - **THEN** wry SHALL 提取头并经 wire 并行数组送达 ArkTS,`setResponseHeader` 应用到 `WebResourceResponse`
 - **AND** 跨源 fetch 依 ACAO 通过,handler 设置的头在 JS `response.headers` 可读
+- **AND** fetch() 形态的消费者 SHALL 在应用 CSP `connect-src` 允许 https 重写主机 `https://<scheme>.localhost`（OHOS use_https 将 `<scheme>://localhost` 重写为该主机形态；裸 `<scheme>:` 条目只覆盖 iframe/导航流。设备实证：connect-src 缺该条目时 fetch 在 8ms 内被 CSP 拒绝 "Refused to connect"，拦截器不可达）
 - **AND** 既有 CORS 4 例行为零回归
 
 #### Scenario: Headerless response keeps the old wire shape
