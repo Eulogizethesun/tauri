@@ -2092,6 +2092,170 @@ pub fn cookie_test_main_thread_read<R: tauri::Runtime>(
   }))
 }
 
+/// #192: main-thread url() truth through the `ohos.webview-url` sync bridge.
+///
+/// Sync (non-`async fn`) commands execute on the OHOS main thread, so
+/// `Webview::url()` here exercises wry's `url_with_main_thread_refresh` →
+/// `webview_url_on_main_thread` (ArkTS `WebviewUrlPlugin` action `get-url`)
+/// — the synchronous ArkTS `WebviewController.getUrl()` read that used to be
+/// unreachable from the main thread without deadlocking. Returns the live
+/// URL string; a missing webview or a bridge failure rejects (Err), which is
+/// exactly the behavior the suite asserts on.
+#[command]
+pub fn get_webview_url<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<String, String> {
+  let webview = app
+    .get_webview(&label)
+    .ok_or_else(|| format!("webview '{label}' not found"))?;
+  let url = webview.url().map_err(|e| e.to_string())?;
+  Ok(url.to_string())
+}
+
+/// #192 helper: SPA hash-route navigation inside a dedicated webview — no
+/// reload, the pushState-style routing the sync url() read must observe
+/// (a full-reload navigation would also refresh any stale cache; the
+/// in-page route change is what distinguishes a live controller read).
+/// Scoped eval with a sanitized fragment, not arbitrary script.
+#[command]
+pub fn navigate_webview_hash<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+  hash: String,
+) -> Result<(), String> {
+  let webview = app
+    .get_webview(&label)
+    .ok_or_else(|| format!("webview '{label}' not found"))?;
+  let safe: String = hash
+    .chars()
+    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+    .collect();
+  webview
+    .eval(&format!("location.hash = '#{safe}';"))
+    .map_err(|e| e.to_string())
+}
+
+/// #188: creates a dedicated incognito WebviewWindow for the cookie-isolation
+/// probe. `WebviewWindowBuilder::incognito(true)` rides the create request as
+/// `WebviewStyle.incognito` → ArkTS `WebOptions.incognitoMode(true)` — the
+/// incognito cookie store that keeps writes out of persistent storage.
+#[command]
+pub fn create_incognito_webview<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  window_id: String,
+) -> Result<(), String> {
+  log::info!("[Rust] create_incognito_webview called. window_id={}", window_id);
+  tauri::WebviewWindowBuilder::new(
+    &app,
+    &window_id,
+    tauri::WebviewUrl::App("index.html".into()),
+  )
+  .incognito(true)
+  .inner_size(480.0, 360.0)
+  .build()
+  .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+/// #188: writes the per-store probe cookies — a marker THROUGH the incognito
+/// webview (its `WebviewStyle.incognito` routes the ArkTS `configCookieSync`
+/// call to the incognito store) and a control through the main window's
+/// default store. Split from the read half because `set_cookie` is
+/// fire-and-forget on OHOS: the JS case waits in between (issue #110
+/// precedent), and a sync command must not sleep on the main thread.
+#[command]
+pub fn incognito_cookie_set<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<(), String> {
+  use tauri::webview::Cookie;
+
+  let incognito_win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("incognito window '{label}' not found"))?;
+  let main = app
+    .get_webview_window("main")
+    .ok_or_else(|| "main window not found".to_string())?;
+
+  incognito_win
+    .set_cookie(
+      Cookie::build(("tauri_incognito_marker", "secret_value"))
+        .domain("example.com")
+        .path("/")
+        .build(),
+    )
+    .map_err(|e| format!("incognito set_cookie failed: {e}"))?;
+  main
+    .set_cookie(
+      Cookie::build(("tauri_incognito_control", "main_value"))
+        .domain("example.com")
+        .path("/")
+        .build(),
+    )
+    .map_err(|e| format!("main set_cookie failed: {e}"))?;
+  Ok(())
+}
+
+/// #188: read-only cross-probe of the two cookie stores. The incognito store
+/// must see only the marker, the default store only the control — any
+/// bleed-through (or a shared store) fails the JS-side assertions via the
+/// returned report.
+#[command]
+pub fn incognito_cookie_isolation<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<serde_json::Value, String> {
+  let incognito_win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("incognito window '{label}' not found"))?;
+  let main = app
+    .get_webview_window("main")
+    .ok_or_else(|| "main window not found".to_string())?;
+
+  let probe_url = url::Url::parse("https://example.com/").map_err(|e| e.to_string())?;
+  let incognito_cookies = incognito_win
+    .cookies_for_url(probe_url.clone())
+    .map_err(|e| format!("incognito cookies_for_url failed: {e}"))?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+  let main_cookies = main
+    .cookies_for_url(probe_url)
+    .map_err(|e| format!("main cookies_for_url failed: {e}"))?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+
+  Ok(serde_json::json!({
+    "incognito_cookies": incognito_cookies,
+    "main_cookies": main_cookies,
+    "marker_in_incognito": incognito_cookies.iter().any(|c| c.starts_with("tauri_incognito_marker=")),
+    "marker_in_main": main_cookies.iter().any(|c| c.starts_with("tauri_incognito_marker=")),
+    "control_in_main": main_cookies.iter().any(|c| c.starts_with("tauri_incognito_control=")),
+    "control_in_incognito": incognito_cookies.iter().any(|c| c.starts_with("tauri_incognito_control=")),
+  }))
+}
+
+/// #219: set_title ack-chain probe. Resolves the window by label and calls
+/// `set_title` — on OHOS this dispatches the `ohos.window` set-title command
+/// whose ArkTS arm now awaits `WindowManager.setWindowTitle` (#219 tracked
+/// ack), so an unknown/destroyed window REJECTS here instead of returning a
+/// fake success ack. A bogus label is resolved at the tao layer (not found);
+/// a freshly destroyed window surfaces as either that or the ArkTS-side
+/// tracked failure — both reject, which is the asserted contract.
+#[command]
+pub fn set_title_on<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+  title: String,
+) -> Result<(), String> {
+  let win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("window '{label}' not found"))?;
+  win.set_title(&title).map_err(|e| e.to_string())
+}
+
 /// Manual test: set a cookie for httpbin.org on the main webview cookie store
 /// and open a child window to https://httpbin.org/cookies so the user can
 /// visually verify the cookie is sent to the server and persists on reload.

@@ -2399,4 +2399,126 @@ export const coreTests: TestCase[] = [
       );
     },
   },
+
+  // ── committer #192: main-thread url() truth through the ohos.webview-url
+  // sync bridge. A SPA hash-route navigation inside a DEDICATED webview (no
+  // reload), then url() must return the live post-navigation URL — proving
+  // the sync bridge reads the controller's live state, not a create-time
+  // cache. Desktop: same case exercises the platform url() path.
+  {
+    name: 'webview.url() main-thread sync read after SPA navigation (#192)',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      const label = await invoke<string>('create_isolated_window', {
+        windowId: 'urlsync',
+        dataSuffix: 'urlsync',
+        url: '/hello.html'
+      });
+      // Let the dedicated webview attach (ArkTS create + controller attach).
+      await new Promise((r) => setTimeout(r, 1500));
+      const w = await WebviewWindow.getByLabel(label);
+      assert(w, `isolated window "${label}" not found after create`);
+      // SPA navigation: hash-route change without reload (scoped Rust-side
+      // eval — the local @tauri-apps/api build exposes no JS eval API).
+      await invoke('navigate_webview_hash', { label, hash: 'spa-route-192' });
+      await new Promise((r) => setTimeout(r, 1500));
+      const url = await invoke<string>('get_webview_url', { label });
+      assert(
+        typeof url === 'string' && url.length > 0,
+        `url() should return a non-empty string, got "${url}"`
+      );
+      assert(
+        url.includes('spa-route-192'),
+        `url() should reflect the SPA route after navigation, got "${url}"`
+      );
+      // Intentionally NOT closing — same convention as the page-load case
+      // above (OHOS autotest close leaves ghost windows); suite cleanup
+      // removes it via close_all_test_windows.
+    },
+  },
+
+  // ── committer #188: incognito webview + per-store cookie isolation.
+  // The marker cookie is written THROUGH the incognito webview, the control
+  // through the main window's default store; the cross-probe must show no
+  // bleed-through. Strict isolation asserted on OHOS (WebOptions.incognitoMode
+  // + per-store WebCookieManager calls); on desktop the case still runs the
+  // create + write + report path but does not assert store separation
+  // (WebView2 incognito profile semantics are outside this change's scope).
+  {
+    name: 'webview.incognito create + cookie isolation (#188)',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      const isOhos = (await ohosSdkApiVersion()) !== null;
+      const label = `incognito-probe-${Date.now().toString(36)}`;
+      await invoke('create_incognito_webview', { windowId: label });
+      await new Promise((r) => setTimeout(r, 1500));
+      await invoke('incognito_cookie_set', { label });
+      // set_cookie is fire-and-forget on OHOS — let the write settle.
+      await new Promise((r) => setTimeout(r, 1200));
+      const report = await invoke<any>('incognito_cookie_isolation', { label });
+      if (!isOhos) {
+        // Desktop smoke: the incognito webview exists and both writes landed
+        // somewhere — store separation itself is not asserted here.
+        assert(
+          Array.isArray(report.incognito_cookies) && Array.isArray(report.main_cookies),
+          `cookie probe should return arrays, got ${JSON.stringify(report)}`
+        );
+        return;
+      }
+      assert(
+        report.marker_in_incognito === true,
+        `marker cookie not found in the incognito store: ${JSON.stringify(report.incognito_cookies)}`
+      );
+      assert(
+        report.marker_in_main === false,
+        `marker cookie bled into the default store: ${JSON.stringify(report.main_cookies)}`
+      );
+      assert(
+        report.control_in_main === true,
+        `control cookie not found in the default store: ${JSON.stringify(report.main_cookies)}`
+      );
+      assert(
+        report.control_in_incognito === false,
+        `control cookie bled into the incognito store: ${JSON.stringify(report.incognito_cookies)}`
+      );
+    },
+  },
+
+  // ── committer #219: tracked set-title ack chain. A title set on a REAL
+  // window must resolve (ack reflects actual completion); the same command
+  // aimed at an illegal window must REJECT — never a fake success ack.
+  // (The OHOS autotest destroy path leaves ghost windows, so the destroyed
+  // leg is represented by a never-existing label; the reject contract is
+  // identical — no fabricated acknowledgement.)
+  {
+    name: 'window.set_title tracked ack: real window resolves, illegal label rejects (#219)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      // create_borderless_window is a desktop-form command (tao sub-window
+      // spawn gate) — the whole probe rides it, so skip on mobile form.
+      await skipOnMobile('create_borderless_window is desktop-form only');
+      const label = `t219-${Date.now().toString(36)}`;
+      await invoke('create_borderless_window', { windowId: label });
+      await new Promise((r) => setTimeout(r, 800));
+      // Real window: the OHOS arm awaits WindowManager.setWindowTitle — a
+      // resolve here IS the completed op, not a fire-and-forget ack.
+      await invoke('set_title_on', { label, title: 'ack-chain-ok' });
+      // Illegal window: must reject.
+      let rejected = false;
+      try {
+        await invoke('set_title_on', { label: `${label}-bogus`, title: 'nope' });
+      } catch (e) {
+        rejected = true;
+        const msg = String((e as Error)?.message ?? e);
+        assert(
+          msg.includes('not found'),
+          `bogus-label set_title should reject with not-found, got: ${msg}`
+        );
+      }
+      assert(rejected, 'bogus-label set_title must reject, not fake-ack');
+    },
+  },
 ];

@@ -2,7 +2,7 @@
 
 > ✅ **验证状态：完全通过（2026-08-06，API 23 desktop）。** 根因是 `tauri-runtime-wry` OHOS 分支漏传 `with_https_scheme`（Windows/Android 传了，OHOS 没）→ `pl_attrs.use_https` 始终 false → URL 不改写。已修复。真机验证三项全通过：`isSecureContext=true` + `location.href=https://tauri.localhost/` + `crypto.subtle OK (SHA-256 32 bytes)`。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: wry OHOS SHALL honor `with_https_scheme(true)` by rewriting the initial URL and registering https interception
 

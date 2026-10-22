@@ -881,6 +881,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::cookie_manual_test,
       cmd::cookie_test_main_thread_set,
       cmd::cookie_test_main_thread_read,
+      cmd::get_webview_url,
+      cmd::navigate_webview_hash,
+      cmd::create_incognito_webview,
+      cmd::incognito_cookie_set,
+      cmd::incognito_cookie_isolation,
+      cmd::set_title_on,
       #[cfg(any(debug_assertions, feature = "devtools"))]
       cmd::devtools_test,
       #[cfg(any(debug_assertions, feature = "devtools"))]

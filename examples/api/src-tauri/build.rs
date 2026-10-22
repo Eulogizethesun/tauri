@@ -111,6 +111,14 @@ fn main() {
         // simply don't exist and the capability entries are inert.
         "fault_injection_set_rule",
         "fault_injection_clear",
+        // #192/#188/#219 committer-issue cases: main-thread url() sync read,
+        // incognito create + per-store cookie probe, tracked set-title ack.
+        "get_webview_url",
+        "navigate_webview_hash",
+        "create_incognito_webview",
+        "incognito_cookie_set",
+        "incognito_cookie_isolation",
+        "set_title_on",
       ])),
   )
   .expect("failed to run tauri-build");

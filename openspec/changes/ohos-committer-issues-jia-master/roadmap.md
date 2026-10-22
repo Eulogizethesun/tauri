@@ -10,7 +10,7 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 
 - **p1**:38 条全量对账表(逐条 已修/残差/未动 判定 + file:line + commit 证据)+ 甲第 0 波注释/文档/warn 披露批落地(~13 条目,零行为变更)
 - **p2**:第 1 波 S 级代码修复(~13 条,视 p1 对账裁剪),波末桌面 318 例回归
-- **p3**:第 2 波 M 级修复(~8 条,#179 已于 p1 对账剔除),波末 318 例回归 + 真机专项
+- **p3**:第 2 波 M 级修复(~8 条,#179 已于 p1 对账剔除),波末 319 例回归 + 真机专项
 
 ## 澄清决策
 
@@ -33,7 +33,7 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 | Phase | 名称 | change | 状态 | 依赖 | 验证方式 | Wave |
 |-------|------|--------|------|------|---------|------|
 | p1 | 对账 + 第0波文档/披露批 | ohos-committer-issues-jia-p1 | ✓ 实现完成(待项目级验证) | — | cargo check 四仓 + 对账表逐条证据核验 | W1 |
-| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | ✓ 设计完成 | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
+| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | ✓ 实现完成(待项目级验证) | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
 | p3 | 第2波 M 级修复 | ohos-committer-issues-jia-p3 | ○ 待设计 | p2 | cargo test + 318 例回归 + 真机专项(#192 SPA / #198 vp 标定) | W3 |
 
 ### Phase 1: 对账 + 第0波文档/披露批
@@ -84,7 +84,7 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 - **预估文件**: ~30
 - **Success Criteria**:
   1. cargo test 四仓全绿;新用例随波并入(#168 builder 参数、#173 多窗口 isFocused 互斥等按批次报告"验证方式")
-  2. 318 例回归零新增 ❌(基线 report: `examples/api/device-report-1020-desktop.md`;#219 ack 语义变化后必须全量)
+  2. 319 例回归零新增 ❌(基线 report: `examples/api/device-report-1021-desktop.md`,311✅/8⏭/0❌;#219 ack 语义变化后必须全量)
   3. 真机专项结论:#192 controller.getUrl() 对 pushState 即时性(SPA 用例)、#198 virtualPixelRatio 与 vp 基准一致性、#188 incognito 联动、#189 关窗链日志观察
 - **依赖**: p2(#173 前置基建 + S 波回归基线)
 - **关键风险**: #219 回归面最大(ack 语义变化波及 4 类命令);#186 不得破坏 CORS 4 例基线;#192 同步桥主线程语义;#198 与 webview-sizing 轨道的衔接缝
