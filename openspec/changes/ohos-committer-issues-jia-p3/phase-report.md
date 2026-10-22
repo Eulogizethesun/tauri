@@ -115,3 +115,5 @@ PM 侧独立审计 CHANGES_REQUESTED（3 major + 4 minor + 1 suggestion）→ �
 **设备 UT 回执（wry）**：68 passed / 0 failed——M1 2 例（headers forwarded / headerless D9 形状）+ m4/m5 2 例 + 存量 p3 UT。首跑暴露 3 个从未执行过的测试缺陷并当场修正：E0599 `HeaderName::to_str`→`as_str`（cfg(ohos) 代码 host 从未编译，53c8d86）、vp UT 宿主环境假设→纯函数 `vp_ratio_sanitized` guard（NaN/±inf/≤0→1.0，live wrapper 仅探 total）、devtools close 极性反转（close 返回 pre-swap 旗标：已应用 open 后首次 close=true）。
 
 **终态回归（r4，2026-10-22 12:16）**：324 行 **316✅ / 8⏭ / 0❌**，footer 判据成立，零新增 ❌（基线 314✅/8⏭/0❌ + M1/M3 两新用例全绿）。report 存档 `examples/api/device-report-1022-fixvariant-desktop.md`。HAR 链 stage A 两轮全绿（A1 重建 + A2/A3/A4，har 199140B @11:35，消费点 setResponseHeader/headerNames 标记全命中）。
+
+**返工披露（修复变体漏 strict 复验，已返工）**：M1 改写的 platform-limitations delta 曾把实现叙事+SDK 判定史嵌进单个 Requirement 正文（>500 字符，`openspec validate --strict` 翻黄 WARNING=FAIL）。已按 validator 建议拆为两个各说一事的短 Requirement（「Response headers SHALL reach the page via setResponseHeader」+「Intercepted request body SHALL be disclosed as inaccessible」），三个 Scenario 原样承载细节、新标题脱离 SDK 门控叙事、CORS 基线结论留在 Scenario 1 的 AND 行；复跑 `openspec validate ohos-committer-issues-jia-p3 --strict` = **valid**（全 change 含另两 delta 一并通过）。

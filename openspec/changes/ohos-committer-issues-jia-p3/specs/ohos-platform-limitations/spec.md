@@ -12,14 +12,9 @@
 - **THEN** 行为 SHALL 维持现状(参数不生效),文档披露该限制
 - **AND** 不产生 panic 或错误返回
 
-### Requirement: Intercept fidelity gaps SHALL be gated by SDK availability
+### Requirement: Response headers SHALL reach the page via setResponseHeader
 
-https 拦截链的平台保真缺口 SHALL 以 SDK 事实为门并落披露,含两项:
-
-1. **响应头注入(已实现,p3 修复变体 M1 路线 A)**:本地 SDK20 副本 `web.d.ts:4426` `setResponseHeader` @since 12 **PRESENT**(p1 对账曾误判缺席;当次构建复核实证推翻该结论)→ 响应头写路径已实现:wry 从协议 handler 响应提取头(Content-Type 除外,经 mime 通道避免 ArkWeb 双重应用;非 UTF-8 头逐条跳过降级)→ wire 并行数组(headerNames/headerValues,请求侧同型)→ ArkTS `WebResourceResponse.setResponseHeader(Array<Header>)`;旧原生模块缺省字段时与既有行为逐字节一致(D9)。设备断言:跨源 fetch 依赖新路径送达的 ACAO/Expose-Headers 通过,且 handler 设置的 echo 头 JS 可读。
-2. **请求 body 访问**:拦截请求 body 在 OHOS 平台无公开访问器——method/headers 仅头部采集,body 不穿透;披露 SHALL 记录该边界。
-
-两项 SHALL 一并记录 CORS 4 例基线不变的验证结论。
+自定义协议 handler 在 `http::Response` 上设置的响应头 SHALL 经 wry 提取、wire 并行数组（headerNames/headerValues）与 ArkTS `setResponseHeader` 送达页面（SDK 事实：`setResponseHeader` @since 12 PRESENT）；无头响应 SHALL 保持 M1 之前的 wire 形状。
 
 #### Scenario: Response header write reaches the page
 
@@ -33,6 +28,10 @@ https 拦截链的平台保真缺口 SHALL 以 SDK 事实为门并落披露,含�
 
 - **WHEN** 协议 handler 仅设置 Content-Type(或未设头)
 - **THEN** wire 载荷的 header 数组 SHALL 为缺省(None/absent),行为与 M1 之前逐字节一致
+
+### Requirement: Intercepted request body SHALL be disclosed as inaccessible
+
+拦截请求 body 在 OHOS 平台无公开访问器——wry 构造的 Request SHALL 仅穿透 method/headers,body 不转发,披露 SHALL 记录该平台边界。
 
 #### Scenario: Request body is not forwarded
 
