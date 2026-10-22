@@ -32,9 +32,9 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 
 | Phase | 名称 | change | 状态 | 依赖 | 验证方式 | Wave |
 |-------|------|--------|------|------|---------|------|
-| p1 | 对账 + 第0波文档/披露批 | ohos-committer-issues-jia-p1 | ✓ 实现完成(待项目级验证) | — | cargo check 四仓 + 对账表逐条证据核验 | W1 |
-| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | ✓ 实现完成(待项目级验证) | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
-| p3 | 第2波 M 级修复 | ohos-committer-issues-jia-p3 | ✓ 实现完成(待项目级验证) | p2 | cargo test + 318 例回归 + 真机专项(#192 SPA / #198 vp 标定) | W3 |
+| p1 | 对账 + 第0波文档/披露批 | ohos-committer-issues-jia-p1 | 📦 已归档(2026-10-22,项目级验证通过) | — | cargo check 四仓 + 对账表逐条证据核验 | W1 |
+| p2 | 第1波 S 级代码修复 | ohos-committer-issues-jia-p2 | 📦 已归档(2026-10-22,项目级验证通过) | p1 | cargo test 四仓 + 桌面 318 例回归 + #174/#181 真机仲裁 | W2 |
+| p3 | 第2波 M 级修复 | ohos-committer-issues-jia-p3 | 📦 已归档(2026-10-22,项目级验证通过) | p2 | cargo test + 318 例回归 + 真机专项(#192 SPA / #198 vp 标定) | W3 |
 
 ### Phase 1: 对账 + 第0波文档/披露批
 
