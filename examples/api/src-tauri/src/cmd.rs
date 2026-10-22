@@ -99,17 +99,21 @@ pub fn track_webview_viewport_probe<R: Runtime>(
   doc_height: f64,
 ) -> tauri::Result<()> {
   let tracker = app.state::<EventTracker>();
-  tracker.viewport_probes.lock().unwrap().push(ViewportProbeSample {
-    tag,
-    inner_width,
-    inner_height,
-    doc_width,
-    doc_height,
-    reported_at_ms: std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .map(|d| d.as_millis() as u64)
-      .unwrap_or(0),
-  });
+  tracker
+    .viewport_probes
+    .lock()
+    .unwrap()
+    .push(ViewportProbeSample {
+      tag,
+      inner_width,
+      inner_height,
+      doc_width,
+      doc_height,
+      reported_at_ms: std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0),
+    });
   Ok(())
 }
 
