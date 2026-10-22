@@ -2521,4 +2521,57 @@ export const coreTests: TestCase[] = [
       assert(rejected, 'bogus-label set_title must reject, not fake-ack');
     },
   },
+
+  // ── fix-variant M3 (#219): tracked reject reaching invoke Err. The #80
+  // illegal-label leg is rejected by get_webview_window at the tauri layer and
+  // never reaches ArkTS. This probe resolves a REAL window first, then drives
+  // the ArkTS window-command chain into a deterministic failure with a
+  // wire-valid but unknown window id — the rejection must come back from the
+  // ArkTS tracked op (`set-title failed: …`) as invoke Err, never a fake
+  // success ack.
+  {
+    name: 'window tracked reject reaches invoke Err via ArkTS op (#219 M3)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      const result = await invoke<any>('tracked_reject_probe');
+      if (result && result.tracked_reject === false) {
+        // Desktop (non-OHOS) build: the probe is a no-op there.
+        assert(
+          typeof result.skipped === 'string',
+          `desktop probe must report its skip reason, got ${JSON.stringify(result)}`
+        );
+        return;
+      }
+      assert(
+        result && result.tracked_reject === true,
+        `tracked reject must reach invoke Err, got: ${JSON.stringify(result)}`
+      );
+      assert(
+        typeof result.error === 'string' && result.error.includes('set-title failed'),
+        `rejection must originate at the ArkTS tracked op, got: ${result.error}`
+      );
+    },
+  },
+
+  // ── fix-variant M1 (#186): the intercept response-header write path. The
+  // Rust protocol handler sets ACAO + Expose-Headers + an echo header; before
+  // the write path those were dropped at the wry→ArkTS seam. The cross-origin
+  // fetch (page origin → https://myapp.localhost) only passes CORS when the
+  // ACAO header actually reached the WebResourceResponse, and the echo header
+  // is the JS-visible receipt of the full wry→wire→setResponseHeader chain.
+  {
+    name: 'https-intercept response headers reach the page (#186 M1)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      const resp = await fetch('https://myapp.localhost/p3-m1-header-probe');
+      assert(resp.ok, `expected ok scheme response, got status ${resp.status}`);
+      const echo = resp.headers.get('x-tauri-scheme-echo');
+      assert(
+        echo === 'p3-m1-response-header',
+        `Rust handler response header must reach the page, got x-tauri-scheme-echo=${echo}`
+      );
+    },
+  },
 ];

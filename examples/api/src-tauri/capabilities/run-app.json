@@ -260,6 +260,7 @@
     "allow-incognito-cookie-set",
     "allow-incognito-cookie-isolation",
     "allow-set-title-on",
+    "allow-tracked-reject-probe",
     "core:window:allow-destroy",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-badge-label",

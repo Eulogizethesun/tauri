@@ -264,6 +264,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       window.__TAURI_INTERNALS__.__TEST_INVOKE_INIT_SCRIPT__ = 'executed';
     "#)
     // 1. Test custom URI scheme protocol (sync)
+    // #186 (fix-variant M1): response headers exercise the new write path —
+    // ACAO + Expose-Headers make the cross-origin fetch provable from JS, and
+    // the echo header is the JS-visible receipt that headers set by the Rust
+    // protocol handler reach the page through wry→wire→setResponseHeader.
     .register_uri_scheme_protocol("myapp", |_ctx, request| {
       log::info!("Custom scheme request: {:?}", request.uri());
 
@@ -286,6 +290,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 
       tauri::http::Response::builder()
         .header("Content-Type", "text/html")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Expose-Headers", "X-Tauri-Scheme-Echo")
+        .header("X-Tauri-Scheme-Echo", "p3-m1-response-header")
         .status(200)
         .body(body)
         .unwrap()
@@ -887,6 +894,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::incognito_cookie_set,
       cmd::incognito_cookie_isolation,
       cmd::set_title_on,
+      cmd::tracked_reject_probe,
       #[cfg(any(debug_assertions, feature = "devtools"))]
       cmd::devtools_test,
       #[cfg(any(debug_assertions, feature = "devtools"))]

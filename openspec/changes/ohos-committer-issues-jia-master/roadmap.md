@@ -72,7 +72,7 @@ committer @Eulogizethesun 于 2026-10-10 在 Eulogizethesun/tauri 仓批量提�
 
 - **目标**: M 级修复 ~9 条(视对账裁剪):
   - #168 创建期参数残差:decoration/always_on_top 播种(S 半)→ 主窗创建后补发 fullscreen/maximized/focus(走既有 pending 队列)→ visible/icon/theme 披露;几何面已修(p1 对账:tao 15491f9d+823318fa / ability d7e8e3a0 / tauri 1a34b6b97)不重做——参数面 window_attrs.{fullscreen,maximized,focus,visible} 零消费已设计期实证
-  - #186 https 拦截字段三层扩展(method/headers/响应头;getRequestMethod@9/getRequestHeader@8 在本地 SDK20 副本;setResponseHeader 经 p1 对账(任务 1.3)在本地 SDK20 副本**缺席**——响应头半边须当次构建 SDK 复核可用性后再定修法;body 平台无访问器→披露;保 CORS 4 例基线)
+  - #186 https 拦截字段三层扩展(method/headers/响应头;getRequestMethod@9/getRequestHeader@8 在本地 SDK20 副本;setResponseHeader 经 p1 对账曾误判缺席,当次构建复核实证 web.d.ts:4426 @since 12 **PRESENT** → p3 修复变体 M1 走路线 A 已实现响应头写路径:wry 提取(Content-Type 走 mime 通道)→ wire 并行数组 → ArkTS setResponseHeader,设备断言=跨源 fetch 依新路径 ACAO 通过 + echo 头可读;body 平台无访问器→披露;保 CORS 4 例基线)
   - #189 主 webview Drop no-op 修复:去 is_child 门控(ArkTS remove 幂等已就绪;bridge 15s 超时兜底;关窗链全量回归)
   - #192 url() 同步 get-url 桥(镜像 cookie 三态分流;url() 实际在主线程执行,同步桥是主路径必需件;须避开主线程 block_on 死锁族)
   - #195 open_devtools PendingOp 排队重放 + 进程级布尔(对齐 ArkWeb 语义)+ 注入/命令注册门控对齐

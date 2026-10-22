@@ -39,7 +39,7 @@ Purpose 增补:③`url()` 同步读取三态语义(#192);④创建通道转发 i
 
 ### Requirement: Webview creation SHALL forward incognitoMode
 
-创建通道 SHALL 支持 incognito 语境:`WebviewStyle` 新增 `incognito` 字段(wire 契约两端同步);ArkTS 两分支(Web()/createEmbeddedWebview)在 `incognito=true` 时设置 `Web().incognitoMode(true)`(SDK20 @since 20,本地 SDK20 web.d.ets 已核),默认 false 时行为与现状逐字节一致。
+创建通道 SHALL 支持 incognito 语境:`WebviewStyle` 新增 `incognito` 字段(wire 契约两端同步);`incognitoMode` 是 `WebOptions` **成员**(本地 SDK20 web.d.ts:5217 实证,@since 11;非链式属性)——ArkTS 两分支(Web()/createWebview)在 `incognito === true` 时以 `incognitoMode: true` 传入 WebOptions,默认 false 时行为与现状逐字节一致。
 
 #### Scenario: Incognito webview creation
 

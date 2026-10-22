@@ -45,3 +45,23 @@ Float 子窗口的激活/失活 SHALL 经 ArkTS `windowEvent` 订阅(WINDOW_ACTI
 - **WHEN** 宿主 ArkTS 运行时不提供 `window.on('windowEvent')`(typeof 探测失败)
 - **THEN** 订阅跳过并记录结构化 warn(含窗口 id 与原因)
 - **AND** 不抛出、不 panic,mirror 维持注册时快照值
+
+### Requirement: Creation-time focus intent SHALL map to persistent focusability (p3 修复变体 m1)
+
+builder `focused:false` SHALL 映射为持久 `set_focusable(false)`(对齐 gtk `accept_focus(focusable && focused)` 的创建期不可聚焦语义;刻意异于 Windows 的"创建不聚焦但保持可聚焦")。`focused` 属性默认 `true`;tauri 窗口 config 的 `focus`(默认 true,可设 false)经 runtime-wry 透传进 attributes——`false` 走同一 differ-from-default 补发路径。任何形态都不产生 `set_focus()` 附加流量(默认构造零调度场景不变)。
+
+#### Scenario: Builder focused false persists non-focusable
+
+- **WHEN** 窗口以 `with_focused(false)` 创建
+- **THEN** 补发计划 SHALL 落 `set_focusable(false)`(持久,gtk `accept_focus(false)` 同义)
+- **AND** 不产生创建期 `set_focus()` 调用
+
+#### Scenario: Config focus false reaches the same path
+
+- **WHEN** tauri config 窗口条目设 `focus: false`(config.rs 默认 true)
+- **THEN** runtime-wry SHALL 透传 `attributes.focused=false`,与 builder 形态共用同一补发路径
+
+#### Scenario: Default and explicit-true stay no-ops
+
+- **WHEN** 窗口以默认 attributes 或 `focused: true` 创建
+- **THEN** 补发计划 SHALL 为零调度(不派发焦点相关命令)

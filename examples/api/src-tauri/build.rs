@@ -119,6 +119,9 @@ fn main() {
         "incognito_cookie_set",
         "incognito_cookie_isolation",
         "set_title_on",
+        // #219 fix-variant M3: tracked-reject probe (unknown-window set-title
+        // through the real ArkTS tracked op chain).
+        "tracked_reject_probe",
       ])),
   )
   .expect("failed to run tauri-build");

@@ -2256,6 +2256,68 @@ pub fn set_title_on<R: tauri::Runtime>(
   win.set_title(&title).map_err(|e| e.to_string())
 }
 
+/// #219 (fix-variant M3): tracked-reject probe. The tauri layer must resolve a
+/// REAL window first (the "tauri 层窗口存在" precondition — the #80 illegal-label
+/// leg is rejected by `get_webview_window` before any ArkTS dispatch and cannot
+/// cover this), then drives the ArkTS window-command chain into a
+/// DETERMINISTIC failure with a wire-valid but unknown window id:
+/// `WindowClient.set_window_title` → WindowPlugin set-title arm →
+/// `await WindowManager.setWindowTitle` → `getWindow` lookup throws → the arm
+/// rethrows (`set-title failed: …`) → NAPI reject → `WindowAcknowledgement::
+/// ensure()` turns the rejection into a Rust Err. The asserted error message
+/// proves the rejection ORIGINATED at the ArkTS tracked op instead of a
+/// tauri-layer guard.
+#[command]
+pub async fn tracked_reject_probe<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+  #[cfg(target_env = "ohos")]
+  {
+    let _main = app
+      .get_webview_window("main")
+      .ok_or_else(|| "main window not found".to_string())?;
+    let ohos_app = tauri::ohos::APP
+      .lock()
+      .unwrap()
+      .clone()
+      .ok_or_else(|| "ohos app instance not initialized".to_string())?;
+    let client = openharmony_ability_plugin_window::WindowClient::new(&ohos_app)
+      .map_err(|e| format!("WindowClient::new failed: {e}"))?;
+    // JS-safe (<< 2^53), format-valid (>= 0), never allocated by the runtime.
+    const UNKNOWN_WINDOW_ID: i64 = 987_654_321_098;
+    match client
+      .set_window_title(UNKNOWN_WINDOW_ID, "p3-m3-tracked-reject".to_string())
+      .await
+    {
+      Ok(()) => Err(
+        "tracked-reject probe FAILED: unknown-window set-title returned a success ack (fake-ack regression)".to_string(),
+      ),
+      Err(e) => {
+        let msg = e.to_string();
+        if msg.contains("set-title failed") {
+          Ok(serde_json::json!({
+            "tracked_reject": true,
+            "origin": "arkts-tracked-op",
+            "error": msg,
+          }))
+        } else {
+          Err(format!(
+            "tracked-reject probe: rejection did not originate at the ArkTS tracked op: {msg}"
+          ))
+        }
+      }
+    }
+  }
+  #[cfg(not(target_env = "ohos"))]
+  {
+    let _ = app;
+    Ok(serde_json::json!({
+      "tracked_reject": false,
+      "skipped": "non-OHOS platform (tracked reject is OHOS-only)",
+    }))
+  }
+}
+
 /// Manual test: set a cookie for httpbin.org on the main webview cookie store
 /// and open a child window to https://httpbin.org/cookies so the user can
 /// visually verify the cookie is sent to the server and persists on reload.

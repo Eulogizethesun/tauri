@@ -16,16 +16,22 @@
 
 https 拦截链的平台保真缺口 SHALL 以 SDK 事实为门并落披露,含两项:
 
-1. **响应头注入**:`setResponseHeader` 在本地 SDK20 副本(`api/arkui/component/web.d.ets`)缺席——请求侧 method/headers 照常采集穿透(见 ohos-webview-https-scheme),响应头写路径不实现;披露 SHALL 记录 SDK 版本门(SDK 提供该 API 后可闭合)。
+1. **响应头注入(已实现,p3 修复变体 M1 路线 A)**:本地 SDK20 副本 `web.d.ts:4426` `setResponseHeader` @since 12 **PRESENT**(p1 对账曾误判缺席;当次构建复核实证推翻该结论)→ 响应头写路径已实现:wry 从协议 handler 响应提取头(Content-Type 除外,经 mime 通道避免 ArkWeb 双重应用;非 UTF-8 头逐条跳过降级)→ wire 并行数组(headerNames/headerValues,请求侧同型)→ ArkTS `WebResourceResponse.setResponseHeader(Array<Header>)`;旧原生模块缺省字段时与既有行为逐字节一致(D9)。设备断言:跨源 fetch 依赖新路径送达的 ACAO/Expose-Headers 通过,且 handler 设置的 echo 头 JS 可读。
 2. **请求 body 访问**:拦截请求 body 在 OHOS 平台无公开访问器——method/headers 仅头部采集,body 不穿透;披露 SHALL 记录该边界。
 
-两项披露 SHALL 一并记录 CORS 4 例基线不变的验证结论。
+两项 SHALL 一并记录 CORS 4 例基线不变的验证结论。
 
-#### Scenario: Response header write is not implemented
+#### Scenario: Response header write reaches the page
 
-- **WHEN** 拦截请求需要注入响应头(如 CORS 头改写)
-- **THEN** 实现 SHALL 不提供该能力,披露条目说明 SDK 门与闭合条件
+- **WHEN** 自定义协议 handler 在 `http::Response` 上设置响应头(如 `Access-Control-Allow-Origin`、`X-Tauri-Scheme-Echo`)
+- **THEN** wry SHALL 提取头并经 wire 并行数组送达 ArkTS,`setResponseHeader` 应用到 `WebResourceResponse`
+- **AND** 跨源 fetch 依 ACAO 通过,handler 设置的头在 JS `response.headers` 可读
 - **AND** 既有 CORS 4 例行为零回归
+
+#### Scenario: Headerless response keeps the old wire shape
+
+- **WHEN** 协议 handler 仅设置 Content-Type(或未设头)
+- **THEN** wire 载荷的 header 数组 SHALL 为缺省(None/absent),行为与 M1 之前逐字节一致
 
 #### Scenario: Request body is not forwarded
 
