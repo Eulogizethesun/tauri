@@ -25,7 +25,7 @@
 |---|---|---|
 | openharmony-ability crates host | 87 passed / 0 failed | 其中 plugin-webview 31/0，含 #192 wire 断言（lib.rs:2278-2294：ID `ohos.webview-url`、TYPE_NAME `ohos.webview.UrlGetRequest`/`UrlGetResponse`）与 #188 扩展请求形状断言（ability-③ 后复跑 31/0，host 走 `target/host-stub-libs` 桩链接路径） |
 | wry host `--lib` | 20 passed / 0 failed | #189/#192/#195/#198 面在 1affb83 |
-| tao host `--lib` | 0 tests（ohos 测试模块 cfg-gated，门结构认可） | ohos gates EXIT=0；tao 设备 UT 为权威（79/79 基线），p3 tao 侧零新 UT（#219 零码结论，见第 4 节） |
+| tao host `--lib` | 0 tests（ohos 测试模块 cfg-gated，门结构认可） | ohos gates EXIT=0；tao 设备 UT 为权威（79/79 为 09-29 基线，本波未重跑）。tao-① 0af7415c 新增 10 个 `#[test]`（focus/scale dedup 5 + creation attrs seeding 5，含 `ut_scale_dedup_forwards_change_once_and_swallows_repeats`）本波无执行回执——host 无法运行 ohos cfg 门内测试，设备侧留待下次设备 UT 首跑验证（符号已核验存在，编译风险低）；#219 零码结论（根因不在 tao）见第 4 节 |
 | tauri app crate | cargo check exit 0 / 0 error | §6 六命令 + 注册 + capabilities |
 
 ## 3. SDK 复核结论（当次构建实证，非文档转抄）
@@ -83,3 +83,10 @@ ack 语义失真的根因不在 tao：创建期视觉属性（title/topmost/deco
 - desktop 侧 #188 用例为 smoke 断言（WebView2 incognito 语义平台差异风险）；OHOS 严格 4 断言经 `ohosSdkApiVersion()` 分支生效。
 - WindowManager 5.5 分类（D10）：minimize/maximize/recover/hideWindow 维持原样；restoreWindow/setFullscreen 转 tracked；setWindowTopmost/setWindowTitle/showWindowMethod 子窗支转 await+tracked；API14 能力守卫保持 warn+no-op。
 - entry_mobile（gen/ohos）为显式 LazyPlugin 清单，WebviewUrlPlugin 需手工补条目后方可上真机 mobile 跑 #192（desktop 全链已通）。
+- wry #195 边界：排队的 `PendingOp::SetDevtools` 因 create 失败永不重放时，`DEVTOOLS_ENABLED` 进程级意图不复位，后续另一 webview 的 `open_devtools` 静默 no-op（窄边界，内建审查 minor，留待下次触碰 devtools 面时一并处理）。
+
+## 11. 内建审查（rb-auditor）
+
+- 结论 **APPROVED**（0 blocking / 0 major / 3 minor）。minor ①：本报告第 2 节 tao UT 措辞已按审查意见修正（0af7415c 新增 10 UT 有落盘无执行回执）；minor ②：entry_mobile LazyPlugin 缺 WebviewUrlPlugin（上条已披露）；minor ③：#195 DEVTOOLS_ENABLED 不复位边界（上条已披露）。
+- 审查实证要点：serializeOpTracked 链中性尾 `next.catch(()=>{})` + 窗销毁时删队列（无死锁/无泄漏）；NAPI wire 两端一致（incognito 只上 `Some(true)`、url 同步桥 TYPE_NAME 双端、主线程路径零 block_on/recv_timeout）；六命令四处注册齐；#186 采集失败降级不沉拦截；cfg 隔离无泄漏（desktop 322 例回归佐证）。
+- churn 复核：9 commit 文件清单零 schema.json / package/ / ability.har / 覆盖率产物（显式点名提交，无 `git add -A`）。
