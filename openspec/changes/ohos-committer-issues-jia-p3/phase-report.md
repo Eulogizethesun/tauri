@@ -83,10 +83,35 @@ ack 语义失真的根因不在 tao：创建期视觉属性（title/topmost/deco
 - desktop 侧 #188 用例为 smoke 断言（WebView2 incognito 语义平台差异风险）；OHOS 严格 4 断言经 `ohosSdkApiVersion()` 分支生效。
 - WindowManager 5.5 分类（D10）：minimize/maximize/recover/hideWindow 维持原样；restoreWindow/setFullscreen 转 tracked；setWindowTopmost/setWindowTitle/showWindowMethod 子窗支转 await+tracked；API14 能力守卫保持 warn+no-op。
 - entry_mobile（gen/ohos）为显式 LazyPlugin 清单，WebviewUrlPlugin 需手工补条目后方可上真机 mobile 跑 #192（desktop 全链已通）。
-- wry #195 边界：排队的 `PendingOp::SetDevtools` 因 create 失败永不重放时，`DEVTOOLS_ENABLED` 进程级意图不复位，后续另一 webview 的 `open_devtools` 静默 no-op（窄边界，内建审查 minor，留待下次触碰 devtools 面时一并处理）。
+- wry #195 边界：排队的 `PendingOp::SetDevtools` 因 create 失败永不重放时，`DEVTOOLS_ENABLED` 进程级意图不复位，后续另一 webview 的 `open_devtools` 静默 no-op（窄边界，内建审查 minor，留待下次触碰 devtools 面时一并处理）——**已由修复变体 m5 消除**（failed_create_cleanup，见 §12）。
 
 ## 11. 内建审查（rb-auditor）
 
 - 结论 **APPROVED**（0 blocking / 0 major / 3 minor）。minor ①：本报告第 2 节 tao UT 措辞已按审查意见修正（0af7415c 新增 10 UT 有落盘无执行回执）；minor ②：entry_mobile LazyPlugin 缺 WebviewUrlPlugin（上条已披露）；minor ③：#195 DEVTOOLS_ENABLED 不复位边界（上条已披露）。
 - 审查实证要点：serializeOpTracked 链中性尾 `next.catch(()=>{})` + 窗销毁时删队列（无死锁/无泄漏）；NAPI wire 两端一致（incognito 只上 `Some(true)`、url 同步桥 TYPE_NAME 双端、主线程路径零 block_on/recv_timeout）；六命令四处注册齐；#186 采集失败降级不沉拦截；cfg 隔离无泄漏（desktop 322 例回归佐证）。
 - churn 复核：9 commit 文件清单零 schema.json / package/ / ability.har / 覆盖率产物（显式点名提交，无 `git add -A`）。
+
+## 12. PM 修复变体（2026-10-22，M1/M2/M3 + m1-m6）
+
+PM 侧独立审计 CHANGES_REQUESTED（3 major + 4 minor + 1 suggestion）→ 逐条处置（commit 显式点名，四仓 ohdev）：
+
+| finding | 处置 | 路线与证据 |
+|---|---|---|
+| **M1** #186 响应头半丢弃 + spec 自相矛盾 | 修复（路线 A） | wry `dispatch_https_intercept_sync` 提取 handler 响应头（Content-Type 走 mime 通道防 ArkWeb 双重应用；非 UTF-8 逐条跳过降级；空集 None 保 D9 逐字节）→ wire 并行数组 `headerNames/headerValues`（请求侧同型，ability 1250c67）→ ArkTS `setResponseHeader(Array<Header>)`（WebviewPlugin.ets 构建点：在场/非空/等长三守卫，旧原生模块缺字段时跳过=逐字节现状）。**设备断言 row 82 ✅ 280ms**：useHttpsScheme 探针窗自 https://tauri.localhost 跨源 fetch https://myapp.localhost，ACAO 依新路径通过 + echo 头 JS 可读；hilog 全链（`protocol=myapp — dispatching to bridge` → `Custom scheme request: myapp://localhost/p3-m1-header-probe` → `handled=true`）。CORS 4 例基线零回归。spec M1 requirement 重写（p1 缺席判定被当次构建复核实证推翻）+ 补 https 重写主机 CSP 平台事实 |
+| **M2** tao 9 新 UT 零执行回执 | 补执行回执 | run-ut.sh tao（aarch64-ohos 设备）：**100 passed / 0 failed**（含 0af7415c 全部 9 UT，验收线 ≥88）。首跑即暴露 scale dedup UT 的 EPSILON 断言错误（2.0+EPSILON 在 2.0 处为半 ULP 舍入回 2.0，位型不变）→ `from_bits(to_bits()+1)` 修正（261bf020） |
+| **M3** #219 tracked reject 无真实覆盖 | 修复（套件探针） | 新命令 `tracked_reject_probe`（四处注册齐）：tauri 层先 `get_webview_window("main")` 实解析，再走真 `WindowClient`→WindowPlugin set-title→`WindowManager.getWindow` throw→arm 重抛 `set-title failed:`→NAPI reject→invoke Err，断言错误串含 "set-title failed" 证明拒绝源于 ArkTS tracked op。**row 81 ✅ 45ms**。in-queue serializeOpTracked 字面拒绝不可确定性构造（restore/fullscreen 对未知 id 在入队前即 throw，getWindow 预检）——set-title arm 为 tracked 家族代表，已在探针注释记录 |
+| **m1** tao 注释失实 | 修复 | window.rs `no_initial_focus` 注释重写：config `focus`（默认 true 可设 false）经 runtime-wry 透传（9e351273）；spec delta 新增 creation-time focusability requirement（3 scenarios，持久 `set_focusable(false)`=gtk `accept_focus` 语义、异于 Windows） |
+| **m2** spec incognitoMode 失实 | 修复 | bridge-fidelity spec 改为 WebOptions 成员（web.d.ts:5217 @since 11，非链式属性）（386a6e8e5） |
+| **m3** ps1 计数 17→18 | 修复 | pack-plugins.ps1 头注释（1250c67） |
+| **m4** wry 队列 UT 假覆盖 | 修复 | `dispatch_or_queue_op` 提取为自由函数，UT 驱动真生产 queue/failed/ready 路径；设备 UT `ut_dispatch_or_queue_set_devtools_real_path` ✅ |
+| **m5** #195 devtools 意图不复位 | 修复 | `failed_create_cleanup`：create 失败分支释放进程级 `DEVTOOLS_ENABLED`（排队 SetDevtools 永不重放时不再吞后续 open_devtools）；设备 UT `ut_failed_create_releases_queued_devtools_intent` ✅；§10 对应 concern 已消 |
+| **m6** FloatPage 静默丢弃 | 修复 | windowEvent 回调 else 分支一次性结构化 warn（notifyWindowFocus 不可用=stale HAR 提示）（1250c67） |
+
+**修复期设备实证三连环（M1 断言载体重定位）**：
+1. r2（10ms `Failed to fetch`）：主窗 use_https=false → `https://myapp.localhost` 不存在于该 URL 空间，fetch 落真网 DNS 失败；raw `myapp://` iframe 流走原生 scheme 路径完全绕过 setResponseHeader → 断言载体必须迁移到 useHttpsScheme webview（runtime-wry OHOS 分支已有 with_https_scheme 透传，ohos-webview-https-scheme 轨道）。
+2. CSP 首拒（r2 hilog ARKWEB-CONSOLE `Refused to connect` 8ms）：conf connect-src 只列裸 `<scheme>:` 条目，https 重写主机须显式允许 → tauri.conf.json 增 `https://myapp.localhost` + `https://myapp-async.localhost`（3a1544ca3；裸条目只覆盖 iframe/导航流，已记入 spec）。
+3. r4 全绿：探针窗（useHttpsScheme Float 子窗，`create_isolated_window` 增可选 useHttps 参数 dd2e30022）经 https-intercept 链加载（protocol=tauri），跨源 fetch 命中 protocol=myapp → bridge → Rust handler → `setResponseHeader` → echo 头 JS 可读；报告通道=既有 `document-title-changed` emit（探针页零 IPC）。
+
+**设备 UT 回执（wry）**：68 passed / 0 failed——M1 2 例（headers forwarded / headerless D9 形状）+ m4/m5 2 例 + 存量 p3 UT。首跑暴露 3 个从未执行过的测试缺陷并当场修正：E0599 `HeaderName::to_str`→`as_str`（cfg(ohos) 代码 host 从未编译，53c8d86）、vp UT 宿主环境假设→纯函数 `vp_ratio_sanitized` guard（NaN/±inf/≤0→1.0，live wrapper 仅探 total）、devtools close 极性反转（close 返回 pre-swap 旗标：已应用 open 后首次 close=true）。
+
+**终态回归（r4，2026-10-22 12:16）**：324 行 **316✅ / 8⏭ / 0❌**，footer 判据成立，零新增 ❌（基线 314✅/8⏭/0❌ + M1/M3 两新用例全绿）。report 存档 `examples/api/device-report-1022-fixvariant-desktop.md`。HAR 链 stage A 两轮全绿（A1 重建 + A2/A3/A4，har 199140B @11:35，消费点 setResponseHeader/headerNames 标记全命中）。
