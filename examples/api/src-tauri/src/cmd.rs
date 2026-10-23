@@ -2266,9 +2266,10 @@ pub fn set_title_on<R: tauri::Runtime>(
 }
 
 /// #219 (fix-variant M3): tracked-reject probe. The tauri layer must resolve a
-/// REAL window first (the "tauri 层窗口存在" precondition — the #80 illegal-label
-/// leg is rejected by `get_webview_window` before any ArkTS dispatch and cannot
-/// cover this), then drives the ArkTS window-command chain into a
+/// REAL window first (the tauri-layer window-existence precondition — the #80
+/// illegal-label leg is rejected by `get_webview_window` before any ArkTS
+/// dispatch and cannot cover this), then drives the ArkTS window-command chain
+/// into a
 /// DETERMINISTIC failure with a wire-valid but unknown window id:
 /// `WindowClient.set_window_title` → WindowPlugin set-title arm →
 /// `await WindowManager.setWindowTitle` → `getWindow` lookup throws → the arm
