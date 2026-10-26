@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Huawei Account Kit example app library entry point.
+
 #[cfg(target_env = "ohos")]
 mod ohos_log {
   pub fn init() {
@@ -19,6 +21,7 @@ mod ohos_log {
 // Ability/NAPI entry is required on the 2in1 desktop form too, where
 // cfg(mobile) is false — a lone cfg_attr(mobile, mobile_entry_point) would
 // silently produce no entry there.
+/// Builds the example app runtime and runs it on the current thread.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
 pub fn run() {

@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! Resource loading example app demonstrating bundled resource access.
+
 use tauri::Manager;
 
 #[tauri::command]
