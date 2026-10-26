@@ -565,7 +565,7 @@ pub fn create_isolated_window<R: tauri::Runtime>(
     .use_https_scheme(use_https.unwrap_or(false));
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder
     .initialization_script(&init_script)
@@ -669,7 +669,7 @@ pub fn create_window_with_custom_ua<R: tauri::Runtime>(
       .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
 
   if !user_agent.is_empty() {
@@ -707,7 +707,7 @@ pub fn create_window_no_throttle<R: tauri::Runtime>(
     .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   let _window = builder
     .initialization_script(
@@ -835,7 +835,7 @@ pub fn create_transparent_window<R: tauri::Runtime>(
     .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder = builder.initialization_script(&init_script);
 
@@ -923,7 +923,7 @@ pub fn create_borderless_window<R: tauri::Runtime>(
       .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder = builder.initialization_script(&init_script);
 
@@ -978,7 +978,7 @@ pub fn create_decorated_window<R: tauri::Runtime>(
   // supported locally — the second UIAbility request is rejected by tao).
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
 
   let _window = builder.build()?;
@@ -1308,7 +1308,7 @@ pub fn create_float_window_racy_attrs<R: tauri::Runtime>(
   )
   .title("Float Racy Attrs Window")
   .inner_size(500.0, 400.0)
-  .ohos_window_kind(OHOSWindowKind::Float);
+  .ohos_window_kind(OHOSWindowKind::SubWindow);
   // `.decorations()` on the builder is a desktop-only API (see the UIAbility
   // racy command above); FloatPage renders its own chrome either way.
   #[cfg(desktop)]
@@ -1659,7 +1659,7 @@ pub fn create_transparent_borderless_window<R: tauri::Runtime>(
       .decorations(false);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder = builder.inner_size(800.0, 600.0).initialization_script(&init_script);
 
@@ -2353,7 +2353,7 @@ pub fn cookie_manual_test<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result
     .inner_size(480.0, 640.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder
     .build()

@@ -663,7 +663,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                   // window stays visible.
                   .inner_size(450.0, 350.0)
                   .position(60.0, 45.0)
-                  .ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+                  .ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
                   log::info!("[OHOS DBG] builder configured, calling build()...");
                   match builder.build() {
                     Ok(window) => {

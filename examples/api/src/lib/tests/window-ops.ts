@@ -38,7 +38,7 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /// Creates a Float sub-window for testing resize/move.
 /// The main UIAbility window is managed by the system; win.resize()/moveWindowTo() are rejected (no-op);
-/// Float sub-windows can be resized/moved freely (also proven by the FloatPage resize handle).
+/// Float sub-windows can be resized/moved freely (also proven by the SubWindowPage resize handle).
 async function createFloatWindow(label: string): Promise<Window> {
   await invoke('create_borderless_window', { windowId: label });
   await delay(600);
@@ -293,7 +293,7 @@ export const windowOpsTests: TestCase[] = [
   // ─── Float window creation-time race (doc/OHOS窗口遗留问题.md issue-7 addendum) ───
   // create_os_window is fire-and-forget: the Rust side pre-allocates an id and returns, while the ArkTS
   // WindowManager.createSubWindow chain (createSubWindowWithOptions →
-  // loadContentByName → FloatPage load) is still in progress. A set_size(260×180) issued immediately after build()
+  // loadContentByName → SubWindowPage load) is still in progress. A set_size(260×180) issued immediately after build()
   // raced with the creation chain; pre-fix it arrived before the window was registered in WindowManager.windows
   // → requireWindow threw "Unknown OS sub-window" → the op was silently dropped
   // (the family behind the 22 warns per round). Fix criterion: PENDING_FLOAT_WINDOWS queues during the handshake,
@@ -317,7 +317,7 @@ export const windowOpsTests: TestCase[] = [
         result.webview_acquired === true,
         `webview not acquired: ${JSON.stringify(result)}`
       );
-      // Wait 2s: notify is only sent at ArkTS createSubWindow promise END (including the FloatPage load),
+      // Wait 2s: notify is only sent at ArkTS createSubWindow promise END (including the SubWindowPage load),
       // and the queued set_size replay needs time.
       await delay(2000);
       const win = await Window.getByLabel(label);
@@ -774,7 +774,7 @@ export const windowOpsTests: TestCase[] = [
   // ─── 6.3 Float-specific: behavior of D11's windowKinds-branched methods on Float sub-windows ───
   // Production entry audit (2026-09-16): show→showWindowMethod (Float branch win.showWindow);
   // set-decoration-flags→setDecorationFlags (the Float branch writes 4 LocalStorage keys that drive
-  // FloatPage button visibility); set-decorations→setDecorations (the Float branch writes LocalStorage
+  // SubWindowPage button visibility); set-decorations→setDecorations (the Float branch writes LocalStorage
   // 'decorations' to drive the custom-drawn title bar visibility — during the pluginize migration it briefly bypassed this and called setWindowDecorVisible directly,
   // making Float a no-op; fixed on 2026-09-16 to delegate to WindowManager); set-background-color→calls the sub-window
   // handle directly (same API for both kinds, no branch semantics); closeWindow→reachable only via the menu path (Float has no menu;
@@ -792,7 +792,7 @@ export const windowOpsTests: TestCase[] = [
 
       // ① setDecorations (starting point: a decorated Float with decorations=true).
       //    isDecorated only reads tao's mirror (round-trip self-proving); Float's real semantics =
-      //    FloatPage's custom-drawn title bar visibility (LocalStorage 'decorations'); visual/hilog evidence belongs to the manual chapter.
+      //    SubWindowPage's custom-drawn title bar visibility (LocalStorage 'decorations'); visual/hilog evidence belongs to the manual chapter.
       assert((await w.isDecorated()) === true, 'decorated Float should start decorated');
       await w.setDecorations(false);
       assert((await w.isDecorated()) === false, 'setDecorations(false) mirror readback');
@@ -800,7 +800,7 @@ export const windowOpsTests: TestCase[] = [
       assert((await w.isDecorated()) === true, 'setDecorations(true) mirror readback');
 
       // ② decoration flags: the Float branch writes 4 LocalStorage keys. is*() reads tao's bitfield (self-proving);
-      //    the real effect = FloatPage button visibility, covered by hilog/the manual chapter; for the main-window no-op contrast see the case above.
+      //    the real effect = SubWindowPage button visibility, covered by hilog/the manual chapter; for the main-window no-op contrast see the case above.
       await w.setClosable(false);
       assert((await w.isClosable()) === false, 'setClosable(false) readback');
       await w.setMaximizable(false);

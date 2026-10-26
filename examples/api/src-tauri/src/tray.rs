@@ -170,7 +170,7 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
               .title("Tauri");
           #[cfg(target_env = "ohos")]
           {
-            wb = wb.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+            wb = wb.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
           }
           let _webview = wb.build().unwrap();
         }

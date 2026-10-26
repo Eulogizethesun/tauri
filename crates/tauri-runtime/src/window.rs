@@ -501,7 +501,7 @@ pub trait WindowBuilder: WindowBuilderBase {
   /// Sets the OHOS window kind for this window.
   ///
   /// - `UIAbility`: Main window (reuses existing UIAbility container). Only one can exist.
-  /// - `Float`: Sub-window (creates new OS-level floating window).
+  /// - `SubWindow`: Sub-window of an existing UIAbility container.
   #[cfg(target_env = "ohos")]
   fn ohos_window_kind(self, kind: OHOSWindowKind) -> Self;
 }
@@ -512,8 +512,13 @@ pub trait WindowBuilder: WindowBuilderBase {
 pub enum OHOSWindowKind {
   /// Main window — reuses the existing UIAbility container. Only one can exist per application.
   UIAbility,
-  /// Sub-window — creates a new OS-level floating window (TYPE_FLOAT).
-  Float,
+  /// Sub-window — created via `windowStage.createSubWindow`, lives inside an
+  /// existing UIAbility container and is destroyed with it. This is an
+  /// application sub-window, NOT the OS-wide floating window type
+  /// (`WindowType.TYPE_FLOAT`, whose windows float above all apps); the
+  /// former `Float` variant name wrongly suggested that type (issue
+  /// Eulogizethesun/tauri#240).
+  SubWindow,
 }
 
 /// A window that has yet to be built.

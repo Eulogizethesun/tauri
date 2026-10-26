@@ -1477,7 +1477,7 @@ impl WindowBuilder for WindowBuilderWrapper {
     use tao::platform::ohos::WindowBuilderExtOpenHarmony;
     let tao_kind = match kind {
       tauri_runtime::OHOSWindowKind::UIAbility => tao::platform::ohos::OHOSWindowKind::UIAbility,
-      tauri_runtime::OHOSWindowKind::Float => tao::platform::ohos::OHOSWindowKind::Float,
+      tauri_runtime::OHOSWindowKind::SubWindow => tao::platform::ohos::OHOSWindowKind::SubWindow,
     };
     self.inner = self.inner.with_window_kind(tao_kind);
     self
@@ -2866,7 +2866,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     #[cfg(target_env = "ohos")]
     {
       // OHOS startMoving must be called from inside a touch-down callback
-      // (FloatPage title bar) — it cannot work from a command context.
+      // (SubWindowPage title bar) — it cannot work from a command context.
       // tao's drag_window is a documented no-op returning Ok.
       return Err(ohos_unsupported("startDragging"));
     }
@@ -5231,7 +5231,7 @@ fn on_window_close_ohos<'a, T: UserEvent>(
     // closes it. Without this call the OS Float window stays on
     // screen → ghost windows that diverge from Rust's records.
     //
-    // Recursion safety: close → ArkTS destroyWindow → FloatPage
+    // Recursion safety: close → ArkTS destroyWindow → SubWindowPage
     // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
     // The second on_window_close call hits `removed == None` (this block already
     // removed it) and returns early — the idempotent remove breaks the cycle.
