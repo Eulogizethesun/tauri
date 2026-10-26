@@ -4,6 +4,22 @@ use std::sync::{Mutex, OnceLock};
 pub use openharmony_ability_derive;
 pub use tauri_runtime::OHOSWindowKind;
 
+/// OHOS entry-point attribute — re-export of
+/// [`tauri_macros::ohos_entry_point`](../tauri_macros/attr.ohos_entry_point.html)
+/// (issue Eulogizethesun/tauri#242).
+///
+/// Expands to the same glue as [`crate::mobile_entry_point`]; exists so the
+/// two-line form names the actual platform model on every device form (the
+/// Ability/NAPI entry is required on the 2in1 desktop form too, where
+/// `cfg(mobile)` is false). See the macro docs for the full contract:
+///
+/// ```rust,ignore
+/// #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
+/// pub fn run() { /* ... */ }
+/// ```
+pub use tauri_macros::ohos_entry_point as entry_point;
+
 /// Explicit re-export of the `openharmony-ability` types used by tauri and its macros.
 ///
 /// Converged from a blanket `pub use openharmony_ability;` to an explicit list

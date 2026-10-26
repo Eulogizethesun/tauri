@@ -189,7 +189,7 @@ fn validate_lib(path: &Path) -> Result<()> {
 
     if !has_entry_point {
       crate::error::bail!(
-        "Library from {} does not include the required OpenHarmony runtime symbols (missing `{REQUIRED_SYMBOL_FRAGMENT}`). This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        "Library from {} does not include the required OpenHarmony runtime symbols (missing `{REQUIRED_SYMBOL_FRAGMENT}`). This means you are likely missing the entry-point macro usage: either #[cfg_attr(mobile, tauri::mobile_entry_point)] or (OHOS, all device forms) #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] — see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
         path.display()
       );
     }
@@ -210,13 +210,13 @@ fn validate_lib(path: &Path) -> Result<()> {
 
     if !has_napi_module {
       crate::error::bail!(
-        "Library from {} does not export `napi_register_module_v1`; no NAPI module is registered at all. This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        "Library from {} does not export `napi_register_module_v1`; no NAPI module is registered at all. This means you are likely missing the entry-point macro usage: either #[cfg_attr(mobile, tauri::mobile_entry_point)] or (OHOS, all device forms) #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] — see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
         path.display()
       );
     }
 
     log::warn!(
-      "{} is stripped, skipping the mobile_entry_point symbol check",
+      "{} is stripped, skipping the entry-point symbol check",
       path.display()
     );
   }

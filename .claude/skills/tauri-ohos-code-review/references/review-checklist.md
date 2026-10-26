@@ -17,7 +17,7 @@
 - [ ] A2: Linux 依赖加了 `not(target_env = "ohos")` 排除（OHOS `target_os` 是 `"linux"`）
 - [ ] A3: desktop/mobile 区分使用 `cfg(all(target_env = "ohos", desktop))` / `cfg(all(target_env = "ohos", mobile))`
 - [ ] A4: `OHOS_DEVICE_TYPE` 正确使用（`desktop` 默认，含 tray/menu bar；`mobile` 手机/平板）
-- [ ] A5: `cfg_attr(mobile, ...)` 类宏门控必须覆盖 OHOS desktop — 当 `OHOS_DEVICE_TYPE=desktop` 时 `cfg(mobile)` 为 false（tauri-build 中 `device_type != "desktop"`），`cfg_attr(mobile, tauri::mobile_entry_point)` 等宏不会展开 → 缺少 `openharmony` NAPI 入口 → HAP 加载失败。正确写法：`cfg_attr(any(mobile, target_env = "ohos"), ...)`
+- [ ] A5: 入口属性宏必须覆盖 OHOS 全部形态 — 当 `OHOS_DEVICE_TYPE=desktop` 时 `cfg(mobile)` 为 false（tauri-build 中 `device_type != "desktop"`），仅 `cfg_attr(mobile, tauri::mobile_entry_point)` 不会展开 → 缺少 `openharmony` NAPI 入口 → HAP 加载失败。合法写法：两行式 `#[cfg_attr(mobile, tauri::mobile_entry_point)]` + `#[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]`（推荐，#242；两属性全路径书写，别名导入会致 E0428），或单行 `cfg_attr(any(mobile, target_env = "ohos"), tauri::mobile_entry_point)`；唯一错写 = 仅 `cfg_attr(mobile, ...)`
 
 ## B — 平台隔离
 
