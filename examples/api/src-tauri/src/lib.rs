@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Comprehensive example app exercising the Tauri API surface.
+
 mod cmd;
 #[cfg(desktop)]
 mod menu_plugin;
@@ -41,8 +43,10 @@ struct Reply {
 }
 
 #[cfg(target_os = "macos")]
+/// Wrapper around the app-level menu held behind a mutex.
 pub struct AppMenu<R: Runtime>(pub std::sync::Mutex<Option<tauri::menu::Menu<R>>>);
 
+/// Wrapper around the desktop popup menu used by the example app.
 #[cfg(all(desktop, not(test)))]
 pub struct PopupMenu<R: Runtime>(tauri::menu::Menu<R>);
 
@@ -50,6 +54,7 @@ pub struct PopupMenu<R: Runtime>(tauri::menu::Menu<R>);
 // Ability/NAPI entry is required on the 2in1 desktop form too, where
 // cfg(mobile) is false — a lone cfg_attr(mobile, mobile_entry_point) would
 // silently produce no entry there.
+/// Builds the example app runtime and runs it on the current thread.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
 pub fn run() {
@@ -77,6 +82,8 @@ fn init_sentry() -> sentry::ClientInitGuard {
   ))
 }
 
+/// Runs the provided builder with the shared setup used by the example
+/// app pages.
 pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   builder: tauri::Builder<R>,
   setup: F,

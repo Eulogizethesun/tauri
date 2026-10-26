@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Helper binary for the restart integration test.
+
 use tauri::Env;
 
 fn main() {
