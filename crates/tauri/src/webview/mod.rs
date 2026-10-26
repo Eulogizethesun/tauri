@@ -20,9 +20,9 @@ use serde::Serialize;
 use tauri_macros::default_runtime;
 pub use tauri_runtime::webview::{NewWindowFeatures, PageLoadEvent, ScrollBarStyle};
 // Remove this re-export in v3
-pub use tauri_runtime::Cookie;
 #[cfg(desktop)]
 use tauri_runtime::dpi::{PhysicalPosition, PhysicalSize};
+pub use tauri_runtime::Cookie;
 // `WebviewBuilder::build` compiles for `any(desktop, test)` (the manager unit
 // tests exercise it through the mock runtime), so these imports follow suit.
 #[cfg(any(desktop, test))]

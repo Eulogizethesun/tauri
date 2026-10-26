@@ -1487,7 +1487,13 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ArkTS `destroyWindow()`, so `WebviewWindow::close()` alone leaves the
   /// system window visible on screen.
   pub fn ohos_window_id(&self) -> Option<i64> {
-    self.window.window.dispatcher.ohos_window_id().ok().flatten()
+    self
+      .window
+      .window
+      .dispatcher
+      .ohos_window_id()
+      .ok()
+      .flatten()
   }
 }
 

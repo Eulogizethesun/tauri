@@ -189,8 +189,7 @@ fn link_llvm_profile_runtime() {
   // src-tauri (examples/api/src-tauri → examples/api → tauri).
   // It contains libprofiler_builtins.a extracted from Rust's .rlib.
   let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
-  let profiler_rt_dir = std::path::Path::new(&manifest_dir)
-    .join("../../../profiler-rt");
+  let profiler_rt_dir = std::path::Path::new(&manifest_dir).join("../../../profiler-rt");
   if !profiler_rt_dir.join("libprofiler_builtins.a").exists() {
     println!(
       "cargo:warning=[cov-dump] libprofiler_builtins.a not found in {}",

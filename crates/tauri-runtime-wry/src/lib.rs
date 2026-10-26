@@ -103,6 +103,8 @@ pub use tao::window::{Window, WindowBuilder as TaoWindowBuilder, WindowId as Tao
 pub use wry;
 pub use wry::webview_version;
 
+#[cfg(target_env = "ohos")]
+use wry::WebViewExtOhos;
 #[cfg(windows)]
 use wry::WebViewExtWindows;
 #[cfg(target_os = "android")]
@@ -110,8 +112,6 @@ use wry::{
   prelude::{dispatch, find_class},
   WebViewBuilderExtAndroid, WebViewExtAndroid,
 };
-#[cfg(target_env = "ohos")]
-use wry::WebViewExtOhos;
 #[cfg(not(any(
   target_os = "windows",
   target_os = "macos",
@@ -1758,8 +1758,7 @@ pub enum Message<T: 'static> {
   CreateWindow(
     WindowId,
     CreateWindowClosure<T>,
-    #[cfg(target_env = "ohos")]
-    Sender<Result<()>>,
+    #[cfg(target_env = "ohos")] Sender<Result<()>>,
   ),
   CreateRawWindow(
     WindowId,
@@ -5446,10 +5445,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   #[cfg(target_env = "ohos")]
   {
     use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};
-    context.ohos_record_main_window(
-      window_id,
-      window.window_kind() == OHOSWindowKind::UIAbility,
-    );
+    context.ohos_record_main_window(window_id, window.window_kind() == OHOSWindowKind::UIAbility);
   }
 
   #[cfg(feature = "tracing")]
@@ -6417,15 +6413,24 @@ mod with_config_tests {
     let cfg = WindowConfig::default();
     let wb = WindowBuilderWrapper::with_config(&cfg);
     let dbg = format!("{wb:?}");
-    assert!(dbg.contains("WindowBuilderWrapper"), "struct name missing: {dbg}");
+    assert!(
+      dbg.contains("WindowBuilderWrapper"),
+      "struct name missing: {dbg}"
+    );
     assert!(dbg.contains("center"), "center field missing: {dbg}");
-    assert!(dbg.contains("prevent_overflow"), "prevent_overflow field missing: {dbg}");
+    assert!(
+      dbg.contains("prevent_overflow"),
+      "prevent_overflow field missing: {dbg}"
+    );
     assert!(!dbg.trim().is_empty());
 
     let centered = WindowConfig::default();
     let wb2 = WindowBuilderWrapper::with_config(&centered);
     let dbg2 = format!("{wb2:?}");
-    assert!(dbg2.contains("center"), "second format run missing center: {dbg2}");
+    assert!(
+      dbg2.contains("center"),
+      "second format run missing center: {dbg2}"
+    );
   }
 }
 
@@ -6442,40 +6447,74 @@ mod mapping_tests {
   fn cursor_icon_wrapper_maps_all_variants() {
     let cases: Vec<(CursorIcon, fn(TaoCursorIcon) -> bool)> = vec![
       (CursorIcon::Default, |i| matches!(i, TaoCursorIcon::Default)),
-      (CursorIcon::Crosshair, |i| matches!(i, TaoCursorIcon::Crosshair)),
+      (CursorIcon::Crosshair, |i| {
+        matches!(i, TaoCursorIcon::Crosshair)
+      }),
       (CursorIcon::Hand, |i| matches!(i, TaoCursorIcon::Hand)),
       (CursorIcon::Arrow, |i| matches!(i, TaoCursorIcon::Arrow)),
       (CursorIcon::Move, |i| matches!(i, TaoCursorIcon::Move)),
       (CursorIcon::Text, |i| matches!(i, TaoCursorIcon::Text)),
       (CursorIcon::Wait, |i| matches!(i, TaoCursorIcon::Wait)),
       (CursorIcon::Help, |i| matches!(i, TaoCursorIcon::Help)),
-      (CursorIcon::Progress, |i| matches!(i, TaoCursorIcon::Progress)),
-      (CursorIcon::NotAllowed, |i| matches!(i, TaoCursorIcon::NotAllowed)),
-      (CursorIcon::ContextMenu, |i| matches!(i, TaoCursorIcon::ContextMenu)),
+      (CursorIcon::Progress, |i| {
+        matches!(i, TaoCursorIcon::Progress)
+      }),
+      (CursorIcon::NotAllowed, |i| {
+        matches!(i, TaoCursorIcon::NotAllowed)
+      }),
+      (CursorIcon::ContextMenu, |i| {
+        matches!(i, TaoCursorIcon::ContextMenu)
+      }),
       (CursorIcon::Cell, |i| matches!(i, TaoCursorIcon::Cell)),
-      (CursorIcon::VerticalText, |i| matches!(i, TaoCursorIcon::VerticalText)),
+      (CursorIcon::VerticalText, |i| {
+        matches!(i, TaoCursorIcon::VerticalText)
+      }),
       (CursorIcon::Alias, |i| matches!(i, TaoCursorIcon::Alias)),
       (CursorIcon::Copy, |i| matches!(i, TaoCursorIcon::Copy)),
       (CursorIcon::NoDrop, |i| matches!(i, TaoCursorIcon::NoDrop)),
       (CursorIcon::Grab, |i| matches!(i, TaoCursorIcon::Grab)),
-      (CursorIcon::Grabbing, |i| matches!(i, TaoCursorIcon::Grabbing)),
-      (CursorIcon::AllScroll, |i| matches!(i, TaoCursorIcon::AllScroll)),
+      (CursorIcon::Grabbing, |i| {
+        matches!(i, TaoCursorIcon::Grabbing)
+      }),
+      (CursorIcon::AllScroll, |i| {
+        matches!(i, TaoCursorIcon::AllScroll)
+      }),
       (CursorIcon::ZoomIn, |i| matches!(i, TaoCursorIcon::ZoomIn)),
       (CursorIcon::ZoomOut, |i| matches!(i, TaoCursorIcon::ZoomOut)),
       (CursorIcon::EResize, |i| matches!(i, TaoCursorIcon::EResize)),
       (CursorIcon::NResize, |i| matches!(i, TaoCursorIcon::NResize)),
-      (CursorIcon::NeResize, |i| matches!(i, TaoCursorIcon::NeResize)),
-      (CursorIcon::NwResize, |i| matches!(i, TaoCursorIcon::NwResize)),
+      (CursorIcon::NeResize, |i| {
+        matches!(i, TaoCursorIcon::NeResize)
+      }),
+      (CursorIcon::NwResize, |i| {
+        matches!(i, TaoCursorIcon::NwResize)
+      }),
       (CursorIcon::SResize, |i| matches!(i, TaoCursorIcon::SResize)),
-      (CursorIcon::SeResize, |i| matches!(i, TaoCursorIcon::SeResize)),
-      (CursorIcon::SwResize, |i| matches!(i, TaoCursorIcon::SwResize)),
+      (CursorIcon::SeResize, |i| {
+        matches!(i, TaoCursorIcon::SeResize)
+      }),
+      (CursorIcon::SwResize, |i| {
+        matches!(i, TaoCursorIcon::SwResize)
+      }),
       (CursorIcon::WResize, |i| matches!(i, TaoCursorIcon::WResize)),
-      (CursorIcon::EwResize, |i| matches!(i, TaoCursorIcon::EwResize)),
-      (CursorIcon::NsResize, |i| matches!(i, TaoCursorIcon::NsResize)),
-      (CursorIcon::NeswResize, |i| matches!(i, TaoCursorIcon::NeswResize)),
-      (CursorIcon::NwseResize, |i| matches!(i, TaoCursorIcon::NwseResize)),
-      (CursorIcon::ColResize, |i| matches!(i, TaoCursorIcon::ColResize)),
-      (CursorIcon::RowResize, |i| matches!(i, TaoCursorIcon::RowResize)),
+      (CursorIcon::EwResize, |i| {
+        matches!(i, TaoCursorIcon::EwResize)
+      }),
+      (CursorIcon::NsResize, |i| {
+        matches!(i, TaoCursorIcon::NsResize)
+      }),
+      (CursorIcon::NeswResize, |i| {
+        matches!(i, TaoCursorIcon::NeswResize)
+      }),
+      (CursorIcon::NwseResize, |i| {
+        matches!(i, TaoCursorIcon::NwseResize)
+      }),
+      (CursorIcon::ColResize, |i| {
+        matches!(i, TaoCursorIcon::ColResize)
+      }),
+      (CursorIcon::RowResize, |i| {
+        matches!(i, TaoCursorIcon::RowResize)
+      }),
     ];
     for (icon, check) in cases {
       let mapped = CursorIconWrapper::from(icon).0;
@@ -6492,15 +6531,28 @@ mod mapping_tests {
   #[test]
   fn progress_state_wrapper_maps_all_statuses() {
     let cases: Vec<(ProgressBarStatus, fn(TaoProgressState) -> bool)> = vec![
-      (ProgressBarStatus::None, |s| matches!(s, TaoProgressState::None)),
-      (ProgressBarStatus::Normal, |s| matches!(s, TaoProgressState::Normal)),
-      (ProgressBarStatus::Indeterminate, |s| matches!(s, TaoProgressState::Indeterminate)),
-      (ProgressBarStatus::Paused, |s| matches!(s, TaoProgressState::Paused)),
-      (ProgressBarStatus::Error, |s| matches!(s, TaoProgressState::Error)),
+      (ProgressBarStatus::None, |s| {
+        matches!(s, TaoProgressState::None)
+      }),
+      (ProgressBarStatus::Normal, |s| {
+        matches!(s, TaoProgressState::Normal)
+      }),
+      (ProgressBarStatus::Indeterminate, |s| {
+        matches!(s, TaoProgressState::Indeterminate)
+      }),
+      (ProgressBarStatus::Paused, |s| {
+        matches!(s, TaoProgressState::Paused)
+      }),
+      (ProgressBarStatus::Error, |s| {
+        matches!(s, TaoProgressState::Error)
+      }),
     ];
     for (status, check) in cases {
       let mapped = ProgressStateWrapper::from(status).0;
-      assert!(check(mapped), "ProgressState mapping mismatch for {status:?}");
+      assert!(
+        check(mapped),
+        "ProgressState mapping mismatch for {status:?}"
+      );
     }
   }
 

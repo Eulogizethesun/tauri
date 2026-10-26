@@ -2488,10 +2488,9 @@ tauri::Builder::default()
     {
       let config = app.config();
       if let Some(tray_config) = &config.app.tray_icon {
-        let mut tray = TrayIconBuilder::with_id(
-          tray_config.id.clone().unwrap_or_else(|| "main".into()),
-        )
-        .icon_as_template(tray_config.icon_as_template);
+        let mut tray =
+          TrayIconBuilder::with_id(tray_config.id.clone().unwrap_or_else(|| "main".into()))
+            .icon_as_template(tray_config.icon_as_template);
         // The menu-on-left-click config keys are unsupported on OHOS (see
         // tray-icon's build-time warnings for the builder methods), and the
         // config struct always materializes them from serde defaults —
@@ -2761,11 +2760,15 @@ mod tests {
     use tauri_runtime::window::DragDropEvent;
 
     assert!(matches!(
-      WindowEvent::from(RuntimeWindowEvent::Resized(PhysicalSize::new(640u32, 480u32))),
+      WindowEvent::from(RuntimeWindowEvent::Resized(PhysicalSize::new(
+        640u32, 480u32
+      ))),
       WindowEvent::Resized(_)
     ));
     assert!(matches!(
-      WindowEvent::from(RuntimeWindowEvent::Moved(PhysicalPosition::new(10i32, 20i32))),
+      WindowEvent::from(RuntimeWindowEvent::Moved(PhysicalPosition::new(
+        10i32, 20i32
+      ))),
       WindowEvent::Moved(_)
     ));
     {
@@ -2800,9 +2803,9 @@ mod tests {
         WindowEvent::DragDrop(_)
       ));
       assert!(matches!(
-        WebviewEvent::from(RuntimeWebviewEvent::DragDrop(
-          DragDropEvent::Over { position: PhysicalPosition::new(3.0, 4.0) }
-        )),
+        WebviewEvent::from(RuntimeWebviewEvent::DragDrop(DragDropEvent::Over {
+          position: PhysicalPosition::new(3.0, 4.0)
+        })),
         WebviewEvent::DragDrop(_)
       ));
     }

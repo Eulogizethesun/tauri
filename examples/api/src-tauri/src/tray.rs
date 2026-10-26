@@ -5,14 +5,14 @@
 #![cfg(all(desktop, not(test)))]
 
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_env = "ohos")]
+use tauri::tray::QuickOperationConfig;
 use tauri::{
   include_image,
   menu::{Menu, MenuItem},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   Emitter, EventTarget, Manager, Runtime, WebviewUrl,
 };
-#[cfg(target_env = "ohos")]
-use tauri::tray::QuickOperationConfig;
 
 #[cfg(target_env = "ohos")]
 #[tauri::command]

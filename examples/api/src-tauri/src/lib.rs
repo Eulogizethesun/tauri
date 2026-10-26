@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 mod cmd;
-mod probe_apis;
 #[cfg(desktop)]
 mod menu_plugin;
+mod probe_apis;
 #[cfg(desktop)]
 mod tray;
 
@@ -222,7 +222,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   {
     // IMMEDIATE marker + log to verify this cfg block is reached.
     log::info!("[cov-dump] cfg block entered");
-    let _ = std::fs::write("/data/storage/el2/base/cache/cov-immediate.txt", "reached\n");
+    let _ = std::fs::write(
+      "/data/storage/el2/base/cache/cov-immediate.txt",
+      "reached\n",
+    );
 
     extern "C" {
       fn __llvm_profile_set_filename(path: *const std::os::raw::c_char);
@@ -237,10 +240,16 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       std::thread::sleep(std::time::Duration::from_secs(3));
 
       // Write marker files to verify this code path is reached.
-      let r1 = std::fs::write("/data/storage/el2/base/cache/cov-marker.txt", "cov-dump reached\n");
+      let r1 = std::fs::write(
+        "/data/storage/el2/base/cache/cov-marker.txt",
+        "cov-dump reached\n",
+      );
       log::info!("[cov-dump] marker write r1={:?}", r1);
 
-      let r2 = std::fs::write("/data/app/el2/100/base/com.tauri.api/cache/cov-marker.txt", "cov-dump reached\n");
+      let r2 = std::fs::write(
+        "/data/app/el2/100/base/com.tauri.api/cache/cov-marker.txt",
+        "cov-dump reached\n",
+      );
       log::info!("[cov-dump] marker write r2={:?}", r2);
 
       let path = b"/data/storage/el2/base/cache/cov-app-%m-%p.profraw\0";
@@ -1013,7 +1022,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
           }
           "MainEventsCleared"
         }
-        RunEvent::ExitRequested { code, api: _api, .. } => {
+        RunEvent::ExitRequested {
+          code, api: _api, ..
+        } => {
           log::info!("[RunEvent] ExitRequested, code={:?}", code);
           // App-level confirm-on-exit — only for implicit exits (code is
           // None, e.g. system close / all-windows-closed). Explicit exit
@@ -1032,26 +1043,33 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
               log::error!("[RunEvent] confirm-exit-requested emit failed: {e}");
             }
           }
-          if code.is_some() { "ExitRequested(code)" } else { "ExitRequested" }
+          if code.is_some() {
+            "ExitRequested(code)"
+          } else {
+            "ExitRequested"
+          }
         }
         RunEvent::Exit => {
           log::info!("[RunEvent] Exit");
           "Exit"
         }
-        RunEvent::WindowEvent { label, event, .. } => {
-          match event {
-            tauri::WindowEvent::CloseRequested { .. } => {
-              log::info!("[RunEvent] WindowEvent::CloseRequested, label={}", label);
-              "WindowEvent::CloseRequested"
-            }
-            tauri::WindowEvent::Destroyed => {
-              log::info!("[RunEvent] WindowEvent::Destroyed, label={}", label);
-              "WindowEvent::Destroyed"
-            }
-            _ => "",
+        RunEvent::WindowEvent { label, event, .. } => match event {
+          tauri::WindowEvent::CloseRequested { .. } => {
+            log::info!("[RunEvent] WindowEvent::CloseRequested, label={}", label);
+            "WindowEvent::CloseRequested"
           }
-        }
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+          tauri::WindowEvent::Destroyed => {
+            log::info!("[RunEvent] WindowEvent::Destroyed, label={}", label);
+            "WindowEvent::Destroyed"
+          }
+          _ => "",
+        },
+        #[cfg(any(
+          target_os = "macos",
+          target_os = "ios",
+          target_os = "android",
+          target_env = "ohos"
+        ))]
         RunEvent::Opened { urls } => {
           log::info!("[RunEvent] Opened, urls={:?}", urls);
           "Opened"
@@ -1061,7 +1079,11 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         _ => "",
       };
       if !event_name.is_empty() {
-        tracker.run_events.lock().unwrap().push(event_name.to_string());
+        tracker
+          .run_events
+          .lock()
+          .unwrap()
+          .push(event_name.to_string());
       }
     }
 
@@ -1127,7 +1149,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         .build()
         .unwrap();
       }
-      #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+      #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_env = "ohos"
+      ))]
       RunEvent::Opened { urls } => {
         log::info!("opened urls: {:?}", urls);
       }

@@ -25,9 +25,9 @@ pub use tauri_macros::ohos_entry_point as entry_point;
 /// Converged from a blanket `pub use openharmony_ability;` to an explicit list
 /// so the coupling surface is visible and auditable.
 pub mod openharmony_ability {
-  pub use ::openharmony_ability::OpenHarmonyApp;
   pub use ::openharmony_ability::get_main_thread_env;
   pub use ::openharmony_ability::version;
+  pub use ::openharmony_ability::OpenHarmonyApp;
 }
 
 pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(None);
@@ -69,11 +69,9 @@ pub static RUN_COMMAND_QUEUE: Mutex<VecDeque<RunCommandArgs>> = Mutex::new(VecDe
 /// the app instance is missing — `mobile_entry_point!` must run first to
 /// install it.
 pub fn init() -> openharmony_ability::OpenHarmonyApp {
-  let ohos_app = APP
-    .lock()
-    .unwrap()
-    .clone()
-    .expect("OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build");
+  let ohos_app = APP.lock().unwrap().clone().expect(
+    "OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build",
+  );
   BASE_PATH.set(ohos_app.base_path()).ok();
   MODULE_NAME.set(ohos_app.module_name()).ok();
   #[cfg(feature = "tray-icon")]

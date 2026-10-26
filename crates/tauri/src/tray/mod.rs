@@ -643,8 +643,7 @@ impl<R: Runtime> TrayIcon<R> {
 
   /// Show or hide this tray icon.
   pub fn set_visible(&self, visible: bool) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?
-      .map_err(Into::into)
+    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?.map_err(Into::into)
   }
 
   /// Sets the tray icon temp dir path. **Linux only**.

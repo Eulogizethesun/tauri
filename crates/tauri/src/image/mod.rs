@@ -331,7 +331,10 @@ impl<'de> serde::Deserialize<'de> for JsImage {
         // extract the rid on the JS side.
         if let Some(rid) = rid {
           if rgba.is_some() {
-            log::debug!("JsImage::visit_map: both rid and rgba present, using rid={}", rid);
+            log::debug!(
+              "JsImage::visit_map: both rid and rgba present, using rid={}",
+              rid
+            );
           }
           return Ok(JsImage::Resource(rid));
         }
@@ -365,10 +368,7 @@ impl<'de> serde::Deserialize<'de> for JsImage {
 
 /// Decodes a base64 string into bytes (strict mode: invalid characters,
 /// misplaced padding and truncated trailing groups are rejected).
-#[cfg(all(
-  target_env = "ohos",
-  any(feature = "image-ico", feature = "image-png")
-))]
+#[cfg(all(target_env = "ohos", any(feature = "image-ico", feature = "image-png")))]
 fn decode_base64(input: &str) -> Option<Vec<u8>> {
   use base64::engine::general_purpose::STANDARD;
   use base64::Engine;
@@ -388,17 +388,13 @@ impl JsImage {
       Self::DataUri(uri) => {
         #[cfg(any(feature = "image-ico", feature = "image-png"))]
         {
-          let base64_data = uri
-            .find(',')
-            .map(|pos| &uri[pos + 1..])
-            .unwrap_or(&uri);
-          let bytes = decode_base64(base64_data)
-            .ok_or_else(|| {
-              std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "invalid base64 data in data URI",
-              )
-            })?;
+          let base64_data = uri.find(',').map(|pos| &uri[pos + 1..]).unwrap_or(&uri);
+          let bytes = decode_base64(base64_data).ok_or_else(|| {
+            std::io::Error::new(
+              std::io::ErrorKind::InvalidInput,
+              "invalid base64 data in data URI",
+            )
+          })?;
           Image::from_bytes(&bytes).map(Arc::new)
         }
         #[cfg(not(any(feature = "image-ico", feature = "image-png")))]
