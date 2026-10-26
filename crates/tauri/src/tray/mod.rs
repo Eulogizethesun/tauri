@@ -801,6 +801,7 @@ mod tests {
 
   #[test]
   fn tray_icon_event_from_fallback_no_panic() {
+    use super::*;
     let tray_event = tray_icon::TrayIconEvent::Click {
       id: tray_icon::TrayIconId::new("test"),
       position: tray_icon::dpi::PhysicalPosition::new(10.0, 20.0),

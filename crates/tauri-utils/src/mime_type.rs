@@ -9,19 +9,30 @@ use std::fmt;
 const MIMETYPE_PLAIN: &str = "text/plain";
 
 /// [Web Compatible MimeTypes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types#important_mime_types_for_web_developers)
-#[allow(missing_docs)]
 pub enum MimeType {
+  /// Cascading Style Sheets (`text/css`).
   Css,
+  /// Comma-separated values (`text/csv`).
   Csv,
+  /// HyperText Markup Language (`text/html`).
   Html,
+  /// Microsoft icon image (`image/vnd.microsoft.icon`).
   Ico,
+  /// JavaScript (`text/javascript`).
   Js,
+  /// JSON payload (`application/json`).
   Json,
+  /// JSON-LD linked data (`application/ld+json`).
   Jsonld,
+  /// MPEG-4 video (`video/mp4`).
   Mp4,
+  /// Unknown binary content (`application/octet-stream`).
   OctetStream,
+  /// Rich Text Format (`application/rtf`).
   Rtf,
+  /// Scalable Vector Graphics (`image/svg+xml`).
   Svg,
+  /// Plain text (`text/plain`).
   Txt,
 }
 
