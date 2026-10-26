@@ -733,7 +733,10 @@ export const windowOpsTests: TestCase[] = [
       const win = getCurrentWindow();
       const api = await ohosSdkApiVersion();
       // Issue #238: on OHOS the UIAbility main window's three decoration
-      // buttons are OS-managed (@ohos.window has no per-button control API),
+      // buttons are OS-managed (@ohos.window has no API for these
+      // operation-level flags: per-button visibility via
+      // setWindowTitleButtonVisible (API 14+) and style injection via
+      // setDecorButtonStyle exist, but neither disables the operations),
       // so the setters reject at the dispatcher. On other platforms they
       // succeed; set false then restore true so the desktop state is clean.
       if (api === null) {

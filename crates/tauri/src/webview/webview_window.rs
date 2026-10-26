@@ -2010,9 +2010,11 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
   /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
-  ///   are OS-managed (`@ohos.window` has no per-button control API), so
-  ///   calling this on the main window returns an
-  ///   [`crate::Error::NotSupported`] error (issue
+  ///   are OS-managed (`@ohos.window` has no API for these operation-level
+  ///   flags: per-button visibility via `setWindowTitleButtonVisible` (API
+  ///   14+) and style injection via `setDecorButtonStyle` exist, but neither
+  ///   disables the operations themselves), so calling this on the main
+  ///   window returns an [`crate::Error::NotSupported`] error (issue
   ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind)
   ///   support the flag.
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {

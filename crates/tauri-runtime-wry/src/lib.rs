@@ -2469,8 +2469,11 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     #[cfg(target_env = "ohos")]
     {
       // Issue Eulogizethesun/tauri#238: the UIAbility main window's three
-      // decoration buttons are OS-managed (@ohos.window has no per-button
-      // control API) — fail at the dispatcher so the caller sees the Err
+      // decoration buttons are OS-managed (@ohos.window has no API for these
+      // operation-level flags: per-button visibility via
+      // setWindowTitleButtonVisible (API 14+) and style injection via
+      // setDecorButtonStyle exist, but neither disables the operations) —
+      // fail at the dispatcher so the caller sees the Err
       // (the message handlers discard tao Results; tao only log::errors).
       // Sub-windows dispatch normally: the flags drive their buttons.
       if self.is_ui_ability_main {
