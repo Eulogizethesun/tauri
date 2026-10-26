@@ -68,4 +68,25 @@ ignore = [
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",
+  # --- 2026-10-26 second DB refresh (same policy as above): zstd family
+  # surfaced by the advisory-db update. Chain: zstd 0.13.3 <- zstd-safe
+  # 7.3.0 <- zstd-sys 2.1.0 <- rpm 0.16.1 <- tauri-bundler <- tauri-cli
+  # (Linux RPM packaging path only; not reached by the OHOS/Windows/macOS
+  # bundles this fork ships). Patched releases are semver-compatible
+  # (zstd >= 0.13.5, zstd-safe >= 7.3.1, zstd-sys >= 2.1.1) and
+  # `cargo update -p` was attempted, but the sparse index mirror stalls
+  # with 0-byte timeouts during the evening network window; retry the
+  # update on a working mirror and drop these entries. ---
+  # zstd 0.13.3: data from an abandoned stream leaks into the next stream
+  # on a reused context
+  "RUSTSEC-2026-0391",
+  # zstd-safe 7.3.0: Seekable::decompress sets a Vec length beyond its
+  # capacity for offsets past the end
+  "RUSTSEC-2026-0398",
+  # zstd-safe 7.3.0: uninitialized memory exposed when streaming
+  # decompression of a legacy frame fails
+  "RUSTSEC-2026-0403",
+  # zstd-sys 2.1.0: WebAssembly allocator shim corrupts memory on
+  # allocation failure
+  "RUSTSEC-2026-0410",
 ]
