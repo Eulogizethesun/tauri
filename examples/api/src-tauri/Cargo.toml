@@ -123,11 +123,3 @@ cov-dump = []
 # Fault injection commands (OHOS only). Enables invoke('fault_injection_set_rule')
 # and invoke('fault_injection_clear') to inject bridge call failures for coverage.
 fault-injection = ["openharmony-ability/fault-injection"]
-
-[profile.release]
-# Enable debug info (most important for OHOS panic/crash debugging)
-debug = true
-
-# Optional: preserve line numbers and variable names for gdb/lldb/backtrace
-strip = false
-opt-level = 0  # Disable optimization for clearest debug experience

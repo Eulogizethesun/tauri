@@ -34,8 +34,3 @@ features = ["unstable"]
 prod = ["tauri/custom-protocol"]
 devtools = ["tauri/devtools"]
 
-[profile.release]
-# Enable debug info for OHOS panic/crash debugging
-debug = true
-strip = false
-opt-level = 0
