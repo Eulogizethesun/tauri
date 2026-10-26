@@ -16,7 +16,7 @@
 //! - **dbus** *(enabled by default)*: Enables dbus dependency for theme support on Linux. Disable this if you do not need theme support or don't want to build the dbus rust crate. The WebView dependencies use dbus either way.
 //! - **unstable**: Enables unstable features. Be careful, it might introduce breaking changes in future minor releases.
 //! - **tracing**: Enables [`tracing`](https://docs.rs/tracing/latest/tracing) for window startup, plugins, `Window::eval`, events, IPC, updater and custom protocol request handlers.
-//! - **test**: Enables the [`mod@test`] module exposing unit test helpers.
+//! - **test**: Enables the `test` module exposing unit test helpers.
 //! - **objc-exception**: This feature flag is no-op since 2.3.0.
 //! - **linux-libxdo**: Enables linking to libxdo which enables Cut, Copy, Paste and SelectAll menu items to work on Linux.
 //! - **isolation**: Enables the isolation pattern. Enabled by default if the `app > security > pattern > use` config option is set to `isolation` on the `tauri.conf.json` file.
@@ -33,8 +33,8 @@
 //! - **compression** *(enabled by default): Enables asset compression. You should only disable this if you want faster compile times in release builds - it produces larger binaries.
 //! - **config-json5**: Adds support to JSON5 format for `tauri.conf.json`.
 //! - **config-toml**: Adds support to TOML format for the configuration `Tauri.toml`.
-//! - **image-ico**: Adds support to parse `.ico` image, see [`Image`].
-//! - **image-png**: Adds support to parse `.png` image, see [`Image`].
+//! - **image-ico**: Adds support to parse `.ico` image, see `Image`.
+//! - **image-png**: Adds support to parse `.png` image, see `Image`.
 //! - **macos-proxy**: Adds support for [`WebviewBuilder::proxy_url`] on macOS. Requires macOS 14+.
 //! - **specta**: Add support for [`specta::specta`](https://docs.rs/specta/%5E2.0.0-rc.9/specta/attr.specta.html) with Tauri arguments such as [`State`](crate::State), [`Window`](crate::Window) and [`AppHandle`](crate::AppHandle)
 //! - **dynamic-acl** *(enabled by default)*: Enables you to add ACLs at runtime, notably it enables the [`Manager::add_capability`] function.

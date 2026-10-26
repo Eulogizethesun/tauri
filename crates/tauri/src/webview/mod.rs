@@ -257,9 +257,9 @@ pub enum NewWindowResponse<R: Runtime> {
   ///
   /// ## Platform-specific:
   ///
-  /// **Linux**: The webview must be related to the caller webview. See [`WebviewBuilder::related_view`].
-  /// **Windows**: The webview must use the same environment as the caller webview. See [`WebviewBuilder::environment`].
-  /// **macOS**: The webview must use the same webview configuration as the caller webview. See [`WebviewBuilder::with_webview_configuration`] and [`NewWindowFeatures::webview_configuration`].
+  /// **Linux**: The webview must be related to the caller webview. See `WebviewBuilder::related_view`.
+  /// **Windows**: The webview must use the same environment as the caller webview. See `WebviewBuilder::environment`.
+  /// **macOS**: The webview must use the same webview configuration as the caller webview. See `WebviewBuilder::with_webview_configuration` and `NewWindowFeatures::webview_configuration`.
   Create {
     /// Window that was created.
     window: crate::WebviewWindow<R>,

@@ -945,7 +945,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// - **OpenHarmony:** Ignored at creation time — the platform backend does
   ///   not consume a `visible: false` attribute during window creation
   ///   (committer #168); windows are created visible. Toggle visibility with
-  ///   [`Window::set_visible`](crate::window::Window::set_visible) after
+  ///   `Window::set_visible` after
   ///   creation instead.
   #[must_use]
   pub fn visible(mut self, visible: bool) -> Self {
@@ -1933,7 +1933,7 @@ impl<R: Runtime> Window<R> {
     self.window.dispatcher.hide().map_err(Into::into)
   }
 
-  /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
+  /// Closes this window. It emits `WindowEvent::CloseRequested` first like a user-initiated close request so you can intercept it.
   ///
   /// ## Platform-specific
   ///
@@ -1942,7 +1942,7 @@ impl<R: Runtime> Window<R> {
   ///   requests through the Web `onWindowExit` event, which the framework
   ///   only registers for script-opened new-window dialogs (`window.open`
   ///   targets). This API (and the JS `getCurrentWindow().close()`) does emit
-  ///   [`crate::RunEvent::CloseRequested`] and honors `prevent_close`.
+  ///   `WindowEvent::CloseRequested` and honors `prevent_close`.
   pub fn close(&self) -> crate::Result<()> {
     self.window.dispatcher.close().map_err(Into::into)
   }
@@ -1952,7 +1952,7 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** like on desktop, `destroy` skips
-  ///   [`crate::RunEvent::CloseRequested`] and tears the window down
+  ///   `WindowEvent::CloseRequested` and tears the window down
   ///   directly. For the main window only the Rust-side lifecycle runs — the
   ///   OS-level ability window is system-managed and an in-app destroy is
   ///   rejected by the bridge (only sub-windows are destroyed OS-level).

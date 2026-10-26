@@ -14,49 +14,88 @@ const MACOS_APP_CATEGORY_PREFIX: &str = "public.app-category.";
 // that don't fit these; we should add those here too.
 /// The possible app categories.
 /// Corresponds to `LSApplicationCategoryType` on macOS and the GNOME desktop categories on Debian.
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AppCategory {
+  /// General business applications.
   Business,
+  /// Developer tools.
   DeveloperTool,
+  /// Educational applications.
   Education,
+  /// Entertainment applications.
   Entertainment,
+  /// Finance applications.
   Finance,
+  /// Games.
   Game,
+  /// Action games.
   ActionGame,
+  /// Adventure games.
   AdventureGame,
+  /// Arcade games.
   ArcadeGame,
+  /// Board games.
   BoardGame,
+  /// Card games.
   CardGame,
+  /// Casino games.
   CasinoGame,
+  /// Dice games.
   DiceGame,
+  /// Educational games.
   EducationalGame,
+  /// Family games.
   FamilyGame,
+  /// Games for children.
   KidsGame,
+  /// Music games.
   MusicGame,
+  /// Puzzle games.
   PuzzleGame,
+  /// Racing games.
   RacingGame,
+  /// Role playing games.
   RolePlayingGame,
+  /// Simulation games.
   SimulationGame,
+  /// Sports games.
   SportsGame,
+  /// Strategy games.
   StrategyGame,
+  /// Trivia games.
   TriviaGame,
+  /// Word games.
   WordGame,
+  /// Graphics and design applications.
   GraphicsAndDesign,
+  /// Healthcare and fitness applications.
   HealthcareAndFitness,
+  /// Lifestyle applications.
   Lifestyle,
+  /// Medical applications.
   Medical,
+  /// Music applications.
   Music,
+  /// News applications.
   News,
+  /// Photography applications.
   Photography,
+  /// Productivity applications.
   Productivity,
+  /// Reference applications.
   Reference,
+  /// Social networking applications.
   SocialNetworking,
+  /// Sports applications.
   Sports,
+  /// Travel applications.
   Travel,
+  /// Utility applications.
   Utility,
+  /// Video applications.
   Video,
+  /// Weather applications.
   Weather,
 }
 

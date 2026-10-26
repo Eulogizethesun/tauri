@@ -50,7 +50,7 @@ impl CachedIcon {
     })
   }
 
-  /// Cache an ICO icon as RGBA data, see [`ImageFormat::Image`].
+  /// Cache an ICO icon as RGBA data, see `ImageFormat::Image`.
   pub fn new_ico(root: &TokenStream, icon: &Path) -> EmbeddedAssetsResult<Self> {
     let buf = Self::open(icon);
 
@@ -74,7 +74,7 @@ impl CachedIcon {
     })
   }
 
-  /// Cache a PNG icon as RGBA data, see [`ImageFormat::Image`].
+  /// Cache a PNG icon as RGBA data, see `ImageFormat::Image`.
   pub fn new_png(root: &TokenStream, icon: &Path) -> EmbeddedAssetsResult<Self> {
     let buf = Self::open(icon);
     let decoder = png::Decoder::new(Cursor::new(&buf));

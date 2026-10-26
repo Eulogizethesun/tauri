@@ -923,9 +923,9 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// ## Platform-specific
   ///
   /// - **Windows:** scripts are always added to subframes.
-  /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+  /// - **Android:** When `addDocumentStartJavaScript` is not supported,
   ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
-  ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+  ///   For remote URLs, we use `onPageStarted` which is not guaranteed to run before other scripts.
   ///
   /// # Examples
   ///
@@ -965,9 +965,9 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///
   /// ## Platform-specific
   ///
-  /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+  /// - **Android:** When `addDocumentStartJavaScript` is not supported,
   ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
-  ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+  ///   For remote URLs, we use `onPageStarted` which is not guaranteed to run before other scripts.
   ///
   /// # Examples
   ///
@@ -2020,7 +2020,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   flags: per-button visibility via `setWindowTitleButtonVisible` (API
   ///   14+) and style injection via `setDecorButtonStyle` exist, but neither
   ///   disables the operations themselves), so calling this on the main
-  ///   window returns an [`crate::Error::NotSupported`] error (issue
+  ///   window returns an `NotSupported` error (issue
   ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind)
   ///   support the flag.
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
@@ -2034,7 +2034,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **Linux / iOS / Android:** Unsupported.
   /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
   ///   OS-managed, so calling this on the main window returns an
-  ///   [`crate::Error::NotSupported`] error (issue
+  ///   `NotSupported` error (issue
   ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self.window.set_minimizable(minimizable)
@@ -2049,7 +2049,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **iOS / Android:** Unsupported.
   /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
   ///   OS-managed, so calling this on the main window returns an
-  ///   [`crate::Error::NotSupported`] error (issue
+  ///   `NotSupported` error (issue
   ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self.window.set_closable(closable)
@@ -2308,7 +2308,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **OpenHarmony:** hiding windows is not supported — the `@ohos.window`
   ///   API set has no window-level hide method, so this call returns an
-  ///   [`crate::Error::NotSupported`] error naming OpenHarmony instead of
+  ///   `NotSupported` error naming OpenHarmony instead of
   ///   degrading to a taskbar minimize (issue Eulogizethesun/tauri#237). Use
   ///   [`Self::minimize`] for taskbar minimization; a real hide returns with
   ///   the A1 `hide_ability` entitlement.
@@ -2316,7 +2316,7 @@ impl<R: Runtime> WebviewWindow<R> {
     self.window.hide()
   }
 
-  /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
+  /// Closes this window. It emits `WindowEvent::CloseRequested` first like a user-initiated close request so you can intercept it.
   ///
   /// ## Platform-specific
   ///
@@ -2325,7 +2325,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   requests through the Web `onWindowExit` event, which the framework
   ///   only registers for script-opened new-window dialogs (`window.open`
   ///   targets). This API (and the JS `getCurrentWindow().close()`) does emit
-  ///   [`crate::RunEvent::CloseRequested`] and honors `prevent_close`.
+  ///   `WindowEvent::CloseRequested` and honors `prevent_close`.
   pub fn close(&self) -> crate::Result<()> {
     self.window.close()
   }
@@ -2335,7 +2335,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** like on desktop, `destroy` skips
-  ///   [`crate::RunEvent::CloseRequested`] and tears the window down
+  ///   `WindowEvent::CloseRequested` and tears the window down
   ///   directly. For the main window only the Rust-side lifecycle runs — the
   ///   OS-level ability window is system-managed and an in-app destroy is
   ///   rejected by the bridge (only sub-windows are destroyed OS-level).

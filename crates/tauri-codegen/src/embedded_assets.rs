@@ -92,7 +92,7 @@ pub type EmbeddedAssetsResult<T> = Result<T, EmbeddedAssetsError>;
 
 /// Represent a directory of assets that are compressed and embedded.
 ///
-/// This is the compile time generation of [`tauri_utils::assets::Assets`] from a directory. Assets
+/// This is the compile time generation of `tauri_utils::assets::Assets` from a directory. Assets
 /// from the directory are added as compiler dependencies by dummy including the original,
 /// uncompressed assets.
 ///
@@ -275,9 +275,7 @@ impl AssetOptions {
 }
 
 impl EmbeddedAssets {
-  /// Compress a collection of files and directories, ready to be generated into [`Assets`].
-  ///
-  /// [`Assets`]: tauri_utils::assets::Assets
+  /// Compress a collection of files and directories, ready to be generated into `Assets`.
   pub fn new(
     input: impl Into<EmbeddedAssetsInput>,
     options: &AssetOptions,
