@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! macOS code signing and notarization helpers used by the bundler.
+
 use std::{
   ffi::{OsStr, OsString},
   path::{Path, PathBuf},
