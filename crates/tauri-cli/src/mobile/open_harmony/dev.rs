@@ -212,7 +212,7 @@ fn run_command(options: Options, noise_level: NoiseLevel, dirs: Dirs) -> Result<
     false,
   )?;
 
-  let plugin_metadata = plugins::inject_plugins(&dirs.tauri, &config.project_dir())?;
+  let plugin_metadata = plugins::inject_plugins(dirs.tauri, &config.project_dir())?;
 
   run_dev(
     interface,

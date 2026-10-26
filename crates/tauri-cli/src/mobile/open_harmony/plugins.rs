@@ -786,9 +786,9 @@ pub fn update_entry_package(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
   for plugin in plugins {
     if !dependencies.contains_key(&plugin.identifier) {
       log::info!(
-        "Adding dependency '{}' -> '{}'",
+        "Adding dependency '{}' -> 'file:../{}'",
         plugin.identifier,
-        format!("file:../{}", plugin.name)
+        plugin.name
       );
 
       dependencies.insert(
@@ -1016,14 +1016,12 @@ fn sync_bridge_plugin_factories(lines: &mut Vec<String>, entry_module: &str) {
 
   // Insert factory lines (higher index) before import lines (lower index) so
   // neither insertion point shifts while the other is still in use.
-  let mut factory_at = array_close;
-  for (_, factory, _) in &missing {
+  for (offset, (_, factory, _)) in missing.iter().enumerate() {
     log::info!("Adding EntryAbility bridgePlugins entry for '{factory}'");
     lines.insert(
-      factory_at,
+      array_close + offset,
       format!("    new LazyPlugin(() => new {factory}()),"),
     );
-    factory_at += 1;
   }
 
   let mut import_at = import_close;
@@ -1162,16 +1160,21 @@ fn serialize_json5(value: &Value) -> Result<String> {
       let trimmed = line.trim();
       let next_trimmed = lines.get(idx + 1).map(|l| l.trim()).unwrap_or("");
 
-      if trimmed.is_empty() || trimmed.starts_with("//") {
-        line.to_string()
-      } else if next_trimmed.starts_with("}") || next_trimmed.starts_with("]") {
-        line.to_string()
-      } else if trimmed.ends_with("{") || trimmed.ends_with("[") || trimmed.ends_with(",") {
-        line.to_string()
-      } else if trimmed.ends_with("}") || trimmed.ends_with("]") {
+      // Lines that already end with a separator, open a nested block, or are
+      // immediately followed by a closing bracket must not gain a comma.
+      if trimmed.is_empty()
+        || trimmed.starts_with("//")
+        || next_trimmed.starts_with("}")
+        || next_trimmed.starts_with("]")
+        || trimmed.ends_with('{')
+        || trimmed.ends_with('[')
+        || trimmed.ends_with(',')
+        || trimmed.ends_with('}')
+        || trimmed.ends_with(']')
+      {
         line.to_string()
       } else {
-        format!("{}{}", line, ",")
+        format!("{line},")
       }
     })
     .collect::<Vec<_>>()

@@ -182,7 +182,7 @@ fn install_launch_and_log(options: &Options) -> Result<Box<dyn DevProcess + Send
         .contains("-signed")
     })
     .filter(|p| p.exists())
-    .map(|p| p.clone())
+    .cloned()
     .context(
       "no signed HAP found at the expected output path. Signing is not configured, \
        and an unsigned HAP cannot be installed on a device. Set the OHOS signing \
