@@ -7,11 +7,14 @@ use std::{ffi::OsStr, path::PathBuf, process::Command};
 use crate::{Error, Result};
 use rand::distr::{Alphanumeric, SampleString};
 
+/// A provisioning profile installed under the current user's profiles folder.
 pub struct ProvisioningProfile {
   path: PathBuf,
 }
 
 impl ProvisioningProfile {
+  /// Installs a provisioning profile from its base64-encoded content and
+  /// returns a handle to the installed file.
   pub fn from_base64(base64: &OsStr) -> Result<Self> {
     let home_dir = dirs::home_dir().ok_or(Error::ResolveHomeDir)?;
     let provisioning_profiles_folder = home_dir
@@ -35,6 +38,7 @@ impl ProvisioningProfile {
     })
   }
 
+  /// Returns the UUID of the provisioning profile.
   pub fn uuid(&self) -> Result<String> {
     let output = Command::new("security")
       .args(["cms", "-D", "-i"])

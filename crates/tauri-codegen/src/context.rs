@@ -32,9 +32,13 @@ use tauri_utils::{
 
 /// Necessary data needed by [`context_codegen`] to generate code for a Tauri application context.
 pub struct ContextData {
+  /// Whether the application is being built in dev mode.
   pub dev: bool,
+  /// The Tauri configuration.
   pub config: Config,
+  /// The parent directory of the configuration file.
   pub config_parent: PathBuf,
+  /// The root token stream the generated code is appended to.
   pub root: TokenStream,
   /// Additional capabilities to include.
   pub capabilities: Option<Vec<PathBuf>>,

@@ -19,6 +19,7 @@ pub(crate) enum IconFormat {
   Image { width: u32, height: u32 },
 }
 
+/// An icon that has been parsed and cached in its final codegen representation.
 pub struct CachedIcon {
   cache: Cached,
   format: IconFormat,
@@ -26,6 +27,8 @@ pub struct CachedIcon {
 }
 
 impl CachedIcon {
+  /// Creates a cached icon from the given icon path, inferring the format
+  /// (`png` or `ico`) from the file extension.
   pub fn new(root: &TokenStream, icon: &Path) -> EmbeddedAssetsResult<Self> {
     match icon.extension().map(OsStr::to_string_lossy).as_deref() {
       Some("png") => Self::new_png(root, icon),

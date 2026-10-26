@@ -24,7 +24,9 @@ use tauri_utils::platform::Target;
 use tauri_utils::write_if_changed;
 
 mod context;
+/// Codegen context types shared between the codegen steps.
 pub mod embedded_assets;
+/// Icon image handling for the codegen steps.
 pub mod image;
 #[doc(hidden)]
 pub mod vendor;
@@ -33,19 +35,24 @@ pub mod vendor;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CodegenConfigError {
+  /// Failed to access the current working directory.
   #[error("unable to access current working directory: {0}")]
   CurrentDir(std::io::Error),
 
   // this error should be "impossible" because we use std::env::current_dir() - cover it anyways
+  /// The config file path has no parent directory.
   #[error("Tauri config file has no parent, this shouldn't be possible. file an issue on https://github.com/tauri-apps/tauri - target {0}")]
   Parent(PathBuf),
 
+  /// Failed to parse the inline JSON in the `TAURI_CONFIG` environment variable.
   #[error("unable to parse inline JSON TAURI_CONFIG env var: {0}")]
   FormatInline(serde_json::Error),
 
+  /// Failed to deserialize the configuration JSON.
   #[error(transparent)]
   Json(#[from] serde_json::Error),
 
+  /// A configuration parsing error.
   #[error("{0}")]
   ConfigError(#[from] ConfigError),
 }

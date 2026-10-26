@@ -422,6 +422,7 @@ impl Attributes {
   }
 }
 
+/// Returns `true` if the current build is a dev build (as instructed by the tauri cargo dependency hook).
 pub fn is_dev() -> bool {
   env::var_os("DEP_TAURI_DEV")
     .expect("missing `cargo:dev` instruction, please update tauri to latest")

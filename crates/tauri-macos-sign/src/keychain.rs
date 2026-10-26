@@ -15,11 +15,16 @@ mod identity;
 
 pub use identity::Team;
 
-pub enum SigningIdentity {
+/// The signing identity to use when codesigning, either a team resolved from
+/// a certificate or a raw identity identifier.
+enum SigningIdentity {
+  /// A team resolved from a signing certificate.
   Team(Team),
+  /// A raw signing identity identifier (certificate common name or hash).
   Identifier(String),
 }
 
+/// An ephemeral macOS keychain holding the signing certificate.
 pub struct Keychain {
   // none means the default keychain must be used
   path: Option<PathBuf>,
@@ -62,6 +67,7 @@ impl Keychain {
     Self::with_certificate_file(&cert_path, certificate_password)
   }
 
+  /// Creates a keychain by importing the given certificate file (`.p12`).
   pub fn with_certificate_file(cert_path: &Path, certificate_password: &OsString) -> Result<Self> {
     let home_dir = dirs::home_dir().ok_or(Error::ResolveHomeDir)?;
     let keychain_path = home_dir.join("Library").join("Keychains").join(format!(
@@ -190,6 +196,7 @@ impl Keychain {
     })
   }
 
+  /// Returns the name of the signing identity to pass to `codesign`.
   pub fn signing_identity(&self) -> String {
     match &self.signing_identity {
       SigningIdentity::Team(t) => t.certificate_name(),
@@ -197,6 +204,8 @@ impl Keychain {
     }
   }
 
+  /// Returns the team id the keychain signs for, if the signing identity
+  /// was resolved from a certificate.
   pub fn team_id(&self) -> Option<&str> {
     match &self.signing_identity {
       SigningIdentity::Team(t) => Some(&t.id),
@@ -204,6 +213,7 @@ impl Keychain {
     }
   }
 
+  /// Signs the file at the given path using the keychain signing identity.
   pub fn sign(
     &self,
     path: &Path,
@@ -248,6 +258,8 @@ impl Keychain {
     Ok(())
   }
 
+  /// Returns the path of the ephemeral keychain, or `None` if the default
+  /// keychain is used.
   pub fn path(&self) -> Option<&Path> {
     self.path.as_deref()
   }
