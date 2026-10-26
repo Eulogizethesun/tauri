@@ -267,7 +267,7 @@ pub struct WindowIdStore(Arc<Mutex<HashMap<TaoWindowId, WindowId>>>);
 
 impl WindowIdStore {
   pub fn insert(&self, w: TaoWindowId, id: WindowId) {
-    // On OHOS, WindowId carries the real OHOS window id (0=main, >0=Float
+    // On OHOS, WindowId carries the real OHOS window id (0=main, >0=SubWindow
     // sub-window), so keys are distinct per window. or_insert only guards
     // against an accidental double-insert of the same window.
     #[cfg(target_env = "ohos")]
@@ -460,7 +460,7 @@ impl<T: UserEvent> Context<T> {
 
     // OHOS: wait for the creation outcome so a failed window creation
     // propagates as an Err to `WebviewWindowBuilder::build` (e.g. tao
-    // rejecting an explicit Float kind for the first window) instead of
+    // rejecting an explicit SubWindow kind for the first window) instead of
     // resolving Ok and registering a label-only zombie window in the
     // manager. Main-thread callers are handled inline by
     // `send_user_message` (the reply is already queued when it returns);
@@ -4668,7 +4668,7 @@ fn handle_user_message<T: UserEvent>(
     }
     #[cfg(target_env = "ohos")]
     // OHOS: reply with the creation outcome so `Context::create_window` can
-    // propagate a failure (e.g. tao rejecting an explicit Float kind for the
+    // propagate a failure (e.g. tao rejecting an explicit SubWindow kind for the
     // first window) instead of resolving `build()` with a label-only zombie
     // window — same reply-channel shape as `CreateRawWindow` below.
     Message::CreateWindow(window_id, handler, sender) => match handler(event_loop) {
@@ -5227,11 +5227,11 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   // never applies inside this OHOS-only function; the OHOS path only reads
   // `inner` and moves `label`.
   if let Some(window_wrapper) = removed {
-    // Destroy the OS window through tao (OHOS): Float windows call
-    // destroyWindow; the main (UIAbility) window is system-managed — the
+    // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
+    // kind) call destroyWindow; the main (UIAbility) window is system-managed — the
     // bridge's destroy-window handler rejects window id 0, so for it this is
     // a rejected fire-and-forget and the OS window remains until the system
-    // closes it. Without this call the OS Float window stays on
+    // closes it. Without this call the OS sub-window stays on
     // screen → ghost windows that diverge from Rust's records.
     //
     // Recursion safety: close → ArkTS destroyWindow → SubWindowPage
@@ -5428,7 +5428,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     // The label is set here (once) for both the with_config and programmatic
     // paths. Window kind is resolved in tao's `Window::new`: an explicit
     // builder choice wins; otherwise the first window defaults to UIAbility
-    // and later ones to Float (see FIRST_WINDOW_CREATED in tao's ohos window
+    // and later ones to SubWindow (see FIRST_WINDOW_CREATED in tao's ohos window
     // backend).
     window_builder.inner = window_builder.inner.with_label(&label);
   }

@@ -183,8 +183,8 @@ mod tests {
     item.attrs.into_iter().next().unwrap()
   }
 
-  // 1. Attribute recognition: both entry-point attributes in every
-  // full-path spelling match; unrelated attributes do not.
+  /// UT for entry-point attribute recognition: both entry-point attributes in
+  /// every full-path spelling match; unrelated attributes do not.
   #[test]
   fn ut_entry_point_attr_recognition_matches_both_attributes_full_paths() {
     for path in [
@@ -214,10 +214,10 @@ mod tests {
     }
   }
 
-  // 2. Sibling stripping: when the input function still carries the other
-  // entry-point attribute (the outer expander's view of the two-line form),
-  // it is removed from the passthrough function so the inner expander never
-  // runs (no E0428 on the fixed-name glue items).
+  /// UT for sibling stripping: when the input function still carries the other
+  /// entry-point attribute (the outer expander's view of the two-line form),
+  /// it is removed from the passthrough function so the inner expander never
+  /// runs (no E0428 on the fixed-name glue items).
   #[test]
   fn ut_entry_point_strips_sibling_entry_point_attribute() {
     with_entry_point_env(|| {
@@ -239,9 +239,9 @@ mod tests {
     });
   }
 
-  // 3. Platform-complementary product: the mobile half is gated
-  // not(target_env = "ohos") and the OHOS half target_env = "ohos", so the
-  // compiler keeps exactly one glue set per platform.
+  /// UT for the platform-complementary product: the mobile half is gated
+  /// all(target_os = "ios", not(target_env = "ohos")) and the OHOS half
+  /// target_env = "ohos", so the compiler keeps exactly one glue set per platform.
   #[test]
   fn ut_entry_point_product_gates_both_platform_halves() {
     with_entry_point_env(|| {
@@ -258,8 +258,8 @@ mod tests {
     });
   }
 
-  // 4. Unrelated attributes survive: the passthrough function keeps every
-  // non-entry-point attribute it carried.
+  /// UT for unrelated-attribute preservation: the passthrough function keeps
+  /// every non-entry-point attribute it carried.
   #[test]
   fn ut_entry_point_preserves_unrelated_attributes() {
     with_entry_point_env(|| {
