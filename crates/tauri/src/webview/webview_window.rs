@@ -2009,6 +2009,12 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed (`@ohos.window` has no per-button control API), so
+  ///   calling this on the main window returns an
+  ///   [`crate::Error::NotSupported`] error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind)
+  ///   support the flag.
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
     self.window.set_maximizable(maximizable)
   }
@@ -2018,6 +2024,10 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
+  ///   OS-managed, so calling this on the main window returns an
+  ///   [`crate::Error::NotSupported`] error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self.window.set_minimizable(minimizable)
   }
@@ -2029,6 +2039,10 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **Linux:** "GTK+ will do its best to convince the window manager not to show a close button.
   ///   Depending on the system, this function may not have any effect when called on a window that is already visible"
   /// - **iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
+  ///   OS-managed, so calling this on the main window returns an
+  ///   [`crate::Error::NotSupported`] error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self.window.set_closable(closable)
   }
@@ -2281,6 +2295,15 @@ impl<R: Runtime> WebviewWindow<R> {
   }
 
   /// Hide this window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** hiding windows is not supported — the `@ohos.window`
+  ///   API set has no window-level hide method, so this call returns an
+  ///   [`crate::Error::NotSupported`] error naming OpenHarmony instead of
+  ///   degrading to a taskbar minimize (issue Eulogizethesun/tauri#237). Use
+  ///   [`Self::minimize`] for taskbar minimization; a real hide returns with
+  ///   the A1 `hide_ability` entitlement.
   pub fn hide(&self) -> crate::Result<()> {
     self.window.hide()
   }

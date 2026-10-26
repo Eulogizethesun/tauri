@@ -136,6 +136,23 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         }
         "toggle" => {
           if let Some(window) = app.get_webview_window("main") {
+            // Issue Eulogizethesun/tauri#237: on OHOS hide() is not supported
+            // (no window-level hide API — it rejects with NotSupported), so
+            // the toggle uses taskbar minimization as the closest observable
+            // substitute: `is_minimized` decides, minimize() hides-to-taskbar
+            // and show() restores (tao's conditional show clears the minimized
+            // state without un-maximizing). Desktop keeps the original
+            // is_visible/hide pair.
+            #[cfg(target_env = "ohos")]
+            let new_title = if window.is_minimized().unwrap_or_default() {
+              let _ = window.show();
+              let _ = window.set_focus();
+              "Hide"
+            } else {
+              let _ = window.minimize();
+              "Show"
+            };
+            #[cfg(not(target_env = "ohos"))]
             let new_title = if window.is_visible().unwrap_or_default() {
               let _ = window.hide();
               "Show"

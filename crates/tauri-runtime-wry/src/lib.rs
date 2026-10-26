@@ -358,6 +358,17 @@ pub struct Context<T: UserEvent> {
   next_window_event_id: Arc<AtomicU32>,
   next_webview_event_id: Arc<AtomicU32>,
   webview_runtime_installed: bool,
+  /// OHOS: window id -> is_ui_ability_main, written by the event-loop side
+  /// while the tao window is in hand (single write point inside
+  /// `create_window`) and read by the `WryWindowDispatcher` constructors.
+  /// The user-thread `Context::create_window` constructor does not have the
+  /// tao window (it is created asynchronously on the event loop); the OHOS
+  /// reply-channel ordering (`sender.send(Ok)` after the handler ran)
+  /// guarantees the entry exists once `recv()` returns. Bounded by the
+  /// app's window count (one bool per window). Issue
+  /// Eulogizethesun/tauri#238.
+  #[cfg(target_env = "ohos")]
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 }
 
 impl<T: UserEvent> Context<T> {
@@ -386,6 +397,33 @@ impl<T: UserEvent> Context<T> {
 
   fn next_webview_event_id(&self) -> u32 {
     self.next_webview_event_id.fetch_add(1, Ordering::Relaxed)
+  }
+
+  /// OHOS: record a window's UIAbility-main status at creation time (issue
+  /// Eulogizethesun/tauri#238). Called from `create_window` while the tao
+  /// window is in hand — before any creation reply is sent, so both
+  /// dispatcher constructors read a populated entry.
+  #[cfg(target_env = "ohos")]
+  fn ohos_record_main_window(&self, window_id: WindowId, is_ui_ability_main: bool) {
+    self
+      .ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(window_id, is_ui_ability_main);
+  }
+
+  /// OHOS: read a window's recorded UIAbility-main status. Unknown ids read
+  /// as sub-windows (proceed with the dispatch; tao's own main-window gate
+  /// stays the backstop for that degenerate case).
+  #[cfg(target_env = "ohos")]
+  fn ohos_is_ui_ability_main(&self, window_id: WindowId) -> bool {
+    self
+      .ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .get(&window_id)
+      .copied()
+      .unwrap_or(false)
   }
 }
 
@@ -440,6 +478,11 @@ impl<T: UserEvent> Context<T> {
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.clone(),
+      // The creation reply ordering guarantees the registry entry was written
+      // by the event-loop side before `recv()` returned (issue
+      // Eulogizethesun/tauri#238).
+      #[cfg(target_env = "ohos")]
+      is_ui_ability_main: self.ohos_is_ui_ability_main(window_id),
     };
 
     let detached_webview = webview_id.map(|id| {
@@ -2163,6 +2206,12 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
 pub struct WryWindowDispatcher<T: UserEvent> {
   window_id: WindowId,
   context: Context<T>,
+  /// OHOS: captured at dispatcher construction (issue
+  /// Eulogizethesun/tauri#238) — true for UIAbility-container windows whose
+  /// decoration buttons are OS-managed, gating main-window-only operations
+  /// with an Err at this layer.
+  #[cfg(target_env = "ohos")]
+  is_ui_ability_main: bool,
 }
 
 // SAFETY: this is safe since the `Context` usage is guarded on `send_user_message`.
@@ -2417,6 +2466,20 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_maximizable(&self, maximizable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238: the UIAbility main window's three
+      // decoration buttons are OS-managed (@ohos.window has no per-button
+      // control API) — fail at the dispatcher so the caller sees the Err
+      // (the message handlers discard tao Results; tao only log::errors).
+      // Sub-windows dispatch normally: the flags drive their buttons.
+      if self.is_ui_ability_main {
+        let _ = maximizable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetMaximizable(maximizable)),
@@ -2424,6 +2487,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_minimizable(&self, minimizable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238 — see set_maximizable.
+      if self.is_ui_ability_main {
+        let _ = minimizable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetMinimizable(minimizable)),
@@ -2431,6 +2504,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_closable(&self, closable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238 — see set_maximizable.
+      if self.is_ui_ability_main {
+        let _ = closable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetClosable(closable)),
@@ -2480,6 +2563,18 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn hide(&self) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#237: OHOS has no window-level hide API
+      // (@ohos.window carries no hide; UIAbility-level hideAbility is out of
+      // reach on PC/2in1 until the A1 entitlement). Fail at the dispatcher —
+      // the message handlers intentionally discard tao Results, so this is
+      // the only layer the caller sees (same pattern as setEnabled #225).
+      // tao's former minimize downgrade was removed with the same issue; a
+      // real hide returns with the A1 hide_ability action.
+      return Err(ohos_unsupported("hiding windows"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::Hide),
@@ -3318,6 +3413,8 @@ impl<T: UserEvent> Wry<T> {
       next_window_event_id: Default::default(),
       next_webview_event_id: Default::default(),
       webview_runtime_installed: wry::webview_version().is_ok(),
+      #[cfg(target_env = "ohos")]
+      ohos_main_window_registry: Default::default(),
     };
 
     Ok(Self {
@@ -3402,6 +3499,19 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.context.clone(),
+      // The tao window is in hand on this (event-loop) path: capture the
+      // UIAbility-main flag straight from it rather than via the registry
+      // (issue Eulogizethesun/tauri#238). The registry read stays for the
+      // user-thread constructor, whose tao window is created asynchronously.
+      #[cfg(target_env = "ohos")]
+      is_ui_ability_main: window
+        .inner
+        .as_ref()
+        .map(|w| {
+          use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};
+          w.window_kind() == OHOSWindowKind::UIAbility
+        })
+        .unwrap_or(false),
     };
 
     self
@@ -5325,6 +5435,19 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     .build(event_loop)
     .inspect_err(|e| log::error!("Error creating window: {e:?}"))
     .map_err(|_| Error::CreateWindow)?;
+
+  // Issue Eulogizethesun/tauri#238: record the window's UIAbility-main status
+  // while the tao window is in hand. This is the single write point covering
+  // every creation path (main-thread variant and both CreateWindow message
+  // arms); the dispatcher constructors read the registry afterwards.
+  #[cfg(target_env = "ohos")]
+  {
+    use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};
+    context.ohos_record_main_window(
+      window_id,
+      window.window_kind() == OHOSWindowKind::UIAbility,
+    );
+  }
 
   #[cfg(feature = "tracing")]
   {
