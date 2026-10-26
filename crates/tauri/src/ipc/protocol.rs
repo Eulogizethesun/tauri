@@ -643,7 +643,7 @@ mod tests {
     assert_eq!(invoke_request.body, InvokeBody::Raw(body));
 
     let body = json!({
-      "key": 1,
+      "key": 1i32,
       "anotherKey": "asda",
     });
 
@@ -687,7 +687,7 @@ mod tests {
     });
 
     let body_json = json!({
-      "key": 1,
+      "key": 1i32,
       "anotherKey": "string"
     });
     let body_bytes = crypto_keys

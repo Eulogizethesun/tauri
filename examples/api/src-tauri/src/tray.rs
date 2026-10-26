@@ -80,6 +80,9 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
 
   let is_menu1 = AtomicBool::new(true);
 
+  // `mut` is consumed by the OHOS-only re-assignment below; on other
+  // targets that block is compiled out and the mut would be unused.
+  #[allow(unused_mut)]
   let mut builder = TrayIconBuilder::with_id("tray-1")
     .tooltip("Tauri")
     .icon(app.default_window_icon().unwrap().clone())
@@ -165,6 +168,8 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
           }
         }
         "new-window" => {
+          // `mut` is consumed by the OHOS-only re-assignment below.
+          #[allow(unused_mut)]
           let mut wb =
             tauri::WebviewWindowBuilder::new(app, "new", WebviewUrl::App("index.html".into()))
               .title("Tauri");
@@ -204,12 +209,11 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
           is_menu1.store(!flag, Ordering::Relaxed);
         }
         "toggle-qo" => {
+          // Toggle QuickOperation off (demonstrates runtime update).
+          // The tray handle is only consumed by the OHOS API below.
+          #[cfg(target_env = "ohos")]
           if let Some(tray) = app.tray_by_id("tray-1") {
-            // Toggle QuickOperation off (demonstrates runtime update)
-            #[cfg(target_env = "ohos")]
-            {
-              let _ = tray.set_quick_operation(None);
-            }
+            let _ = tray.set_quick_operation(None);
           }
         }
 

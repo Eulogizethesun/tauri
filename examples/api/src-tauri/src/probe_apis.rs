@@ -6,8 +6,6 @@
 //! calls — execution is the coverage, errors are aggregated into the
 //! returned string.
 
-use tauri::Manager;
-
 /// AppHandle monitor/cursor quartet + a return summary per API.
 #[tauri::command]
 pub fn probe_app_monitors<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {

@@ -117,7 +117,7 @@ impl FromStr for AppCategory {
     input = input.replace('-', "");
 
     // Find best match:
-    let mut best_confidence = 0.0;
+    let mut best_confidence = 0.0f64;
     let mut best_category: Option<AppCategory> = None;
     for &(string, category) in CATEGORY_STRINGS.iter() {
       if input == string {

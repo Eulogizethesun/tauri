@@ -159,7 +159,10 @@ pub fn clear_tracked_events<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Resu
   Ok(())
 }
 
-// New window request handling for OHOS on_new_window tests
+// New window request handling for OHOS on_new_window tests.
+// Only referenced from OHOS-gated code paths (command registration and the
+// on_new_window handler below), so the whole group is gated to match.
+#[cfg(target_env = "ohos")]
 #[derive(Default)]
 pub struct NewWindowDenyState {
   pub deny: std::sync::atomic::AtomicBool,
@@ -167,6 +170,7 @@ pub struct NewWindowDenyState {
   pub last_url: Mutex<Option<String>>,
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> tauri::Result<()> {
   let state = app.state::<NewWindowDenyState>();
@@ -175,6 +179,7 @@ pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> 
   Ok(())
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn set_create_new_window<R: Runtime>(
   app: tauri::AppHandle<R>,
@@ -186,6 +191,7 @@ pub fn set_create_new_window<R: Runtime>(
   Ok(())
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn get_last_new_window_url<R: Runtime>(
   app: tauri::AppHandle<R>,
@@ -243,7 +249,7 @@ pub fn echo(request: tauri::ipc::Request<'_>) -> tauri::ipc::Response {
 
 #[command]
 pub fn spam(channel: Channel<i32>) -> tauri::Result<()> {
-  for i in 1..=1_000 {
+  for i in 1i32..=1_000i32 {
     channel.send(i)?;
   }
   Ok(())
@@ -305,9 +311,7 @@ pub fn append_test_result<R: Runtime>(
 
   // If this is the first result, write header + table header
   let mut output = if content.is_empty() || content.contains("_No tests run yet._") {
-    format!(
-      "# Test Report\n\n| # | Test | Status | Duration | Error |\n|---|------|--------|----------|-------|\n"
-    )
+    "# Test Report\n\n| # | Test | Status | Duration | Error |\n|---|------|--------|----------|-------|\n".to_string()
   } else {
     content
   };
@@ -558,6 +562,9 @@ pub fn create_isolated_window<R: tauri::Runtime>(
         if (h1) {{ h1.textContent = num <= 1 ? 'Hello World' : 'Hello World' + num; }} \
       }});"
   );
+  // `mut` is consumed by the OHOS-only re-assignment below; on other
+  // targets that block is compiled out and the mut would be unused.
+  #[allow(unused_mut)]
   let mut builder = tauri::WebviewWindowBuilder::new(&app, &unique_window_id, webview_url)
     .title(format!("Isolated Window: {}", data_suffix))
     .data_directory(data_dir)
@@ -701,6 +708,7 @@ pub fn create_window_no_throttle<R: tauri::Runtime>(
 
   use tauri::utils::config::BackgroundThrottlingPolicy;
 
+  #[allow(unused_mut)]
   let mut builder = tauri::WebviewWindowBuilder::new(&app, window_id, WebviewUrl::default())
     .title("Window with No Background Throttling")
     .background_throttling(BackgroundThrottlingPolicy::Disabled)
@@ -1964,8 +1972,9 @@ pub fn sentry_test_breadcrumb() {
 // ─── Download Test Mode ───
 // Controls the behavior of the on_download handler for manual testing scenarios.
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, Default)]
 pub enum DownloadTestMode {
+  #[default]
   Default,
   CustomDir,
   ConfirmAllow,
@@ -1974,12 +1983,6 @@ pub enum DownloadTestMode {
   AuditLog,
   AutoRename,
   CancelAll,
-}
-
-impl Default for DownloadTestMode {
-  fn default() -> Self {
-    DownloadTestMode::Default
-  }
 }
 
 pub struct DownloadTestState {
@@ -2222,7 +2225,7 @@ pub fn navigate_webview_hash<R: tauri::Runtime>(
     .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
     .collect();
   webview
-    .eval(&format!("location.hash = '#{safe}';"))
+    .eval(format!("location.hash = '#{safe}';"))
     .map_err(|e| e.to_string())
 }
 
@@ -2432,6 +2435,7 @@ pub fn cookie_manual_test<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result
   let url = "https://httpbin.org/cookies"
     .parse()
     .map_err(|e| format!("invalid url: {}", e))?;
+  #[allow(unused_mut)]
   let mut builder =
     tauri::WebviewWindowBuilder::new(&app, "cookie-manual-test", tauri::WebviewUrl::External(url))
       .title("Cookie Manual Test")

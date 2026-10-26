@@ -36,7 +36,7 @@ pub fn run() {
     }));
   }
 
-  let mut builder = tauri::Builder::default().plugin(tauri_plugin_huawei_account::init());
+  let builder = tauri::Builder::default().plugin(tauri_plugin_huawei_account::init());
 
   #[cfg(target_env = "ohos")]
   {

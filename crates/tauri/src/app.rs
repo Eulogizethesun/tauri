@@ -2374,7 +2374,7 @@ tauri::Builder::default()
             for menu in menus.lock().unwrap().values() {
               let translated =
                 TranslateAcceleratorW((*msg).hwnd, HACCEL(menu.inner().haccel() as _), msg);
-              if translated == 1 {
+              if translated == 1i32 {
                 return true;
               }
             }
@@ -2788,7 +2788,7 @@ mod tests {
     ));
     assert!(matches!(
       WindowEvent::from(RuntimeWindowEvent::ScaleFactorChanged {
-        scale_factor: 2.0,
+        scale_factor: 2.0f64,
         new_inner_size: PhysicalSize::new(800u32, 600u32),
       }),
       WindowEvent::ScaleFactorChanged { .. }
@@ -2796,7 +2796,7 @@ mod tests {
     {
       let drop_event = DragDropEvent::Enter {
         paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
-        position: PhysicalPosition::new(1.0, 2.0),
+        position: PhysicalPosition::new(1.0f64, 2.0f64),
       };
       assert!(matches!(
         WindowEvent::from(RuntimeWindowEvent::DragDrop(drop_event)),
@@ -2804,7 +2804,7 @@ mod tests {
       ));
       assert!(matches!(
         WebviewEvent::from(RuntimeWebviewEvent::DragDrop(DragDropEvent::Over {
-          position: PhysicalPosition::new(3.0, 4.0)
+          position: PhysicalPosition::new(3.0f64, 4.0f64)
         })),
         WebviewEvent::DragDrop(_)
       ));

@@ -319,9 +319,9 @@ impl EmbeddedAssets {
     // they have a good balance of runtime vs size for the respective profile goals.
     // see the "brotli" section of this comment https://github.com/tauri-apps/tauri/issues/3571#issuecomment-1054847558
     if cfg!(debug_assertions) {
-      settings.quality = 2
+      settings.quality = 2i32
     } else {
-      settings.quality = 9
+      settings.quality = 9i32
     }
 
     settings

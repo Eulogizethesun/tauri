@@ -706,36 +706,37 @@ impl WindowEventWrapper {
         scale_factor: *scale_factor,
         new_inner_size: PhysicalSizeWrapper(**new_inner_size).into(),
       },
-      TaoWindowEvent::Focused(focused) => {
-        #[cfg(not(windows))]
-        return Self(Some(WindowEvent::Focused(*focused)));
+      #[cfg(windows)]
+      TaoWindowEvent::Focused(focused) if window.has_children.load(Ordering::Relaxed) => {
         // on multiwebview mode, if there's no focused webview, it means we're receiving a direct window focus change
         // (without receiving a webview focus, such as when clicking the taskbar app icon or using Alt + Tab)
         // in this case we must send the focus change event here
-        #[cfg(windows)]
-        if window.has_children.load(Ordering::Relaxed) {
-          const FOCUSED_WEBVIEW_MARKER: &str = "__tauriWindow?";
-          let mut focused_webview = window.focused_webview.lock().unwrap();
-          // when we focus a webview and the window was previously focused, we get a blur event here
-          // so on blur we should only send events if the current focus is owned by the window
-          if !*focused
-            && focused_webview
-              .as_deref()
-              .is_some_and(|w| w != FOCUSED_WEBVIEW_MARKER)
-          {
-            return Self(None);
-          }
-
-          // reset focused_webview on blur, or set to a dummy value on focus
-          // (to prevent double focus event when we click a webview after focusing a window)
-          *focused_webview = (*focused).then(|| FOCUSED_WEBVIEW_MARKER.to_string());
-
-          return Self(Some(WindowEvent::Focused(*focused)));
-        } else {
-          // when not on multiwebview mode, we handle focus change events on the webview (add_GotFocus and add_LostFocus)
+        const FOCUSED_WEBVIEW_MARKER: &str = "__tauriWindow?";
+        let mut focused_webview = window.focused_webview.lock().unwrap();
+        // when we focus a webview and the window was previously focused, we get a blur event here
+        // so on blur we should only send events if the current focus is owned by the window
+        if !*focused
+          && focused_webview
+            .as_deref()
+            .is_some_and(|w| w != FOCUSED_WEBVIEW_MARKER)
+        {
           return Self(None);
         }
+
+        // reset focused_webview on blur, or set to a dummy value on focus
+        // (to prevent double focus event when we click a webview after focusing a window)
+        *focused_webview = (*focused).then(|| FOCUSED_WEBVIEW_MARKER.to_string());
+
+        return Self(Some(WindowEvent::Focused(*focused)));
       }
+      #[cfg(not(windows))]
+      TaoWindowEvent::Focused(focused) => {
+        return Self(Some(WindowEvent::Focused(*focused)));
+      }
+      // when not on multiwebview mode, we handle focus change events on the webview
+      // (add_GotFocus and add_LostFocus)
+      #[cfg(windows)]
+      TaoWindowEvent::Focused(_) => return Self(None),
       TaoWindowEvent::ThemeChanged(theme) => WindowEvent::ThemeChanged(map_theme(theme)),
       _ => return Self(None),
     };
@@ -1221,7 +1222,7 @@ impl WindowBuilder for WindowBuilderWrapper {
   fn prevent_overflow(mut self) -> Self {
     self
       .prevent_overflow
-      .replace(PhysicalSize::new(0, 0).into());
+      .replace(PhysicalSize::new(0i32, 0i32).into());
     self
   }
 
@@ -5551,7 +5552,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
         .inner
         .window
         .inner_size
-        .unwrap_or_else(|| TaoPhysicalSize::new(800, 600).into());
+        .unwrap_or_else(|| TaoPhysicalSize::new(800i32, 600i32).into());
       // Only mutated by the non-OHOS `prevent_overflow` block below.
       #[cfg_attr(target_env = "ohos", allow(unused_mut))]
       let mut inner_size = window_builder
@@ -6044,7 +6045,7 @@ You may have it installed on another user account, but it is not available for t
     #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
     {
       webview_builder = webview_builder.with_bounds(wry::Rect {
-        position: LogicalPosition::new(0, 0).into(),
+        position: LogicalPosition::new(0i32, 0i32).into(),
         size: window.inner_size().into(),
       });
       Some(WebviewBounds {
@@ -6540,30 +6541,36 @@ mod with_config_tests {
 
   #[test]
   fn with_config_explicit_position_and_center() {
-    let mut cfg = WindowConfig::default();
-    cfg.label = "main".into();
-    cfg.x = Some(10.0);
-    cfg.y = Some(20.0);
+    let cfg = WindowConfig {
+      label: "main".into(),
+      x: Some(10.0f64),
+      y: Some(20.0f64),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&cfg);
     assert!(!wb.center);
     assert!(wb.inner.window.position.is_some());
 
-    let mut centered = WindowConfig::default();
-    centered.center = true;
+    let centered = WindowConfig {
+      center: true,
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&centered);
     assert!(wb.center);
   }
 
   #[test]
   fn with_config_size_constraints_and_background() {
-    let mut cfg = WindowConfig::default();
-    cfg.width = 800.0;
-    cfg.height = 600.0;
-    cfg.min_width = Some(200.0);
-    cfg.min_height = Some(100.0);
-    cfg.max_width = Some(1000.0);
-    cfg.max_height = Some(900.0);
-    cfg.background_color = Some(Color(1, 2, 3, 4));
+    let cfg = WindowConfig {
+      width: 800.0,
+      height: 600.0,
+      min_width: Some(200.0f64),
+      min_height: Some(100.0f64),
+      max_width: Some(1000.0f64),
+      max_height: Some(900.0f64),
+      background_color: Some(Color(1, 2, 3, 4)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&cfg);
     // Mobile targets ignore the config size (see `with_config`).
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -6577,21 +6584,27 @@ mod with_config_tests {
 
   #[test]
   fn with_config_prevent_overflow_variants() {
-    let mut margin = WindowConfig::default();
-    margin.prevent_overflow = Some(PreventOverflowConfig::Margin(PreventOverflowMargin {
-      width: 12,
-      height: 34,
-    }));
+    let margin = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Margin(PreventOverflowMargin {
+        width: 12,
+        height: 34,
+      })),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&margin);
     assert!(wb.prevent_overflow.is_some());
 
-    let mut disabled = WindowConfig::default();
-    disabled.prevent_overflow = Some(PreventOverflowConfig::Enable(false));
+    let disabled = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Enable(false)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&disabled);
     assert!(wb.prevent_overflow.is_none());
 
-    let mut enabled = WindowConfig::default();
-    enabled.prevent_overflow = Some(PreventOverflowConfig::Enable(true));
+    let enabled = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Enable(true)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&enabled);
     assert!(wb.prevent_overflow.is_some());
   }
@@ -6635,7 +6648,8 @@ mod mapping_tests {
 
   #[test]
   fn cursor_icon_wrapper_maps_all_variants() {
-    let cases: Vec<(CursorIcon, fn(TaoCursorIcon) -> bool)> = vec![
+    type CursorCase = (CursorIcon, fn(TaoCursorIcon) -> bool);
+    let cases: Vec<CursorCase> = vec![
       (CursorIcon::Default, |i| matches!(i, TaoCursorIcon::Default)),
       (CursorIcon::Crosshair, |i| {
         matches!(i, TaoCursorIcon::Crosshair)
@@ -6720,7 +6734,8 @@ mod mapping_tests {
 
   #[test]
   fn progress_state_wrapper_maps_all_statuses() {
-    let cases: Vec<(ProgressBarStatus, fn(TaoProgressState) -> bool)> = vec![
+    type ProgressCase = (ProgressBarStatus, fn(TaoProgressState) -> bool);
+    let cases: Vec<ProgressCase> = vec![
       (ProgressBarStatus::None, |s| {
         matches!(s, TaoProgressState::None)
       }),
@@ -6786,12 +6801,13 @@ mod mapping_tests {
 
   #[test]
   fn size_and_position_wrappers_map_logical_and_physical() {
-    let logical_size = SizeWrapper::from(Size::Logical(LogicalSize::new(640.0, 480.0)));
+    let logical_size = SizeWrapper::from(Size::Logical(LogicalSize::new(640.0f64, 480.0f64)));
     assert!(matches!(logical_size.0, TaoSize::Logical(_)));
     let physical_size = SizeWrapper::from(Size::Physical(PhysicalSize::new(800u32, 600u32)));
     assert!(matches!(physical_size.0, TaoSize::Physical(_)));
 
-    let logical_pos = PositionWrapper::from(Position::Logical(LogicalPosition::new(1.0, 2.0)));
+    let logical_pos =
+      PositionWrapper::from(Position::Logical(LogicalPosition::new(1.0f64, 2.0f64)));
     assert!(matches!(logical_pos.0, TaoPosition::Logical(_)));
     let physical_pos = PositionWrapper::from(Position::Physical(PhysicalPosition::new(3i32, 4i32)));
     assert!(matches!(physical_pos.0, TaoPosition::Physical(_)));
@@ -6814,7 +6830,7 @@ mod mapping_tests {
     let pos = PhysicalPosition::new(10i32, 20i32);
     let wrapped: PhysicalPositionWrapper<i32> = PhysicalPositionWrapper::from(pos);
     let back: PhysicalPosition<i32> = wrapped.into();
-    assert_eq!((back.x, back.y), (10, 20));
+    assert_eq!((back.x, back.y), (10i32, 20i32));
 
     let size = PhysicalSize::new(640u32, 480u32);
     let wrapped: PhysicalSizeWrapper<u32> = PhysicalSizeWrapper::from(size);
@@ -6840,7 +6856,7 @@ mod mapping_tests {
 
     let drop_event = DragDropEvent::Enter {
       paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
-      position: PhysicalPosition::new(5.0, 6.0),
+      position: PhysicalPosition::new(5.0f64, 6.0f64),
     };
     let dd = WindowEventWrapper::from(SynthesizedWindowEvent::DragDrop(drop_event));
     assert!(matches!(dd.0, Some(WindowEvent::DragDrop(_))));

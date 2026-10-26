@@ -213,7 +213,7 @@ pub fn setup(
             .expect("failed to wait on \"beforeDevCommand\"");
           if !(status.success() || KILL_BEFORE_DEV_FLAG.load(Ordering::SeqCst)) {
             log::error!("The \"beforeDevCommand\" terminated with a non-zero status code.");
-            exit(status.code().unwrap_or(1));
+            exit(status.code().unwrap_or(1i32));
           }
         });
 
@@ -325,7 +325,7 @@ pub fn on_app_exit(code: Option<i32>, reason: ExitReason, exit_on_panic: bool, n
       && (exit_on_panic || matches!(reason, ExitReason::NormalExit)))
   {
     kill_before_dev_process();
-    exit(code.unwrap_or(0));
+    exit(code.unwrap_or(0i32));
   }
 }
 

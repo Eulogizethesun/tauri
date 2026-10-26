@@ -645,7 +645,7 @@ pub fn try_build(attributes: Attributes) -> Result<()> {
 
     if let Some(version_str) = &config.version {
       if let Ok(v) = Version::parse(version_str) {
-        let version = (v.major << 48) | (v.minor << 32) | (v.patch << 16);
+        let version = (v.major << 48i32) | (v.minor << 32i32) | (v.patch << 16i32);
         res.set_version_info(VersionInfo::FILEVERSION, version);
         res.set_version_info(VersionInfo::PRODUCTVERSION, version);
         res.set("FileVersion", version_str);

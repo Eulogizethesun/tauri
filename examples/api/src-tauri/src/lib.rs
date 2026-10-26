@@ -32,8 +32,11 @@ use tauri::ipc::Channel;
 use tauri::RunEvent;
 use tauri::{
   webview::{PageLoadEvent, WebviewWindowBuilder},
-  App, Emitter, EventTarget, Listener, Manager, Runtime, WebviewUrl,
+  App, Emitter, Listener, Manager, Runtime, WebviewUrl,
 };
+// Used by the desktop-only global menu-event handler below.
+#[cfg(all(desktop, not(test)))]
+use tauri::EventTarget;
 #[cfg(not(target_env = "ohos"))]
 use tauri_plugin_sample::{PingRequest, SampleExt};
 
@@ -442,6 +445,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 
       // Manage event tracker for testing
       app.manage(EventTracker::default());
+      #[cfg(target_env = "ohos")]
       app.manage(cmd::NewWindowDenyState::default());
       app.manage(DownloadTestState::new());
 
@@ -473,6 +477,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       let app_handle_title = app.handle().clone();
       let app_handle_download = app.handle().clone();
 
+      // `mut` is consumed by the desktop-only re-assignment below; under
+      // cfg(test) that block is compiled out and the mut is unused.
+      #[allow(unused_mut)]
       let mut window_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .initialization_script("document.addEventListener('DOMContentLoaded', () => { document.title = '✅ INIT SCRIPT WORKED!'; });")
         .on_document_title_changed(move |_window, title| {
@@ -568,7 +575,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     let stem = destination.file_stem().unwrap_or_default().to_string_lossy();
                     let ext = destination.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
                     let parent = destination.parent().unwrap_or(std::path::Path::new("."));
-                    let mut counter = 1;
+                    let mut counter = 1i32;
                     loop {
                       let new_name = format!("{} ({}){}", stem, counter, ext);
                       let new_path = parent.join(&new_name);
@@ -577,7 +584,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                         *destination = new_path;
                         break;
                       }
-                      counter += 1;
+                      counter += 1i32;
                     }
                   }
                   let _ = app_handle_download.emit("download-requested", serde_json::json!({
@@ -616,7 +623,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(all(desktop, not(test)))]
       {
         let app_ = app.handle().clone();
-        let mut created_window_count = std::sync::atomic::AtomicUsize::new(0);
+        let created_window_count = std::sync::atomic::AtomicUsize::new(0);
 
         window_builder = window_builder
           .title("Tauri API Validation")
@@ -821,30 +828,27 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             return;
           }
         };
-        for stream in listener.incoming() {
-          if let Ok(stream) = stream {
-            std::thread::spawn(move || {
-              let mut ws_stream = match tungstenite::accept(stream) {
-                Ok(ws) => ws,
-                Err(e) => {
-                  log::error!("ws echo handshake failed: {e}");
-                  return;
-                }
-              };
-              while let Ok(msg) = ws_stream.read() {
-                use tungstenite::Message;
-                match msg {
-                  Message::Text(_) | Message::Binary(_) => {
-                    if ws_stream.send(msg).is_err() {
-                      break;
-                    }
-                  }
-                  Message::Close(_) => break,
-                  _ => {}
-                }
+        for stream in listener.incoming().flatten() {
+          std::thread::spawn(move || {
+            let mut ws_stream = match tungstenite::accept(stream) {
+              Ok(ws) => ws,
+              Err(e) => {
+                log::error!("ws echo handshake failed: {e}");
+                return;
               }
-            });
-          }
+            };
+            while let Ok(msg) = ws_stream.read() {
+              use tungstenite::Message;
+              if matches!(msg, Message::Close(_)) {
+                break;
+              }
+              if matches!(msg, Message::Text(_) | Message::Binary(_))
+                && ws_stream.send(msg).is_err()
+              {
+                break;
+              }
+            }
+          });
         }
       });
 
