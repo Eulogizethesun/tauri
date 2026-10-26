@@ -21,4 +21,51 @@ ignore = [
   "RUSTSEC-2026-0099",
   # rustls, fixed when updating to apple-codesign 0.28.0
   "RUSTSEC-2026-0104",
+  # --- 2026-10-26 advisory-db refresh: advisories published after the
+  # upstream snapshot this fork tracks surface here without any local code
+  # change. All instances below live in the upstream dependency stack
+  # (apple-codesign 0.27 signing chain, reqwest 0.11/0.12, sentry,
+  # cargo-mobile2); fixes land with upstream dependency bumps, same policy
+  # as the entries above. Verified via `cargo tree -i` per instance. ---
+  # crypto-bigint 0.5.5 timing variability; via elliptic-curve <- apple-
+  # codesign 0.27.0 <- tauri-macos-sign (macOS signing only); patched in
+  # >= 0.7.6 (major)
+  "RUSTSEC-2026-0387",
+  # h2 0.3.27 unbounded empty DATA frames; via hyper 0.14 <- hyper-rustls
+  # 0.24 <- reqwest 0.11 <- apple-codesign 0.27.0; patched in >= 0.4.16
+  # (h2 0.4 major, reqwest 0.11 pins h2 0.3)
+  "RUSTSEC-2026-0258",
+  # rustls 0.21.12/0.22.4 Debug-impls secret exposure and ServerHello
+  # downgrade; both pinned by the apple-codesign 0.27.0 chain; patched
+  # versions require rustls 0.23+ (major)
+  "RUSTSEC-2026-0346",
+  "RUSTSEC-2026-0349",
+  # rustls 0.23.45: ECH rejection data leak / Brotli cert-decompression
+  # allocation; pinned by hyper-rustls 0.27 <- reqwest 0.12.28 <- sentry
+  # (examples/api, tauri-plugin-sentry); patched in >= 0.23.46 - a
+  # semver-compatible cargo update was attempted but the sparse index
+  # mirror stalls on the evening network window (0-byte timeouts); retry
+  # `cargo update -p rustls@0.23.45` on a working mirror and drop this
+  "RUSTSEC-2026-0347",
+  "RUSTSEC-2026-0348",
+  # rustls-webpki 0.101.7/0.102.8/0.103.15 distrusted intermediates;
+  # 0.101/0.102 via rustls 0.21/0.22 (apple-codesign), 0.103.15 via rustls
+  # 0.23.45 (sentry chain); patched in >= 0.103.16 / 0.104
+  "RUSTSEC-2026-0382",
+  # ruzstd 0.5.0 decompression bomb; via object 0.32.2 <- apple-codesign
+  # 0.27.0; patched in >= 0.9.1 (breaking)
+  "RUSTSEC-2026-0344",
+  # webpki-roots 0.25.4/1.0.9 and webpki-root-certs 1.0.9 bundled roots
+  # trusting distrusted intermediates; 0.25.4 via reqwest 0.11
+  # (apple-codesign), 1.0.x via hyper-rustls 0.27 (sentry); patched in
+  # >= 1.0.10 (minor for 1.0.x, major for 0.25.x)
+  "RUSTSEC-2026-0381",
+  "RUSTSEC-2026-0383",
+  # zip 0.6.6/4.6.1/8.6.0 extraction symlink + Unix-permission issues;
+  # patched in >= 9.0.0 (major); 0.6.6 via apple-codesign 0.27.0, the
+  # 4.6.1/8.6.0 instances sit in the upstream mobile/updater dependency
+  # stack
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
 ]
