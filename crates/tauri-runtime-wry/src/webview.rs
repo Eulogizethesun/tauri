@@ -41,8 +41,11 @@ mod imp {
   use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Controller, ICoreWebView2Environment,
   };
+  /// The Windows implementation of the platform webview handle.
   pub struct Webview {
+    /// The WebView2 controller backing this webview.
     pub controller: ICoreWebView2Controller,
+    /// The WebView2 environment used to create this webview.
     pub environment: ICoreWebView2Environment,
   }
 }

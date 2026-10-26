@@ -89,11 +89,15 @@ impl FromStr for ConfigValue {
   }
 }
 
+/// The platform mode the CLI is running for.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum RunMode {
+  /// The desktop mode.
   Desktop,
+  /// The iOS mode.
   #[cfg(target_os = "macos")]
   Ios,
+  /// The Android mode.
   Android,
 }
 
@@ -112,6 +116,7 @@ impl Display for RunMode {
   }
 }
 
+/// The versions of the tauri crates recorded in the app metadata.
 #[derive(Deserialize)]
 pub struct VersionMetadata {
   tauri: String,
@@ -121,6 +126,7 @@ pub struct VersionMetadata {
   tauri_plugin: String,
 }
 
+/// The subset of `package.json` fields the CLI consumes.
 #[derive(Deserialize)]
 pub struct PackageJson {
   name: Option<String>,
@@ -320,10 +326,15 @@ fn prettyprint_level(lvl: Level) -> &'static str {
   }
 }
 
+/// Extension trait adding pipe-aware helpers to `std::process::Command`.
 pub trait CommandExt {
   // The `pipe` function sets the stdout and stderr to properly
   // show the command output in the Node.js wrapper.
+  /// Runs the command inheriting the stdio pipes so the Node.js wrapper
+  /// shows its output, and returns the exit status.
   fn piped(&mut self) -> std::io::Result<ExitStatus>;
+  /// Runs the command capturing its output, failing if the command
+  /// exits unsuccessfully.
   fn output_ok(&mut self) -> crate::Result<Output>;
 }
 

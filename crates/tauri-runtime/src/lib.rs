@@ -398,6 +398,7 @@ pub trait EventLoopProxy<T: UserEvent>: Debug + Clone + Send + Sync {
   fn send_event(&self, event: T) -> Result<()>;
 }
 
+#[cfg_attr(not(target_env = "ohos"), derive(Default))]
 pub struct RuntimeInitArgs {
   #[cfg(all(
     any(
@@ -417,26 +418,6 @@ pub struct RuntimeInitArgs {
   pub app: openharmony_ability::OpenHarmonyApp,
 }
 
-#[cfg(not(target_env = "ohos"))]
-impl Default for RuntimeInitArgs {
-  fn default() -> Self {
-    Self {
-      #[cfg(all(
-        any(
-          target_os = "linux",
-          target_os = "dragonfly",
-          target_os = "freebsd",
-          target_os = "netbsd",
-          target_os = "openbsd",
-        ),
-        not(target_env = "ohos")
-      ))]
-      app_id: None,
-      #[cfg(windows)]
-      msg_hook: None,
-    }
-  }
-}
 
 /// The webview runtime interface.
 pub trait Runtime<T: UserEvent>: Debug + Sized + 'static {

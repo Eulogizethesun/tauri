@@ -36,6 +36,8 @@ pub fn command(attributes: TokenStream, item: TokenStream) -> TokenStream {
   command::wrapper(attributes, item)
 }
 
+/// Marks the mobile entry point of the application, generating the
+/// platform bootstrap glue around the given function.
 #[proc_macro_attribute]
 pub fn mobile_entry_point(attributes: TokenStream, item: TokenStream) -> TokenStream {
   mobile::entry_point(attributes, item)

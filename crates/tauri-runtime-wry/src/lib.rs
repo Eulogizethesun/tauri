@@ -224,6 +224,7 @@ use std::{
   thread::{current as current_thread, ThreadId},
 };
 
+/// The identifier of a webview within the runtime.
 pub type WebviewId = u32;
 type IpcHandler = dyn Fn(Request<String>) + 'static;
 
@@ -246,26 +247,38 @@ mod window;
 pub use webview::Webview;
 use window::WindowExt as _;
 
+/// A web context shared between webviews, holding the underlying wry context
+/// and bookkeeping about which webviews reference it.
 #[derive(Debug)]
 pub struct WebContext {
+  /// The underlying wry web context.
   pub inner: WryWebContext,
+  /// The labels of the webviews referencing this context.
   pub referenced_by_webviews: HashSet<String>,
   // on Linux the custom protocols are associated with the context
   // and you cannot register a URI scheme more than once
+  /// Custom protocols registered on this web context.
   pub registered_custom_protocols: HashSet<String>,
 }
 
+/// The store of web contexts keyed by their data directory.
 pub type WebContextStore = Arc<Mutex<HashMap<Option<PathBuf>, WebContext>>>;
 // window
+/// The handler type for window events.
 pub type WindowEventHandler = Box<dyn Fn(&WindowEvent) + Send>;
+/// The listener map for window events.
 pub type WindowEventListeners = Arc<Mutex<HashMap<WindowEventId, WindowEventHandler>>>;
+/// The handler type for webview events.
 pub type WebviewEventHandler = Box<dyn Fn(&WebviewEvent) + Send>;
+/// The listener map for webview events.
 pub type WebviewEventListeners = Arc<Mutex<HashMap<WebviewEventId, WebviewEventHandler>>>;
 
+/// The mapping from tao window ids to runtime window ids, shared across threads.
 #[derive(Debug, Clone, Default)]
 pub struct WindowIdStore(Arc<Mutex<HashMap<TaoWindowId, WindowId>>>);
 
 impl WindowIdStore {
+  /// Associates a tao window id with the runtime window id.
   pub fn insert(&self, w: TaoWindowId, id: WindowId) {
     // On OHOS, WindowId carries the real OHOS window id (0=main, >0=SubWindow
     // sub-window), so keys are distinct per window. or_insert only guards
@@ -280,12 +293,15 @@ impl WindowIdStore {
     }
   }
 
+  /// Returns the runtime window id associated with the given tao window id.
   pub fn get(&self, w: &TaoWindowId) -> Option<WindowId> {
     self.0.lock().unwrap().get(w).copied()
   }
 }
 
 #[macro_export]
+/// Sends the given user message to the main thread and waits for the
+/// response channel.
 macro_rules! getter {
   ($self: ident, $rx: expr, $message: expr) => {{
     $crate::send_user_message(&$self.context, $message)?;
@@ -346,10 +362,14 @@ pub(crate) fn send_user_message<T: UserEvent>(
   }
 }
 
+/// The runtime context shared between dispatchers, holding the window id
+/// map, the event loop proxy and the plugin registry.
 #[derive(Clone)]
 pub struct Context<T: UserEvent> {
+  /// The mapping from tao window ids to runtime window ids.
   pub window_id_map: WindowIdStore,
   main_thread_id: ThreadId,
+  /// Event loop proxy used to send messages to the main thread from any thread.
   pub proxy: TaoEventLoopProxy<Message<T>>,
   main_thread: DispatcherMainThreadContext<T>,
   plugins: Arc<Mutex<Vec<Box<dyn Plugin<T> + Send>>>>,
@@ -372,6 +392,8 @@ pub struct Context<T: UserEvent> {
 }
 
 impl<T: UserEvent> Context<T> {
+  /// Runs the closure with access to the main thread context when called
+  /// from the main thread, or `None` from any other thread.
   pub fn run_threaded<R, F>(&self, f: F) -> R
   where
     F: FnOnce(Option<&DispatcherMainThreadContext<T>>) -> R,
@@ -564,6 +586,7 @@ impl ActiveTraceSpanStore {
 }
 
 #[cfg(feature = "tracing")]
+/// An entered tracing span kept alive while a window is being drawn.
 #[derive(Debug)]
 pub enum ActiveTracingSpan {
   WindowDraw {
@@ -572,6 +595,7 @@ pub enum ActiveTracingSpan {
   },
 }
 
+/// The store of windows created by this runtime, keyed by window id.
 #[derive(Debug)]
 pub struct WindowsStore(pub RefCell<BTreeMap<WindowId, WindowWrapper>>);
 
@@ -590,12 +614,17 @@ unsafe impl Sync for WindowsStore {}
 #[derive(Debug)]
 pub struct ExitState(pub AtomicBool);
 
+/// The state owned by the main thread and accessed from dispatchers.
 #[derive(Debug, Clone)]
 pub struct DispatcherMainThreadContext<T: UserEvent> {
+  /// The tao event loop window target used to create windows.
   pub window_target: EventLoopWindowTarget<Message<T>>,
+  /// The shared web context store backing all webviews.
   pub web_context: WebContextStore,
   // changing this to an Rc will cause frequent app crashes.
+  /// The windows created by this runtime, shared with the event loop.
   pub windows: Arc<WindowsStore>,
+  /// Guards against duplicate `ExitRequested` run events.
   pub exit_state: Arc<ExitState>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
@@ -619,6 +648,7 @@ impl<T: UserEvent> fmt::Debug for Context<T> {
   }
 }
 
+/// Wrapper converting the runtime [`DeviceEventFilter`] into the tao one.
 pub struct DeviceEventFilterWrapper(pub TaoDeviceEventFilter);
 
 impl From<DeviceEventFilter> for DeviceEventFilterWrapper {
@@ -631,6 +661,8 @@ impl From<DeviceEventFilter> for DeviceEventFilterWrapper {
   }
 }
 
+/// Wrapper converting a runtime [`Rect`](tauri_runtime::dpi::Rect) into the
+/// wry one.
 pub struct RectWrapper(pub wry::Rect);
 impl From<tauri_runtime::dpi::Rect> for RectWrapper {
   fn from(value: tauri_runtime::dpi::Rect) -> Self {
@@ -653,6 +685,7 @@ impl TryFrom<Icon<'_>> for TaoIcon {
   }
 }
 
+/// Wrapper holding an optional runtime window event converted from tao.
 pub struct WindowEventWrapper(pub Option<WindowEvent>);
 
 impl WindowEventWrapper {
@@ -730,6 +763,7 @@ impl WindowEventWrapper {
   }
 }
 
+/// Maps a tao theme to the runtime theme, defaulting to light.
 pub fn map_theme(theme: &TaoTheme) -> Theme {
   match theme {
     TaoTheme::Light => Theme::Light,
@@ -748,6 +782,7 @@ fn tao_activation_policy(activation_policy: ActivationPolicy) -> TaoActivationPo
   }
 }
 
+/// Wrapper around a tao monitor handle that converts into a runtime `Monitor`.
 pub struct MonitorHandleWrapper(pub MonitorHandle);
 
 impl From<MonitorHandleWrapper> for Monitor {
@@ -762,6 +797,7 @@ impl From<MonitorHandleWrapper> for Monitor {
   }
 }
 
+/// Wrapper converting a tao physical position into the runtime one.
 pub struct PhysicalPositionWrapper<T>(pub TaoPhysicalPosition<T>);
 
 impl<T> From<PhysicalPositionWrapper<T>> for PhysicalPosition<T> {
@@ -793,6 +829,7 @@ impl<T> From<LogicalPosition<T>> for LogicalPositionWrapper<T> {
   }
 }
 
+/// Wrapper converting a tao physical size into the runtime one.
 pub struct PhysicalSizeWrapper<T>(pub TaoPhysicalSize<T>);
 
 impl<T> From<PhysicalSizeWrapper<T>> for PhysicalSize<T> {
@@ -824,6 +861,7 @@ impl<T> From<LogicalSize<T>> for LogicalSizeWrapper<T> {
   }
 }
 
+/// Wrapper converting a runtime `Size` into the tao one.
 pub struct SizeWrapper(pub TaoSize);
 
 impl From<Size> for SizeWrapper {
@@ -835,6 +873,7 @@ impl From<Size> for SizeWrapper {
   }
 }
 
+/// Wrapper converting a runtime `Position` into the tao one.
 pub struct PositionWrapper(pub TaoPosition);
 
 impl From<Position> for PositionWrapper {
@@ -846,6 +885,7 @@ impl From<Position> for PositionWrapper {
   }
 }
 
+/// Wrapper converting a runtime `UserAttentionType` into the tao one.
 #[derive(Debug, Clone)]
 pub struct UserAttentionTypeWrapper(pub TaoUserAttentionType);
 
@@ -859,6 +899,7 @@ impl From<UserAttentionType> for UserAttentionTypeWrapper {
   }
 }
 
+/// Wrapper converting a runtime `CursorIcon` into the tao one.
 #[derive(Debug)]
 pub struct CursorIconWrapper(pub TaoCursorIcon);
 
@@ -907,6 +948,7 @@ impl From<CursorIcon> for CursorIconWrapper {
   }
 }
 
+/// Wrapper converting a runtime progress state into the tao one.
 pub struct ProgressStateWrapper(pub TaoProgressState);
 
 impl From<ProgressBarStatus> for ProgressStateWrapper {
@@ -922,6 +964,7 @@ impl From<ProgressBarStatus> for ProgressStateWrapper {
   }
 }
 
+/// Wrapper converting a runtime `ProgressBarState` into the tao one.
 pub struct ProgressBarStateWrapper(pub TaoProgressBarState);
 
 impl From<ProgressBarState> for ProgressBarStateWrapper {
@@ -936,6 +979,7 @@ impl From<ProgressBarState> for ProgressBarStateWrapper {
   }
 }
 
+/// Builder that wraps a tao window builder and accumulates runtime options before creating the window.
 #[derive(Clone, Default)]
 pub struct WindowBuilderWrapper {
   inner: TaoWindowBuilder,
@@ -1532,9 +1576,11 @@ pub struct GtkBox(pub gtk::Box);
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for GtkBox {}
 
+/// Wrapper making a `raw_window_handle::RawWindowHandle` safe to send across threads.
 pub struct SendRawWindowHandle(pub raw_window_handle::RawWindowHandle);
 unsafe impl Send for SendRawWindowHandle {}
 
+/// Messages targeting the application itself rather than a window or webview.
 pub enum ApplicationMessage {
   #[cfg(target_os = "macos")]
   Show,
@@ -1546,28 +1592,50 @@ pub enum ApplicationMessage {
   RemoveDataStore([u8; 16], Box<dyn FnOnce(Result<()>) + Send + 'static>),
 }
 
+/// Messages that can be sent to a window.
 pub enum WindowMessage {
+  /// Registers an event listener on the window.
   AddEventListener(WindowEventId, Box<dyn Fn(&WindowEvent) + Send>),
   // Getters
+  /// Requests the window scale factor.
   ScaleFactor(Sender<f64>),
+  /// Requests the position of the window's client area.
   InnerPosition(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the position of the window's outer frame.
   OuterPosition(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the size of the window's client area.
   InnerSize(Sender<PhysicalSize<u32>>),
+  /// Requests the size of the window's outer frame.
   OuterSize(Sender<PhysicalSize<u32>>),
+  /// Requests whether the window is fullscreen.
   IsFullscreen(Sender<bool>),
+  /// Requests whether the window is minimized.
   IsMinimized(Sender<bool>),
+  /// Requests whether the window is maximized.
   IsMaximized(Sender<bool>),
+  /// Requests whether the window has keyboard focus.
   IsFocused(Sender<bool>),
+  /// Requests whether the window has decorations.
   IsDecorated(Sender<bool>),
+  /// Requests whether the window is resizable.
   IsResizable(Sender<bool>),
+  /// Requests whether the window can be maximized.
   IsMaximizable(Sender<bool>),
+  /// Requests whether the window can be minimized.
   IsMinimizable(Sender<bool>),
+  /// Requests whether the window's close button is enabled.
   IsClosable(Sender<bool>),
+  /// Requests whether the window is visible.
   IsVisible(Sender<bool>),
+  /// Requests the window title.
   Title(Sender<String>),
+  /// Requests the monitor the window is currently on.
   CurrentMonitor(Sender<Option<MonitorHandle>>),
+  /// Requests the primary monitor.
   PrimaryMonitor(Sender<Option<MonitorHandle>>),
+  /// Requests the monitor containing the given point.
   MonitorFromPoint(Sender<Option<MonitorHandle>>, (f64, f64)),
+  /// Requests all monitors available to the window.
   AvailableMonitors(Sender<Vec<MonitorHandle>>),
   #[cfg(all(
     any(
@@ -1595,68 +1663,123 @@ pub enum WindowMessage {
   ActivityName(Sender<String>),
   #[cfg(target_os = "ios")]
   SceneIdentifier(Sender<String>),
+  /// Requests the raw window handle of the window.
   RawWindowHandle(Sender<std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError>>),
+  /// Requests the current theme of the window.
   Theme(Sender<Theme>),
+  /// Requests whether the window accepts input.
   IsEnabled(Sender<bool>),
+  /// Requests whether the window is always on top.
   IsAlwaysOnTop(Sender<bool>),
   // Setters
+  /// Centers the window on its monitor.
   Center,
+  /// Requests the user's attention for the window.
   RequestUserAttention(Option<UserAttentionTypeWrapper>),
+  /// Enables or disables input on the window.
   SetEnabled(bool),
+  /// Sets whether the window is resizable.
   SetResizable(bool),
+  /// Sets whether the window can be maximized.
   SetMaximizable(bool),
+  /// Sets whether the window can be minimized.
   SetMinimizable(bool),
+  /// Sets whether the window can be closed.
   SetClosable(bool),
+  /// Sets the window title.
   SetTitle(String),
+  /// Maximizes the window.
   Maximize,
+  /// Restores a maximized window.
   Unmaximize,
+  /// Minimizes the window.
   Minimize,
+  /// Restores a minimized window.
   Unminimize,
+  /// Shows the window.
   Show,
+  /// Hides the window.
   Hide,
+  /// Closes the window without destroying the webviews it hosts.
   Close,
+  /// Destroys the window.
   Destroy,
+  /// Sets whether the window has decorations.
   SetDecorations(bool),
+  /// Sets whether the window has a drop shadow.
   SetShadow(bool),
+  /// Sets whether the window is always at the bottom of the z-order.
   SetAlwaysOnBottom(bool),
+  /// Sets whether the window is always on top.
   SetAlwaysOnTop(bool),
+  /// Sets whether the window is visible on all workspaces.
   SetVisibleOnAllWorkspaces(bool),
+  /// Sets whether the window content is protected from screen capture.
   SetContentProtected(bool),
+  /// Sets the window size.
   SetSize(Size),
+  /// Sets the minimum window size.
   SetMinSize(Option<Size>),
+  /// Sets the maximum window size.
   SetMaxSize(Option<Size>),
+  /// Sets the window size constraints.
   SetSizeConstraints(WindowSizeConstraints),
+  /// Sets the window position.
   SetPosition(Position),
+  /// Sets whether the window is fullscreen.
   SetFullscreen(bool),
   #[cfg(target_os = "macos")]
   SetSimpleFullscreen(bool),
+  /// Focuses the window.
   SetFocus,
+  /// Sets whether the window can be focused.
   SetFocusable(bool),
+  /// Sets the window icon.
   SetIcon(TaoWindowIcon),
+  /// Sets whether the window is hidden from the taskbar.
   SetSkipTaskbar(bool),
+  /// Sets whether the cursor is confined to the window.
   SetCursorGrab(bool),
+  /// Sets whether the cursor is visible over the window.
   SetCursorVisible(bool),
+  /// Sets the cursor icon over the window.
   SetCursorIcon(CursorIcon),
+  /// Sets the cursor position.
   SetCursorPosition(Position),
+  /// Sets whether the window ignores cursor events.
   SetIgnoreCursorEvents(bool),
+  /// Sets the badge count shown for the window.
   SetBadgeCount(Option<i64>, Option<String>),
+  /// Sets the badge label shown for the window.
   SetBadgeLabel(Option<String>),
+  /// Sets the overlay icon shown on the taskbar icon.
   SetOverlayIcon(Option<TaoIcon>),
+  /// Sets the progress bar state shown on the taskbar icon.
   SetProgressBar(ProgressBarState),
+  /// Sets the title bar style of the window.
   SetTitleBarStyle(tauri_utils::TitleBarStyle),
+  /// Sets the traffic light position of the window.
   SetTrafficLightPosition(Position),
+  /// Sets the window theme.
   SetTheme(Option<Theme>),
+  /// Sets the window background color.
   SetBackgroundColor(Option<Color>),
+  /// Starts dragging the window.
   DragWindow,
+  /// Starts resizing the window in the given direction.
   ResizeDragWindow(tauri_runtime::ResizeDirection),
+  /// Requests a redraw of the window.
   RequestRedraw,
   #[cfg(target_env = "ohos")]
   OhosWindowId(Sender<Option<i64>>),
 }
 
+/// A window event synthesized by the runtime rather than received from tao.
 #[derive(Debug, Clone)]
 pub enum SynthesizedWindowEvent {
+  /// The window gained or lost focus.
   Focused(bool),
+  /// A drag and drop operation happened over the window.
   DragDrop(DragDropEvent),
 }
 
@@ -1670,12 +1793,16 @@ impl From<SynthesizedWindowEvent> for WindowEventWrapper {
   }
 }
 
+/// Messages that can be sent to a webview.
 pub enum WebviewMessage {
+  /// Registers an event listener on the webview.
   AddEventListener(WebviewEventId, Box<dyn Fn(&WebviewEvent) + Send>),
+  /// Evaluates JavaScript in the webview.
   #[cfg(not(all(feature = "tracing", not(target_os = "android"))))]
   EvaluateScript(String),
   #[cfg(all(feature = "tracing", not(target_os = "android")))]
   EvaluateScript(String, Sender<()>, tracing::Span),
+  /// Evaluates JavaScript in the webview and invokes the callback with the result.
   #[cfg(not(all(feature = "tracing", not(target_os = "android"))))]
   EvaluateScriptWithCallback(String, Box<dyn Fn(String) + Send + 'static>),
   #[cfg(all(feature = "tracing", not(target_os = "android")))]
@@ -1685,26 +1812,47 @@ pub enum WebviewMessage {
     Sender<()>,
     tracing::Span,
   ),
+  /// Requests the cookies stored for the given URL.
   CookiesForUrl(Url, Sender<Result<Vec<tauri_runtime::Cookie<'static>>>>),
+  /// Requests all cookies of the webview profile.
   Cookies(Sender<Result<Vec<tauri_runtime::Cookie<'static>>>>),
+  /// Stores a cookie in the webview profile.
   SetCookie(tauri_runtime::Cookie<'static>),
+  /// Deletes a cookie from the webview profile.
   DeleteCookie(tauri_runtime::Cookie<'static>),
+  /// Delivers a webview event to the listeners.
   WebviewEvent(WebviewEvent),
+  /// Delivers a synthesized window event to the webview listeners.
   SynthesizedWindowEvent(SynthesizedWindowEvent),
+  /// Navigates the webview to the given URL.
   Navigate(Url),
+  /// Reloads the webview.
   Reload,
+  /// Opens the print dialog for the webview.
   Print,
+  /// Closes the webview page while keeping its window.
   Close,
+  /// Shows the webview.
   Show,
+  /// Hides the webview.
   Hide,
+  /// Sets the webview position.
   SetPosition(Position),
+  /// Sets the webview size.
   SetSize(Size),
+  /// Sets the webview bounds.
   SetBounds(tauri_runtime::dpi::Rect),
+  /// Focuses the webview.
   SetFocus,
+  /// Moves the webview to another window.
   Reparent(WindowId, Sender<Result<()>>),
+  /// Sets whether the webview resizes together with its window.
   SetAutoResize(bool),
+  /// Sets the zoom level of the webview.
   SetZoom(f64),
+  /// Sets the webview background color.
   SetBackgroundColor(Option<Color>),
+  /// Clears all browsing data of the webview profile.
   ClearAllBrowsingData,
   #[cfg(target_env = "ohos")]
   CreatePdf(
@@ -1713,58 +1861,85 @@ pub enum WebviewMessage {
     Box<dyn Fn(bool) + Send + 'static>,
   ),
   // Getters
+  /// Requests the current URL of the webview.
   Url(Sender<Result<String>>),
+  /// Requests the current bounds of the webview.
   Bounds(Sender<Result<tauri_runtime::dpi::Rect>>),
+  /// Requests the current position of the webview.
   Position(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the current size of the webview.
   Size(Sender<Result<PhysicalSize<u32>>>),
+  /// Runs a closure with the platform webview handle.
   WithWebview(Box<dyn FnOnce(Webview) + Send>),
   // Devtools
+  /// Opens the webview devtools.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   OpenDevTools,
+  /// Closes the webview devtools.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   CloseDevTools,
+  /// Requests whether the webview devtools are open.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   IsDevToolsOpen(Sender<bool>),
 }
 
+/// Messages targeting the event loop itself.
 pub enum EventLoopWindowTargetMessage {
+  /// Requests the current cursor position.
   CursorPosition(Sender<Result<PhysicalPosition<f64>>>),
+  /// Sets the theme of the event loop.
   SetTheme(Option<Theme>),
+  /// Sets the filter applied to device events.
   SetDeviceEventFilter(DeviceEventFilter),
 }
 
+/// Closure that builds a window and returns the runtime window id.
 pub type CreateWindowClosure<T> =
   Box<dyn FnOnce(&EventLoopWindowTarget<Message<T>>) -> Result<WindowWrapper> + Send>;
 
+/// Closure that builds a webview and returns the runtime webview id.
 pub type CreateWebviewClosure =
   Box<dyn FnOnce(&Window, CreateWebviewOptions) -> Result<WebviewWrapper> + Send>;
 
+/// Options used when creating a webview through the event loop.
 pub struct CreateWebviewOptions {
+  /// The label of the webview that should receive focus.
   pub focused_webview: Arc<Mutex<Option<String>>>,
 }
 
+/// Messages processed by the tao event loop.
 pub enum Message<T: 'static> {
+  /// Runs a closure on the main thread.
   Task(Box<dyn FnOnce() + Send>),
   #[cfg(target_os = "macos")]
   SetActivationPolicy(ActivationPolicy),
   #[cfg(target_os = "macos")]
   SetDockVisibility(bool),
+  /// Requests the event loop to exit with the given code.
   RequestExit(i32),
+  /// A message targeting the application itself.
   Application(ApplicationMessage),
+  /// A message targeting a window.
   Window(WindowId, WindowMessage),
+  /// A message targeting a webview inside a window.
   Webview(WindowId, WebviewId, WebviewMessage),
+  /// A message targeting the event loop itself.
   EventLoopWindowTarget(EventLoopWindowTargetMessage),
+  /// Creates a webview inside the given window.
   CreateWebview(WindowId, CreateWebviewClosure),
+  /// Creates a window from the given closure.
   CreateWindow(
     WindowId,
     CreateWindowClosure<T>,
     #[cfg(target_env = "ohos")] Sender<Result<()>>,
   ),
+  /// Creates a window whose raw handle is used without being wrapped.
   CreateRawWindow(
     WindowId,
     Box<dyn FnOnce() -> (String, TaoWindowBuilder) + Send>,
     Sender<Result<Weak<Window>>>,
   ),
+  /// A user event forwarded to the event loop.
   UserEvent(T),
 }
 
@@ -3002,6 +3177,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 }
 
+/// A webview handle held by the main thread context.
 #[derive(Clone)]
 pub struct WebviewWrapper {
   label: String,
@@ -3051,6 +3227,7 @@ impl Drop for WebviewWrapper {
   }
 }
 
+/// A window and its webviews held by the main thread context.
 pub struct WindowWrapper {
   label: String,
   inner: Option<Arc<Window>>,
@@ -3069,6 +3246,7 @@ pub struct WindowWrapper {
 }
 
 impl WindowWrapper {
+  /// Returns the label of the window.
   pub fn label(&self) -> &str {
     &self.label
   }
@@ -3083,6 +3261,7 @@ impl fmt::Debug for WindowWrapper {
   }
 }
 
+/// Event loop proxy that sends user events through the runtime message channel.
 #[derive(Debug, Clone)]
 pub struct EventProxy<T: UserEvent>(TaoEventLoopProxy<Message<T>>);
 
@@ -3099,12 +3278,17 @@ impl<T: UserEvent> EventLoopProxy<T> for EventProxy<T> {
   }
 }
 
+/// Factory that builds a runtime plugin from the runtime context.
 pub trait PluginBuilder<T: UserEvent> {
+  /// The plugin type produced by this builder.
   type Plugin: Plugin<T>;
+  /// Builds the plugin with the given runtime context.
   fn build(self, context: Context<T>) -> Self::Plugin;
 }
 
+/// Extension hook that observes runtime events on the main thread.
 pub trait Plugin<T: UserEvent> {
+  /// Called for each runtime event; returns `true` when the event was handled.
   fn on_event(
     &mut self,
     event: &Event<Message<T>>,
@@ -3177,6 +3361,7 @@ impl<T: UserEvent> WryHandle<T> {
     Ok(())
   }
 
+  /// Registers a runtime plugin.
   pub fn plugin<P: PluginBuilder<T> + 'static>(&mut self, plugin: P)
   where
     <P as PluginBuilder<T>>::Plugin: Send,
@@ -3824,10 +4009,15 @@ where
   }
 }
 
+/// Context passed to the plugins on each event loop iteration.
 pub struct EventLoopIterationContext<'a, T: UserEvent> {
+  /// The user callback invoked with each runtime event.
   pub callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
+  /// The mapping from tao window ids to runtime window ids.
   pub window_id_map: WindowIdStore,
+  /// The windows created by this runtime.
   pub windows: Arc<WindowsStore>,
+  /// Guards against duplicate `ExitRequested` run events.
   pub exit_state: Arc<ExitState>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
