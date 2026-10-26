@@ -1,0 +1,38 @@
+# bot-metric policy override (upstream-fork exemption, user ruling 2026-10).
+#
+# Why: this is a downstream OHOS fork carrying upstream Tauri's historical
+# complexity debt wholesale. The default bot-metric policy blocks on
+# warning-severity findings (cyclomatic complexity, function length, ...),
+# which would flag hundreds of upstream baseline items that this fork does
+# not own and must not churn-rewrite (every cosmetic refactor of upstream
+# code is a future merge conflict against upstream).
+#
+# Effect: only `error`-severity findings block the metric gate. Warning-level
+# findings are still reported in full in .botgate/metric.json / report.md —
+# nothing is suppressed from visibility, they simply stop being blocking.
+# Quality targets mirror BotGate's own generated default policy (the built-in
+# defaults alone would fail on this codebase's duplication and unsafe-density
+# baseline): average-file-lines ceiling raised to 600 and the unsafe-density /
+# code-size-growth targets disabled.
+# `analysis.source_scope = "reachable"` scopes the static analysis to code
+# reachable from the Cargo targets; the default tree walk also swallows the
+# tauri-cli Handlebars templates (not Rust) and packages/cli node_modules,
+# which the analyzer cannot parse and which degrade the run to
+# status=partial regardless of policy. cfg_policy="active" keeps the scan on
+# cfg-active code for the analyzing host.
+#
+# Restore condition: revisit once the upstream baseline debt is paid down
+# (or the fork rebases onto an upstream that clears it) — remove the
+# `blocking_severities` override and the analysis/quality-target sections to
+# return to the default policy.
+
+[rules]
+blocking_severities = ["error"]
+
+[quality_targets]
+max_average_file_lines = 600
+disabled_targets = ["max_unsafe_density", "max_code_size_growth_ratio"]
+
+[analysis]
+cfg_policy = "active"
+source_scope = "reachable"
