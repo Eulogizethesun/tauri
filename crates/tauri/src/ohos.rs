@@ -66,11 +66,11 @@ pub static RUN_COMMAND_QUEUE: Mutex<VecDeque<RunCommandArgs>> = Mutex::new(VecDe
 /// and returns the app handle.
 ///
 /// Called once by `Builder::build` before the runtime is created. Panics when
-/// the app instance is missing — `mobile_entry_point!` must run first to
-/// install it.
+/// the app instance is missing: the entry-point macro must run first to
+/// install it (see the panic message for the correct attribute on OHOS).
 pub fn init() -> openharmony_ability::OpenHarmonyApp {
   let ohos_app = APP.lock().unwrap().clone().expect(
-    "OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build",
+    "OpenHarmony app instance not initialized -- the entry-point macro must run before Builder::build. Use #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] (all device forms): on the 2in1/desktop form cfg(mobile) is always false, so a lone #[cfg_attr(mobile, tauri::mobile_entry_point)] never expands",
   );
   BASE_PATH.set(ohos_app.base_path()).ok();
   MODULE_NAME.set(ohos_app.module_name()).ok();
