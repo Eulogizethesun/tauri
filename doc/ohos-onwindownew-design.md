@@ -918,7 +918,7 @@ fire-and-forget。**全 create 路径无 `block_on`、无 `recv()`、无 await-r
   `window_attrs.inner_size`/`position`，经 `el.app.scale()` 转 physical px，填入
   `WindowCreateParams.width/height/x/y`。
 - **下游**: `create_os_window` → ArkTS `createSubWindow` → `await win.resize(w,h)` +
-  `await win.moveWindowTo(x,y)` 应用尺寸；`FloatPage.aboutToAppear` 用
+  `await win.moveWindowTo(x,y)` 应用尺寸；`SubWindowPage.aboutToAppear` 用
   `getGlobalRect()` 读回（不覆盖为全屏）。
 - **铁律遵守**: tao 经 openharmony-ability 的 `create_os_window` 桥接（Rule #1），
   改动仅在 OHOS Float 分支（Rule #2 cfg 隔离）。
