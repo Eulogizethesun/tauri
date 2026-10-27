@@ -812,7 +812,7 @@ pub fn create_transparent_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
+  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
   // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
   // poll is_decorated on an unregistered webview → "failed to acquire webview
   // reference". Skip the live isDecorated badge for autotest windows to avoid that
@@ -914,7 +914,7 @@ pub fn create_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
+  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
   // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
   // poll is_decorated on an unregistered webview → "failed to acquire webview
   // reference". Skip the live isDecorated badge for autotest windows to avoid that
@@ -965,8 +965,8 @@ pub fn create_borderless_window<R: tauri::Runtime>(
   Ok(())
 }
 
-/// Test command: create a Float sub-window WITH decorations (title bar + close button).
-/// Used to test setClosable/Maximizable/Minimizable decoration flags (FloatPage reads
+/// Test command: create a sub-window (`OHOSWindowKind::SubWindow`) WITH decorations (title bar + close button).
+/// Used to test setClosable/Maximizable/Minimizable decoration flags (SubWindowPage reads
 /// LocalStorage to control button visibility — only visible when decorations=true).
 #[cfg(desktop)]
 #[command]
@@ -995,7 +995,7 @@ pub fn create_decorated_window<R: tauri::Runtime>(
       div.style.cssText = 'text-align:center;padding:30px;';
       div.innerHTML = '<h2>\u{{1F5BC}}️ Decorated Window</h2>'
         + '<p>This window has <code>decorations: true</code>.</p>'
-        + '<p>Title bar + close button visible (FloatPage decoration buttons).</p>'
+        + '<p>Title bar + close button visible (SubWindowPage decoration buttons).</p>'
         + '<p>Test setClosable/Maximizable below — close button visibility changes.</p>'
         + '{close_link}';
       document.body.appendChild(div);
@@ -1011,7 +1011,7 @@ pub fn create_decorated_window<R: tauri::Runtime>(
       .decorations(true)
       .inner_size(600.0, 400.0)
       .initialization_script(&init_script);
-  // OHOS-only: force Float so this stays a sub-window (multi-UIAbility is not
+  // OHOS-only: force the SubWindow kind so this stays a sub-window (multi-UIAbility is not
   // supported locally — the second UIAbility request is rejected by tao).
   #[cfg(target_env = "ohos")]
   {
@@ -1326,7 +1326,7 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
   })
 }
 
-/// Result of create_float_window_racy_attrs (float creation-race repro command).
+/// Result of create_float_window_racy_attrs (sub-window creation-race repro command).
 #[cfg(target_env = "ohos")]
 #[derive(serde::Serialize)]
 pub struct CreateFloatWindowRacyAttrsResult {
@@ -1334,15 +1334,15 @@ pub struct CreateFloatWindowRacyAttrsResult {
   pub label: String,
   /// Whether manager.get_webview_window(label) succeeded after build.
   pub webview_acquired: bool,
-  /// The pre-allocated OHOS window id for this Float window, for hilog
+  /// The pre-allocated OHOS window id for this sub-window, for hilog
   /// correlation (0 when the label registry has no entry yet).
   pub ohos_window_id: i64,
 }
 
-/// Float creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
+/// SubWindow creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
 /// `create_os_window` pre-allocates the window id Rust-side and fire-and-forgets
 /// the ArkTS `WindowManager.createSubWindow` chain (createSubWindowWithOptions
-/// → loadContentByName → FloatPage load), so any window op dispatched right
+/// → loadContentByName → SubWindowPage load), so any window op dispatched right
 /// after `build()` — here an immediate `set_size` — reaches ArkTS before the
 /// window is registered in `WindowManager.windows`, `requireWindow` throws
 /// "Unknown OS sub-window '<id>'" and the op is silently lost (the 22-warn
@@ -1357,16 +1357,16 @@ pub fn create_float_window_racy_attrs<R: tauri::Runtime>(
 ) -> tauri::Result<CreateFloatWindowRacyAttrsResult> {
   use tauri::ohos::OHOSWindowKind;
 
-  log::info!("Creating Float window with racy attrs: {}", window_id);
+  log::info!("Creating sub-window with racy attrs: {}", window_id);
 
   #[allow(unused_mut)] // `.decorations()` below is cfg(desktop)-only
   let mut builder =
     tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
-      .title("Float Racy Attrs Window")
+      .title("SubWindow Racy Attrs Window")
       .inner_size(500.0, 400.0)
       .ohos_window_kind(OHOSWindowKind::SubWindow);
   // `.decorations()` on the builder is a desktop-only API (see the UIAbility
-  // racy command above); FloatPage renders its own chrome either way.
+  // racy command above); SubWindowPage renders its own chrome either way.
   #[cfg(desktop)]
   {
     builder = builder.decorations(false);
@@ -1705,7 +1705,7 @@ pub fn create_transparent_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
+  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
   // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
   // poll is_decorated on an unregistered webview → "failed to acquire webview
   // reference". Skip the live isDecorated badge for autotest windows to avoid that
@@ -1764,7 +1764,7 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 
 /// Close all webview windows except the main window. Used by the TestRunner
 /// "Close All Test Windows" button to clean up windows opened during a test
-/// run (Float sub-windows, UIAbility instances, isolated/UA/custom-ua/no-throttle
+/// run (SubWindow sub-windows, UIAbility instances, isolated/UA/custom-ua/no-throttle
 /// windows, etc.).
 ///
 /// On OHOS, `WebviewWindow::close()` only removes the window from Rust's manager
@@ -1772,7 +1772,7 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 /// `destroyWindow()`, so the system window stays visible on screen. To actually
 /// destroy the system window, we must explicitly call `destroy_window` (which
 /// dispatches to ArkTS `WindowManager.closeWindow`):
-/// - Float sub-window: `win.destroyWindow()` (real destroy, removes from screen).
+/// - SubWindow sub-window: `win.destroyWindow()` (real destroy, removes from screen).
 /// - UIAbility main window: `hideAbility()` (background — OHOS doesn't allow
 ///   programmatic Ability kill; instance stays in recent tasks but invisible).
 ///

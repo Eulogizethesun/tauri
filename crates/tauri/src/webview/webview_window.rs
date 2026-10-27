@@ -1467,9 +1467,11 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///   want carries a unique `tauri_window_id`, which onAcceptWant maps to the
   ///   `tauri-window-<id>` instance key so AMS starts a new instance; a bare
   ///   want is routed to the main instance instead).
-  /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
+  /// - `SubWindow`: Application sub-window created via `windowStage.createSubWindow`,
+  ///   living inside this application's window tree (not the OS-wide floating
+  ///   window type `WindowType.TYPE_FLOAT`).
   ///
-  /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
+  /// Default is `UIAbility` when not specified. Use `SubWindow` for sub-windows.
   pub fn ohos_window_kind(mut self, kind: crate::ohos::OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
@@ -1479,7 +1481,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
 #[cfg(target_env = "ohos")]
 impl<R: Runtime> WebviewWindow<R> {
   /// Returns the OHOS OS-level window ID (0 for main UIAbility window, >0 for
-  /// Float sub-windows / subsequent UIAbility instances).
+  /// SubWindow sub-windows / subsequent UIAbility instances).
   ///
   /// Exposed so application code (e.g. close_all_test_windows) can call
   /// openharmony-ability's `destroy_window(id)` to actually destroy the system

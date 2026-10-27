@@ -1024,9 +1024,11 @@ impl<R: Runtime, M: Manager<R>> WindowBuilder<'_, R, M> {
   /// Sets the OHOS window kind for this window.
   ///
   /// - `UIAbility`: Main window that reuses the existing UIAbility container. Only one can exist (singleton).
-  /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
+  /// - `SubWindow`: Application sub-window created via `windowStage.createSubWindow`,
+  ///   living inside this application's window tree (not the OS-wide floating
+  ///   window type `WindowType.TYPE_FLOAT`).
   ///
-  /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
+  /// Default is `UIAbility` when not specified. Use `SubWindow` for sub-windows.
   pub fn ohos_window_kind(mut self, kind: OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self

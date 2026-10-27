@@ -1,6 +1,7 @@
 # OHOS 窗口能力支持现状与缺失功能设计
 
 > 创建时间: 2026-07-02
+> 最后更新: 2026-10-27(「装饰按钮可用性」节刷新为 #238 后契约、「窗口最大化」行对齐 test-mapping;set_visible 行与 A7 节按 #237 hide 契约收窄为主窗口口径——`minimize()` 按调用者类型双语义)
 > 核对基准: `tao/src/platform_impl/ohos/mod.rs`（1271 行）+ `openharmony-ability/crates/ability/src/window/mod.rs` + `native_ability/.../ArkHelper.ets` / `WindowManager.ets`
 > 约束: 遵守 CLAUDE.md 三铁律 —— ① 所有 ArkTS 调用经 `openharmony-ability`；② `cfg(target_env = "ohos")` 隔离，不影响 Win/mac/Linux；③ `OHOS_DEVICE_TYPE` 决定形态，桌面专属能力用 `cfg(all(target_env = "ohos", desktop))`。
 > 本文合并「现状核对」与「缺失功能设计」两部分，作为分组的开发依据。
@@ -62,7 +63,7 @@
 
 | 能力 | 状态 | 实现说明 |
 |------|------|---------|
-| 窗口最大化 | ❌ | `set_maximized` 空实现，`is_maximized` 返回 false |
+| 窗口最大化 | ✅ | `set_maximized`→`win.maximize(FOLLOW_APP_IMMERSIVE_SETTING)`，`is_maximized` 读位；还原 `recover_window`→`win.recover()`，子窗口路径含位置保持（最大化前快照、还原后回移），详见 test-mapping「窗口最大化」行 |
 | 窗口最小化 | ❌ | `set_minimized` 空实现，`is_minimized` 返回 false |
 | 全屏模式 | ❌ | `set_fullscreen` warn，`fullscreen` 返回 None |
 | 窗口可见性 | ❌ | `set_visible` 空实现，`is_visible` 返回 false |
@@ -73,13 +74,15 @@
 
 ### 装饰按钮可用性
 
+> #238 后契约：装饰按钮 OS 管理、无逐钮控制 API——`set_closable/maximizable/minimizable` 在主窗口直接 Err，仅子窗口经装饰 flag（LocalStorage）控制 SubWindowPage 按钮显隐。
+
 | 能力 | 状态 | 实现说明 |
 |------|------|---------|
-| 窗口可关闭 | ❌ | `set_closable` warn |
-| 窗口可最大化 | ❌ | `set_maximizable` warn |
-| 窗口可最小化 | ❌ | `set_minimizable` warn |
-| 窗口可聚焦 | ❌ | `set_focusable` warn |
-| 窗口可调整大小 | ❌ | `set_resizable` warn |
+| 窗口可关闭 | ✅（#238 收紧） | `set_closable`→`set_window_decoration_flags`(bit0)→LocalStorage：子窗口控制 SubWindowPage 关闭按钮显隐；主窗口 setter 直接 Err，is_closable() 恒 true |
+| 窗口可最大化 | ✅（#238 收紧） | 同上 bit1：子窗口控制 maximize 按钮显隐（flag=false 时 WindowManager.maximizeWindow 拒绝）；主窗口 setter 直接 Err，is_maximizable() 恒 true |
+| 窗口可最小化 | ✅（#238 收紧） | 同上 bit2：子窗口控制 minimize 按钮显隐；主窗口 setter 直接 Err，is_minimizable() 恒 true |
+| 窗口可聚焦 | ✅ | `set_focusable`→`win.setWindowFocusable`（主窗口 id=0 系统管理 no-op）；生效但无视觉变化，判据见 test-mapping「窗口可聚焦」行 |
+| 窗口可调整大小 | ✅ | `set_resizable`→`set_window_decoration_flags`(bit3)：子窗口控制 resize 手柄显隐；主窗口 no-op（resizable 属窗口能力位非装饰按钮，保持可写） |
 
 ### 输入与光标
 
@@ -107,10 +110,10 @@
 
 | 状态 | 数量 | 占比 |
 |------|------|------|
-| ✅ 已支持 | 8 | 21% |
-| ⚠️ 部分支持 | 8 | 21% |
-| ❌ 未支持 | 21 | 55% |
-| ➖ 平台不适用 | 1 | 3% |
+| ✅ 已支持 | 9 | 23.7% |
+| ⚠️ 部分支持 | 8 | 21.1% |
+| ❌ 未支持 | 20 | 52.6% |
+| ➖ 平台不适用 | 1 | 2.6% |
 | 合计 | 38 | 100% |
 
 ---
@@ -148,7 +151,7 @@
 | drag_resize_window | ❌ 平台限制 | OHOS 无 startWindowResize/Direction；同上由手柄处理 | — |
 | set_maximized / is_maximized | ✅ | desktop：窗口最大化填满屏幕 / 还原 | Toggle Maximize |
 | set_minimized / is_minimized | ✅ | 窗口最小化到任务栏；unminimize 恢复 | Minimize (2s restore) |
-| set_visible / is_visible | ✅ | hide：主窗口 hideAbility 后台、子窗口 minimize；show 恢复 | Hide/Show (2s restore) |
+| set_visible / is_visible | ⚠️（show ✅ / hide Err，#237） | show：最小化窗先 restore 再 `showWindow()`（纯抬起，不 un-maximize）；hide：统一 Err（主窗无窗口级 hide 语义，待 A1 `hide_ability`） | 手动 Show 按钮 |
 | set_focus | ✅ | 子窗口 raiseToAppTop 置前；主窗口聚焦系统管理 | setFocus |
 | set_fullscreen / fullscreen | ✅ | 进入沉浸布局（隐藏状态栏/导航条）；退出还原。无独占全屏，映射 Borderless | Toggle Fullscreen |
 | set_always_on_top / is_always_on_top | ✅（API14+） | 真实调用 `setWindowTopmost`（跨应用常驻置顶，需 ohos.permission.WINDOW_TOPMOST，仅主窗口）；<API14 时 no-op 仅记标志。`is_always_on_top` 读值保留；子窗口天然浮于主窗口 | Toggle AlwaysOnTop |
@@ -214,9 +217,9 @@
 - 改造: 同 A5 模式。`WindowManager.minimizeWindow` 已存在，复用。
 
 ### A7 窗口可见性 `set_visible` / `is_visible`
-- OHOS: `showWindow()` 存在；**`hideWindow()` 不存在**（SDK 23 实测）
+- OHOS: `showWindow()` 存在；**主窗无窗口级 hide**（`minimize()` 按调用者类型双语义：主窗=任务栏最小化≠hide，子窗/浮窗=hide 可经 showWindow() 恢复，@since 12；#237）
 - 形态: 通用
-- 改造: show → `win.showWindow()`；hide → 主窗口 `context.hideAbility()`，子窗口 `win.minimize()`（OHOS 无独立 hide，minimize 后 showWindow 可恢复）。tao 维护 `AtomicBool`。
+- 改造: show → `win.showWindow()`（最小化窗先 restore）；hide → 统一 Err（#237 契约，待 A1 `hide_ability` 真实现；旧「主窗口 hideAbility、子窗口 minimize」降级已删）。tao 维护 `AtomicBool`。
 
 ### A8 窗口聚焦 `set_focus`
 - OHOS: **`window.Window.focus()` 不存在**；子窗口用 `raiseToAppTop()`（since 14）
