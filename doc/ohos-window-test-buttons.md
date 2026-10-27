@@ -93,8 +93,8 @@
 
 > **子窗口最大化三连修复(2026-08-27,真机验证通过)**:`Create Decorated Window` → 点子窗口标题栏 □ → ❐,窗口应回到原位。
 > ① **Fix A(maximizeSupported)**:API19+ `createSubWindowWithOptions` 须传 `maximizeSupported:true`,否则 `win.maximize()` 报 1300004、□ 点击无效。
-> ② **Fix C(还原位置保持)**:WMS `recover()` 用 GetFullScreenToFloatingRect **按指针重算**浮动落点(为拖离标题栏还原设计)→ 程序化还原后窗口飞到指针附近(右上角)。修法:maximize 前 `preMaximizeRects` 快照 + recover 后 `moveTo` 回原位(FloatPage 按钮路径与 tao bridge 路径均覆盖)。
-> ③ **Fix D(startMoving 抢答)**:FloatPage 标题栏 `onTouch(Down)→startMoving()` 对子按钮触摸同样触发——最大化态按下 ❐ **瞬间**触发 WMS 拖离还原,窗口移走导致 touch-UP out of region、click 手势被拒、onClick 从未执行(hilog "MOVE/UP event is out of region, try to reject click gesture" 实锤)。修法:isMaximized 时跳过 startMoving(最大化态牺牲标题栏拖拽)。同机制曾连带最大化态下 —/✕ 按钮失效,一并修复。
+> ② **Fix C(还原位置保持)**:WMS `recover()` 用 GetFullScreenToFloatingRect **按指针重算**浮动落点(为拖离标题栏还原设计)→ 程序化还原后窗口飞到指针附近(右上角)。修法:maximize 前 `preMaximizeRects` 快照 + recover 后 `moveTo` 回原位(SubWindowPage 按钮路径与 tao bridge 路径均覆盖)。
+> ③ **Fix D(startMoving 抢答)**:SubWindowPage 标题栏 `onTouch(Down)→startMoving()` 对子按钮触摸同样触发——最大化态按下 ❐ **瞬间**触发 WMS 拖离还原,窗口移走导致 touch-UP out of region、click 手势被拒、onClick 从未执行(hilog "MOVE/UP event is out of region, try to reject click gesture" 实锤)。修法:isMaximized 时跳过 startMoving(最大化态牺牲标题栏拖拽)。同机制曾连带最大化态下 —/✕ 按钮失效,一并修复。
 > ⚠️ 子窗口最小化后无法从任务栏恢复属系统设计(问题二,不修);`Toggle Maximize` 按钮作用于主窗口(getCurrentWindow),子窗口最大化须用其自身标题栏按钮。
 | 窗口聚焦 | `setFocus` | 子窗口 raiseToAppTop |
 | 窗口置顶 | `Toggle AlwaysOnTop` | ✅ 已实现(setWindowTopmost API14+,跨应用常驻最前) |
@@ -183,7 +183,7 @@
 | 窗口主题 | 部分实现 | ✅ 完整(含系统跟随 NOT_SET) | `Set Theme` |
 | 窗口置顶 | no-op(只记 AtomicBool) | ✅ setWindowTopmost API14+ | `Toggle AlwaysOnTop` |
 | 用户注意力请求 | no-op(空) | ✅ notificationManager.publish + requestEnableNotification 授权重试 | `Request User Attention (notification)` |
-| 拖拽窗口 | Err(NotSupported) | ✅ FloatPage onTouch(Down) → win.startMoving() API14+ | (Create Decorated Window 后拖标题栏) |
+| 拖拽窗口 | Err(NotSupported) | ✅ SubWindowPage onTouch(Down) → win.startMoving() API14+ | (Create Decorated Window 后拖标题栏) |
 | 拖拽调整大小 | Err(NotSupported) | ✅ set_window_draggable → enableDrag(主窗口边缘拖拽缩放) | (主窗口边缘直接拖) |
 | 光标抓取 | Err(NotSupported)「平台限制」(误判:只 grep 了 ArkTS .d.ts,C API 仅在 NDK 暴露) | ✅ OH_WindowManager_LockCursor/UnlockCursor(NDK API22+,normal 权限;dlopen 弱加载,<22 设备降级 NotSupported;失焦自动解锁) | `setCursorGrab(true) 5s (Lock to window)` |
 | IME 位置 | 「平台限制」双重误判(①"inputMethod 无位置 API";②"webview 不绑定 OHOS IMF client,走 Chromium 自己的输入法栈") | ✅ `inputMethod.getController().updateCursor(CursorInfo)` API10+。A/B 实测(2026-08-19):无聚焦输入框报 `12800009`(client detached,任何应用无聚焦编辑框皆如此,非 webview 特有);程序化聚焦 HTML input 后返回 OK — ArkWeb HTML input 走系统输入法(官方《Web 组件对接软键盘》),webview 场景可用 | `Set IME Position (200,400)`(自验:manualResult 显示真实结果) |

@@ -265,7 +265,7 @@
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | core | on_new_window | Allow/弹窗关闭 | Allow dialog 关闭按钮验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Allow dialog has close button (manual)" 2. 观察弹窗外观 3. 点击标题栏 ✕ 按钮 | ① 弹出非模态对话框，标题栏显示目标 URL ② 标题栏右上角有 ✕ 关闭按钮 ③ 点击 ✕ 对话框关闭（hilog `NewWindowDialog: Close button clicked`）④ 对话框内嵌 `Web` 组件**直接加载目标 URL**（`src: params.url`，非空白页） | `openNewWindowDialog` → `openCustomDialog`；Allow 分支先 `setWebController(null)` 取消 ArkWeb 自有弹窗（避免无宿主 controller 阻塞 UI 线程），再由独立 dialog 的 `Web` 加载 targetUrl。注：对话框内嵌 `Web` 占满 90%×80% 区域并消费点击，点外部区域不触发 autoCancel 关闭——须用标题栏 ✕ 关闭 |
 | core | on_new_window | Deny/无弹窗 | Deny 模式阻止弹窗验证 | **T1** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Deny prevents dialog (manual)" 2. 观察屏幕 | ① 不弹出任何对话框 ② 页面保持不变，无导航跳转 ③ hilog 可见 `DENY` 日志 | `setWebController(null)` 阻止新窗口 |
-| core | on_new_window | Create/真窗口 | Create real OS window 验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Create (real OS window)" 2. 观察 3. 用 FloatPage 标题栏 ✕ 关闭子窗口 4. 再次点击创建第二个，用系统 X / Ctrl+W 关闭 | ① 弹出独立 OS 子窗口（非页内对话框，Float 类型，挂载 FloatPage 自绘标题栏）② 窗口加载目标 URL ③ 关闭子窗口不影响主应用 ④ hilog 可见 `on_new_window: CREATE real OS window` + `response: Create` ⑤ **两种关闭方式均有** `CloseRequested → Destroyed`：✕ 按钮走 `FloatPage: Close button clicked`→`notifyWindowClose`；系统 X 走 `FloatPage: aboutToDisappear: system close detected`→`notifyWindowClose` ⑥ 关闭时 destroy-window bridge 返回成功（`receiver.await returned`），**无** `destroy_window failed: Unknown OS sub-window` 噪音日志（#2 幂等修复）⑦ 可重复点击创建多个独立子窗口 | `NewWindowResponse::Create` → `WebviewWindowBuilder::build()` → `createOSWindow` → Float 子窗口；OHOS 子窗口无系统装饰，`decorations` 控制的是 FloatPage 内自绘 ✕/最小化/最大化按钮渲染；每次点击创建新窗口（非"不弹对话框"） |
+| core | on_new_window | Create/真窗口 | Create real OS window 验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Create (real OS window)" 2. 观察 3. 用 SubWindowPage 标题栏 ✕ 关闭子窗口 4. 再次点击创建第二个，用系统 X / Ctrl+W 关闭 | ① 弹出独立 OS 子窗口（非页内对话框，SubWindow 类型，挂载 SubWindowPage 自绘标题栏）② 窗口加载目标 URL ③ 关闭子窗口不影响主应用 ④ hilog 可见 `on_new_window: CREATE real OS window` + `response: Create` ⑤ **两种关闭方式均有** `CloseRequested → Destroyed`：✕ 按钮走 `SubWindowPage: Close button clicked`→`notifyWindowClose`；系统 X 走 `SubWindowPage: aboutToDisappear: system close detected`→`notifyWindowClose` ⑥ 关闭时 destroy-window bridge 返回成功（`receiver.await returned`），**无** `destroy_window failed: Unknown OS sub-window` 噪音日志（#2 幂等修复）⑦ 可重复点击创建多个独立子窗口 | `NewWindowResponse::Create` → `WebviewWindowBuilder::build()` → `createOSWindow` → Float 子窗口；OHOS 子窗口无系统装饰，`decorations` 控制的是 SubWindowPage 内自绘 ✕/最小化/最大化按钮渲染；每次点击创建新窗口（非"不弹对话框"） |
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -754,7 +754,7 @@
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | core | decorations | 主窗开关 | Toggle Decorations — 主窗口装饰开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Decorations (main window)" 2. 观察标题栏显隐与 isDecorated 读数 3. 再点恢复 | ① isDecorated 读数翻转（before→after 显示在结果区）② 标题栏视觉随读数变化；若读数翻转但主窗无视觉变化，记录现象（OHOS 主窗为系统管理窗） | 主窗口 setDecorations；结果区显示 `isDecorated: X → Y` |
 | core | decorations | 无装饰子窗 | Create Borderless Window — 纯无边框子窗口 | **T1** | 应用已启动 | 1. 点击 "Create Borderless Window (decorations=false)" 2. 观察子窗口 3. Ctrl+W 关闭 | ① 弹出无标题栏/无拖拽区/无关闭按钮的子窗口 ② 仅深色内容区 + "🖼️ Borderless Window" 文字 ③ 该窗口成为 Set BG 按钮靶窗 | decorations=false（不透明变体）；透明+无边框变体见 §十 T0；无 ✕ 按钮须 Ctrl+W 关闭 |
-| core | decorations | 有装饰子窗 | Create Decorated Window — 带标题栏子窗口（装饰按钮靶窗） | **T0** | 应用已启动 | 1. 点击 "Create Decorated Window (title bar)" 2. 观察标题栏 + 三按钮 3.（可选）点标题栏 □ 最大化再 ❐ 还原 4. 点 ✕ 关闭 | ① FloatPage 自绘标题栏 + 最小化/最大化/关闭按钮 ② 标题显示 "🪟 Decorated Test Window"（setTitle API15+）③ □/❐ 最大化/还原正常且**还原位置不漂移** ④ ✕ 关闭走 CloseRequested→destroy ⑤ 该窗口成为 36.7 装饰按钮靶窗 | 子窗口最大化三连修复（2026-08-27）：`maximizeSupported:true` + recover `moveTo` 回原位 + isMaximized 跳过 startMoving；OHOS 子窗口无系统装饰，decorations 控制的是 FloatPage 自绘按钮渲染 |
+| core | decorations | 有装饰子窗 | Create Decorated Window — 带标题栏子窗口（装饰按钮靶窗） | **T0** | 应用已启动 | 1. 点击 "Create Decorated Window (title bar)" 2. 观察标题栏 + 三按钮 3.（可选）点标题栏 □ 最大化再 ❐ 还原 4. 点 ✕ 关闭 | ① SubWindowPage 自绘标题栏 + 最小化/最大化/关闭按钮 ② 标题显示 "🪟 Decorated Test Window"（setTitle API15+）③ □/❐ 最大化/还原正常且**还原位置不漂移** ④ ✕ 关闭走 CloseRequested→destroy ⑤ 该窗口成为 36.7 装饰按钮靶窗 | 子窗口最大化三连修复（2026-08-27）：`maximizeSupported:true` + recover `moveTo` 回原位 + isMaximized 跳过 startMoving；OHOS 子窗口无系统装饰，decorations 控制的是 SubWindowPage 自绘按钮渲染 |
 
 ### 36.4 Window Background Color
 
@@ -792,12 +792,12 @@
 
 ### 36.7 OHOS Window Ops — 装饰按钮（Float 子窗口生效）
 
-> 需先 Create Decorated Window（36.3）。closable 是唯一被 FloatPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable/resizable 写入 LocalStorage 但 FloatPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。
+> 需先 Create Decorated Window（36.3）。closable 是唯一被 SubWindowPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable/resizable 写入 LocalStorage 但 SubWindowPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 FloatPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 FloatPage 消费的 flag |
-| ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | FloatPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
+| ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 SubWindowPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 SubWindowPage 消费的 flag |
+| ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | SubWindowPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
 | ohos | decoration-flags | 可最小化 | Toggle Minimizable — 最小化 flag | **T1** | 同上 | 1. 点击 "Toggle Minimizable" | isMinimizable 读数翻转（state-only） | 同上（无最小化按钮） |
 | ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag | **T1** | 同上 | 1. 点击 "Toggle Resizable" | isResizable 读数翻转（state-only） | 真正禁用子窗 resize 需走 enableDrag(false)；本 flag 层为 API 拦截语义 |
 | ohos | decoration-flags | 可聚焦 | setFocusable(false) — 拒绝键盘焦点（自验式） | **T0** | 已创建子窗口；**主窗口当前持有焦点**（先点主窗口空白处） | 1. 点击 "setFocusable(false) (3s)" 2. **3 秒内点击子窗口一次** 3. 等自动判定 | ① ✅ PASS：主窗口焦点保持（子窗拒绝焦点点击）② ❌ FAIL：3 秒内主窗焦点丢失（子窗仍抢走焦点） | setWindowFocusable **无视觉变化**（语义=不接受键盘焦点，2026-08-27 A/B 实测定案）；按钮自验（轮询主窗 isFocused 3s 后判定）；程序化 setFocus() 不能用于验证（raiseToAppTop 只抬 z-order 不转移焦点） |

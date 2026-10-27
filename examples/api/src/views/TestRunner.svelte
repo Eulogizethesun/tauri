@@ -1142,7 +1142,7 @@ Expected behavior:
       const win = await WebviewWindow.getByLabel(windowId);
       if (!win) throw new Error('decorated window not created');
       lastCreatedWindowLabel = windowId;
-      // Set a title (setWindowTitle → LocalStorage 'title' → FloatPage title bar)
+      // Set a title (setWindowTitle → LocalStorage 'title' → SubWindowPage title bar)
       try { await win.setTitle('🪟 Decorated Test Window'); } catch (e) { /* may fail on main window, ignore */ }
       manualResult = `Decorated window created (id: "${windowId}").\n\n` +
         `Expected: Window WITH title bar + minimize/maximize/close buttons.\n` +
@@ -1449,7 +1449,7 @@ Expected behavior:
       await win.setClosable(!before);
       const after = await win.isClosable();
       ohosWinState = `isClosable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setClosable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected(decorations=true 时):关闭按钮 ${after ? '显示' : '隐藏'}。\nclosable 是唯一被 FloatPage 消费的 flag(line 155 控制关闭按钮显隐)。`;
+      manualResult = `setClosable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected(decorations=true 时):关闭按钮 ${after ? '显示' : '隐藏'}。\nclosable 是唯一被 SubWindowPage 消费的 flag(line 155 控制关闭按钮显隐)。`;
       onMessage(manualResult);
     });
   }
@@ -1463,7 +1463,7 @@ Expected behavior:
       await win.setMaximizable(!before);
       const after = await win.isMaximizable();
       ohosWinState = `isMaximizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setMaximizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('maximizable') 但没消费(无最大化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      manualResult = `setMaximizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('maximizable') 但没消费(无最大化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
       onMessage(manualResult);
     });
   }
@@ -1477,7 +1477,7 @@ Expected behavior:
       await win.setMinimizable(!before);
       const after = await win.isMinimizable();
       ohosWinState = `isMinimizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setMinimizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('minimizable') 但没消费(无最小化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      manualResult = `setMinimizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('minimizable') 但没消费(无最小化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
       onMessage(manualResult);
     });
   }
@@ -1491,7 +1491,7 @@ Expected behavior:
       await win.setResizable(!before);
       const after = await win.isResizable();
       ohosWinState = `isResizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('resizable') 但没消费(无 resize 手柄)。\nflag 写入 LocalStorage 但无 UI 效果。要真正禁用 resize 需走 enableDrag(false) API。`;
+      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('resizable') 但没消费(无 resize 手柄)。\nflag 写入 LocalStorage 但无 UI 效果。要真正禁用 resize 需走 enableDrag(false) API。`;
       onMessage(manualResult);
     });
   }

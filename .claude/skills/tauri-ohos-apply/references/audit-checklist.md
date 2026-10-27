@@ -37,7 +37,7 @@
 
 ### ArkTS 框架
 - [ ] WebView 事件在 `@Builder` 内 pre-build 注册
-- [ ] 多窗口状态使用 `@LocalStorageProp` 隔离（FloatPage）
+- [ ] 多窗口状态使用 `@LocalStorageProp` 隔离（SubWindowPage）
 
 ## 4. 平台隔离
 
