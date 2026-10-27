@@ -2306,12 +2306,15 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** hiding windows is not supported — the `@ohos.window`
-  ///   API set has no window-level hide method, so this call returns an
-  ///   `NotSupported` error naming OpenHarmony instead of
-  ///   degrading to a taskbar minimize (issue Eulogizethesun/tauri#237). Use
-  ///   [`Self::minimize`] for taskbar minimization; a real hide returns with
-  ///   the A1 `hide_ability` entitlement.
+  /// - **OpenHarmony:** on a main window there is no hide semantics: per the
+  ///   SDK d.ts `minimize()` has dual semantics by caller type (main window =
+  ///   taskbar minimize, not hide, restored from the dock; sub-window / float
+  ///   = hide, restorable via `showWindow()` since API 12), and
+  ///   UIAbility-level `hideAbility` is out of reach on PC/2in1. This call
+  ///   returns a `NotSupported` error naming OpenHarmony instead of degrading
+  ///   to a taskbar minimize (issue Eulogizethesun/tauri#237, requirement 4
+  ///   pending the A1 `hide_ability` implementation). Use [`Self::minimize`]
+  ///   for taskbar minimization.
   pub fn hide(&self) -> crate::Result<()> {
     self.window.hide()
   }

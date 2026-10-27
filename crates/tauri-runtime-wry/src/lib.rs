@@ -2743,13 +2743,17 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   fn hide(&self) -> Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      // Issue Eulogizethesun/tauri#237: OHOS has no window-level hide API
-      // (@ohos.window carries no hide; UIAbility-level hideAbility is out of
-      // reach on PC/2in1 until the A1 entitlement). Fail at the dispatcher —
-      // the message handlers intentionally discard tao Results, so this is
-      // the only layer the caller sees (same pattern as setEnabled #225).
-      // tao's former minimize downgrade was removed with the same issue; a
-      // real hide returns with the A1 hide_ability action.
+      // Issue Eulogizethesun/tauri#237: per the @ohos.window SDK d.ts,
+      // minimize() has dual semantics by caller type: on a MAIN window it
+      // minimizes to the taskbar (not hide; restored from the dock), while on
+      // sub-windows / floating windows it hides the window (restorable via
+      // showWindow(), @since 12). So the main window has no hide semantics at
+      // all, and UIAbility-level hideAbility is out of reach on PC/2in1 until
+      // the A1 entitlement. The blanket Err is retained per #237 requirement 4
+      // pending the A1 hide_ability real implementation. Fail at the
+      // dispatcher: the message handlers intentionally discard tao Results, so
+      // this is the only layer the caller sees (same pattern as setEnabled
+      // #225); tao's former minimize downgrade was removed with the same issue.
       return Err(ohos_unsupported("hiding windows"));
     }
     #[cfg(not(target_env = "ohos"))]
