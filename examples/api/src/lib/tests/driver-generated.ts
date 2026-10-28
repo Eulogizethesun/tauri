@@ -550,11 +550,13 @@ export const driverTests: TestCase[] = [
     const label = uniq('fltd'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { await w.destroy(); }
   }),
   driverCase('float.hide+show+center', async () => {
-    // #237: on OHOS hide() rejects with a NotSupported error naming OpenHarmony.
-    // The expected rejection is caught and text-asserted HERE so blind()'s
-    // NOT_IMPLEMENTED filter never sees it (the case stays a pass, not a skip);
-    // show+center keep the original flow on every platform.
-    const label = uniq('flth'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { let hideMsg = ''; try { await w.hide(); } catch (e) { hideMsg = String((e as Error)?.message ?? e); } if (hideMsg && !hideMsg.includes('not supported on OpenHarmony')) { throw new Error('float.hide: unexpected hide() rejection (expected the #237 not-supported-on-OpenHarmony text)'); } await delay(300); await w.show(); await delay(300); await w.center(); } if (w) { await w.destroy(); }
+    // #237/#241 (T28-4 kind-split): hide on a FLOAT SUB-WINDOW is supported —
+    // it dispatches to tao set_visible (sub-window branch: minimize_window +
+    // showWindow mirror), so hide() must RESOLVE here. A rejection means the
+    // main-window gate leaked onto sub-windows (the pre-fix blanket Err); the
+    // catch re-throws with that diagnosis so the case FAILS, never silently
+    // passes. show() then restores the window and center() re-centers it.
+    const label = uniq('flth'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { try { await w.hide(); } catch (e) { throw new Error(`float.hide: hide() on the sub-window rejected — the main-window gate leaked onto sub-windows: ${String((e as Error)?.message ?? e)}`); } await delay(300); await w.show(); await delay(300); await w.center(); } if (w) { await w.destroy(); }
   }),
   driverCase('float.setFocus+alwaysOnTop', async () => {
     const label = uniq('fltf'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { await w.setAlwaysOnTop(true); await delay(200); await w.setAlwaysOnTop(false); await w.setFocus(); } if (w) { await w.destroy(); }
