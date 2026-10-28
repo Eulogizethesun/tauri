@@ -2528,6 +2528,49 @@ pub fn devtools_close_only<R: tauri::Runtime>(
   window.close_devtools();
   Ok(())
 }
+/// tauri-F8: one wall-clock wait step for the rendered-ack poll, kept at
+/// module level (out of `set_bounds_test`'s body) so its closed-channel
+/// behavior is unit-testable.
+///
+/// Async sleep: the wall-clock wait runs on the async runtime's blocking
+/// pool while the awaiting task yields, so the ack poll loop never pins an
+/// async worker thread (the previous `std::thread::sleep` blocked the worker
+/// for every 100ms tick, up to the whole 5s ack budget). tokio is not a
+/// direct dependency of this crate, so `tokio::time::sleep` is unavailable;
+/// this is the equivalent built on the `tauri::async_runtime` re-exports
+/// (tokio mpsc channel + spawn_blocking), with the poll window
+/// (POLL_INTERVAL / ACK_BUDGET) unchanged.
+///
+/// Returns true when the wait ELAPSED (the blocking task sent its completion
+/// token) and false when the channel closed first: a panicking
+/// spawn_blocking task, or a runtime shutting down, drops the sender so
+/// `recv()` resolves INSTANTLY with None. The old `let _ = rx.recv().await`
+/// treated both outcomes alike, so the None path degenerated into a 0ms hot
+/// loop that burned the whole 5s ack budget before failing with a misleading
+/// "no rendered ack" timeout. The bool return is what lets the caller bail.
+#[cfg(desktop)]
+async fn async_sleep(duration: std::time::Duration) -> bool {
+  let (tx, rx) = tauri::async_runtime::channel::<()>(1);
+  tauri::async_runtime::spawn_blocking(move || {
+    std::thread::sleep(duration);
+    // blocking_send: we are on the blocking pool, outside any async context.
+    // The previous `let _ = tx.send(())` built the ASYNC send future and
+    // dropped it unawaited - a no-op - so the token never arrived and the
+    // old receive below only resolved via the channel closing when this
+    // task finished (its None silently swallowed, tauri-F8).
+    let _ = tx.blocking_send(());
+  });
+  wait_sleep_token(rx).await
+}
+
+/// The observable half of `async_sleep`: maps the mpsc receive to "the wait
+/// happened" (Some) vs "the sender was dropped before sending" (None, i.e.
+/// false - the wait did not happen).
+#[cfg(desktop)]
+async fn wait_sleep_token(mut rx: tauri::async_runtime::Receiver<()>) -> bool {
+  rx.recv().await.is_some()
+}
+
 /// Test set_bounds / bounds round-trip on the webview named by `label`.
 ///
 /// The caller must pass a DEDICATED (explicit-bounds child) webview label, not
@@ -2583,23 +2626,6 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
       .unwrap_or(0)
   }
 
-  /// Async sleep: the wall-clock wait runs on the async runtime's blocking
-  /// pool while the awaiting task yields, so the ack poll loop below never
-  /// pins an async worker thread (the previous `std::thread::sleep` blocked
-  /// the worker for every 100ms tick, up to the whole 5s ack budget). tokio
-  /// is not a direct dependency of this crate, so `tokio::time::sleep` is
-  /// unavailable; this is the equivalent built on the `tauri::async_runtime`
-  /// re-exports (tokio mpsc channel + spawn_blocking), with the poll window
-  /// (POLL_INTERVAL / ACK_BUDGET) unchanged.
-  async fn async_sleep(duration: Duration) {
-    let (tx, mut rx) = tauri::async_runtime::channel::<()>(1);
-    tauri::async_runtime::spawn_blocking(move || {
-      std::thread::sleep(duration);
-      let _ = tx.send(());
-    });
-    let _ = rx.recv().await;
-  }
-
   /// Physical px (x, y, w, h) of a rect under the given scale factor,
   /// accepting either dpi variant (the bounds cache preserves whatever
   /// variant was last sent).
@@ -2646,7 +2672,17 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
           "set_bounds_test: no rendered ack from the probe page within 5s (expected viewport ~{viewport_w}x{viewport_h}, newer than {since_ms}) — the final set_bounds was never applied (or the webview does not run /webview-viewport-probe.html)"
         ));
       }
-      async_sleep(POLL_INTERVAL).await;
+      // Bail instead of spinning (tauri-F8): false means the sleep never
+      // happened (blocking task panicked or the runtime is shutting down)
+      // and recv() resolved instantly - continuing would burn the whole ack
+      // budget as a 0ms hot loop before failing with a misleading "no
+      // rendered ack" timeout. Fail fast with the real diagnosis.
+      if !async_sleep(POLL_INTERVAL).await {
+        return Err(
+          "set_bounds_test: ack poll aborted - the async runtime dropped the sleep before the poll interval elapsed (spawn_blocking task panicked or runtime shutdown)"
+            .to_string(),
+        );
+      }
     }
   }
 
@@ -3074,4 +3110,47 @@ pub async fn fault_injection_clear() -> tauri::Result<()> {
 pub fn set_exit_confirmation(enabled: bool) {
   crate::EXIT_CONFIRM_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
   log::info!("[cmd] set_exit_confirmation: enabled={}", enabled);
+}
+
+/// tauri-F8 regression tests: the closed-channel (None) path of the ack-poll
+/// sleep must be OBSERVABLE so `wait_rendered_ack` can bail instead of
+/// spinning. Host + desktop only: the helpers are cfg(desktop) and the tests
+/// need a live async runtime.
+#[cfg(all(test, desktop))]
+mod async_sleep_tests {
+  use super::{async_sleep, wait_sleep_token};
+  use std::time::{Duration, Instant};
+
+  #[test]
+  fn elapsed_wait_reports_true_after_the_full_duration() {
+    tauri::async_runtime::block_on(async {
+      let start = Instant::now();
+      let waited = async_sleep(Duration::from_millis(150)).await;
+      assert!(
+        waited,
+        "a completed blocking sleep must report that the wait happened"
+      );
+      assert!(
+        start.elapsed() >= Duration::from_millis(150),
+        "async_sleep resolved before the requested duration elapsed"
+      );
+    });
+  }
+
+  #[test]
+  fn dropped_sender_reports_false_instead_of_an_elapsed_wait() {
+    tauri::async_runtime::block_on(async {
+      let (tx, rx) = tauri::async_runtime::channel::<()>(1);
+      drop(tx);
+      let started = Instant::now();
+      assert!(
+        !wait_sleep_token(rx).await,
+        "a dropped sender must surface as false (the wait did NOT happen)"
+      );
+      assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the closed-channel read must resolve instantly (None path), not block"
+      );
+    });
+  }
 }
