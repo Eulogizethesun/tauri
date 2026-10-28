@@ -59,7 +59,7 @@ pub struct EventTracker {
   /// Webview viewport probe samples (public/webview-viewport-probe.{html,js},
   /// openspec ohos-webview-sizing): the RENDERED ArkWeb viewport of whichever
   /// webview loaded the probe page, reported through the real invoke path.
-  /// Samples accumulate between `clear_tracked_events` calls — pollers take the
+  /// Samples accumulate between `clear_tracked_events` calls -- pollers take the
   /// latest entry per tag, so resize re-reports supersede the load-time one;
   /// cases create their webviews and poll within one test step, and the suite
   /// runs steps sequentially, so a mid-run clear never races a live poller.
@@ -71,15 +71,15 @@ pub struct EventTracker {
 /// Field names are camelCase to match the wire the probe page speaks: the JS
 /// side sends camelCase invoke args (tauri auto-maps them to these snake_case
 /// params on `track_webview_viewport_probe`) and core.ts reads the returned
-/// samples as `.innerWidth` etc. — hence `rename_all` for the Serialize side.
+/// samples as `.innerWidth` etc. -- hence `rename_all` for the Serialize side.
 /// Without the rename, the return JSON is snake_case and the poller reads
-/// `undefined` — the red-light run of 2026-10-19 failed exactly that way
-/// (every assertion saw `undefined×undefined`, a broken rig, not the designed
+/// `undefined` -- the red-light run of 2026-10-19 failed exactly that way
+/// (every assertion saw `undefinedxundefined`, a broken rig, not the designed
 /// red light).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportProbeSample {
-  /// Probe key — the reporting webview's label (frozen into
+  /// Probe key -- the reporting webview's label (frozen into
   /// `__TAURI_INTERNALS__.metadata` by the init scripts).
   pub tag: String,
   pub inner_width: f64,
@@ -516,7 +516,7 @@ pub fn create_isolated_window<R: tauri::Runtime>(
   window_id: String,
   data_suffix: String,
   url: String,
-  // fix-variant M1: optional useHttpsScheme opt-in — the https://<scheme>.localhost
+  // fix-variant M1: optional useHttpsScheme opt-in -- the https://<scheme>.localhost
   // intercept URL space only exists inside a use_https webview. Option so the
   // pre-existing callers (which omit it) keep deserializing.
   use_https: Option<bool>,
@@ -1252,7 +1252,7 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
     tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
       .title("UIAbility Racy Attrs Window")
       // Creation-time geometry: consumed by the spawned-UIAbility path via
-      // startAbility StartOptions (tao#26 review follow-up F5) — asserted by the
+      // startAbility StartOptions (tao#26 review follow-up F5) -- asserted by the
       // window-ops racy-attrs case (outer size/position readback after settle).
       .inner_size(700.0, 500.0)
       .position(90.0, 70.0)
@@ -1342,7 +1342,7 @@ pub struct CreateFloatWindowRacyAttrsResult {
 /// SubWindow creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
 /// `create_os_window` pre-allocates the window id Rust-side and fire-and-forgets
 /// the ArkTS `WindowManager.createSubWindow` chain (createSubWindowWithOptions
-/// → loadContentByName → SubWindowPage load), so any window op dispatched right
+/// -> loadContentByName -> SubWindowPage load), so any window op dispatched right
 /// after `build()` — here an immediate `set_size` — reaches ArkTS before the
 /// window is registered in `WindowManager.windows`, `requireWindow` throws
 /// "Unknown OS sub-window '<id>'" and the op is silently lost (the 22-warn
@@ -2188,9 +2188,9 @@ pub fn cookie_test_main_thread_read<R: tauri::Runtime>(
 /// #192: main-thread url() truth through the `ohos.webview-url` sync bridge.
 ///
 /// Sync (non-`async fn`) commands execute on the OHOS main thread, so
-/// `Webview::url()` here exercises wry's `url_with_main_thread_refresh` →
+/// `Webview::url()` here exercises wry's `url_with_main_thread_refresh` ->
 /// `webview_url_on_main_thread` (ArkTS `WebviewUrlPlugin` action `get-url`)
-/// — the synchronous ArkTS `WebviewController.getUrl()` read that used to be
+/// -- the synchronous ArkTS `WebviewController.getUrl()` read that used to be
 /// unreachable from the main thread without deadlocking. Returns the live
 /// URL string; a missing webview or a bridge failure rejects (Err), which is
 /// exactly the behavior the suite asserts on.
@@ -2206,7 +2206,7 @@ pub fn get_webview_url<R: tauri::Runtime>(
   Ok(url.to_string())
 }
 
-/// #192 helper: SPA hash-route navigation inside a dedicated webview — no
+/// #192 helper: SPA hash-route navigation inside a dedicated webview -- no
 /// reload, the pushState-style routing the sync url() read must observe
 /// (a full-reload navigation would also refresh any stale cache; the
 /// in-page route change is what distinguishes a live controller read).
@@ -2231,7 +2231,7 @@ pub fn navigate_webview_hash<R: tauri::Runtime>(
 
 /// #188: creates a dedicated incognito WebviewWindow for the cookie-isolation
 /// probe. `WebviewWindowBuilder::incognito(true)` rides the create request as
-/// `WebviewStyle.incognito` → ArkTS `WebOptions.incognitoMode(true)` — the
+/// `WebviewStyle.incognito` -> ArkTS `WebOptions.incognitoMode(true)` -- the
 /// incognito cookie store that keeps writes out of persistent storage.
 #[command]
 pub fn create_incognito_webview<R: tauri::Runtime>(
@@ -2254,7 +2254,7 @@ pub fn create_incognito_webview<R: tauri::Runtime>(
   Ok(())
 }
 
-/// #188: writes the per-store probe cookies — a marker THROUGH the incognito
+/// #188: writes the per-store probe cookies -- a marker THROUGH the incognito
 /// webview (its `WebviewStyle.incognito` routes the ArkTS `configCookieSync`
 /// call to the incognito store) and a control through the main window's
 /// default store. Split from the read half because `set_cookie` is
@@ -2294,7 +2294,7 @@ pub fn incognito_cookie_set<R: tauri::Runtime>(
 }
 
 /// #188: read-only cross-probe of the two cookie stores. The incognito store
-/// must see only the marker, the default store only the control — any
+/// must see only the marker, the default store only the control -- any
 /// bleed-through (or a shared store) fails the JS-side assertions via the
 /// returned report.
 #[command]
@@ -2334,12 +2334,12 @@ pub fn incognito_cookie_isolation<R: tauri::Runtime>(
 }
 
 /// #219: set_title ack-chain probe. Resolves the window by label and calls
-/// `set_title` — on OHOS this dispatches the `ohos.window` set-title command
+/// `set_title` -- on OHOS this dispatches the `ohos.window` set-title command
 /// whose ArkTS arm now awaits `WindowManager.setWindowTitle` (#219 tracked
 /// ack), so an unknown/destroyed window REJECTS here instead of returning a
 /// fake success ack. A bogus label is resolved at the tao layer (not found);
 /// a freshly destroyed window surfaces as either that or the ArkTS-side
-/// tracked failure — both reject, which is the asserted contract.
+/// tracked failure -- both reject, which is the asserted contract.
 #[command]
 pub fn set_title_on<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,
@@ -2353,14 +2353,14 @@ pub fn set_title_on<R: tauri::Runtime>(
 }
 
 /// #219 (fix-variant M3): tracked-reject probe. The tauri layer must resolve a
-/// REAL window first (the tauri-layer window-existence precondition — the #80
+/// REAL window first (the tauri-layer window-existence precondition -- the #80
 /// illegal-label leg is rejected by `get_webview_window` before any ArkTS
 /// dispatch and cannot cover this), then drives the ArkTS window-command chain
 /// into a
 /// DETERMINISTIC failure with a wire-valid but unknown window id:
-/// `WindowClient.set_window_title` → WindowPlugin set-title arm →
-/// `await WindowManager.setWindowTitle` → `getWindow` lookup throws → the arm
-/// rethrows (`set-title failed: …`) → NAPI reject → `WindowAcknowledgement::
+/// `WindowClient.set_window_title` -> WindowPlugin set-title arm ->
+/// `await WindowManager.setWindowTitle` -> `getWindow` lookup throws -> the arm
+/// rethrows (`set-title failed: ...`) -> NAPI reject -> `WindowAcknowledgement::
 /// ensure()` turns the rejection into a Rust Err. The asserted error message
 /// proves the rejection ORIGINATED at the ArkTS tracked op instead of a
 /// tauri-layer guard.
@@ -2579,25 +2579,25 @@ async fn wait_sleep_token(mut rx: tauri::async_runtime::Receiver<()>) -> bool {
 /// The caller must pass a DEDICATED (explicit-bounds child) webview label, not
 /// the window-content webview: under the ohos-webview-sizing D2 semantics a
 /// runtime set_bounds flips a natural-layout (bounds-less) webview to explicit
-/// sizing — round-tripping "main" used to pin the window content to its stale
-/// bounds-cache value (observed 200×200) and opt it out of container-following.
+/// sizing -- round-tripping "main" used to pin the window content to its stale
+/// bounds-cache value (observed 200x200) and opt it out of container-following.
 /// Re-asserting an explicit-bounds child's own geometry is side-effect-free.
 ///
 /// The command is a discriminating probe, not a smoke test (issue
 /// Eulogizethesun/tauri#241):
-/// - `set_bounds` dispatches asynchronously on OHOS (runtime → wry → ArkTS
+/// - `set_bounds` dispatches asynchronously on OHOS (runtime -> wry -> ArkTS
 ///   render layer) and wry updates its bounds cache at DISPATCH time, so an
 ///   immediate `bounds()` read-back would "match" regardless of whether the
 ///   rect was ever applied. `set_ok` therefore awaits the RENDERED ack: the
 ///   webview must run the viewport probe page, which reports its rendered
 ///   viewport through the real invoke path on every resize; the command polls
 ///   the tracker until a sample newer than the sends reports the requested
-///   size (±2px ArkWeb constant + DPI-rounding slack), else it errors.
+///   size (+/-2px ArkWeb constant + DPI-rounding slack), else it errors.
 /// - Two back-to-back set_bounds calls with DISTINCT sizes exercise the
 ///   last-wins contract: a dropped, merged, or never-applied final rect keeps
 ///   the rendered viewport at the probe size and the ack never arrives.
 /// - After the ack, position()/size() are read back and asserted against the
-///   re-asserted rect (±2px) — the rendered ack proves the final message was
+///   re-asserted rect (+/-2px) -- the rendered ack proves the final message was
 ///   applied, and that message carried all four components, so the read-back
 ///   pins the position component of the APPLIED geometry too.
 ///
@@ -2614,7 +2614,7 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
   use tauri::Manager;
   use tauri::{Position, Rect, Size};
 
-  /// Ack budget — the probe page reports on resize; 5s covers slow renders
+  /// Ack budget -- the probe page reports on resize; 5s covers slow renders
   /// while staying inside the 15s case timeout (creation wait + command).
   const ACK_BUDGET: Duration = Duration::from_secs(5);
   const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -2736,7 +2736,7 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
 
   wait_rendered_ack(&app, &label, vw, vh, since_ms).await?;
 
-  // Real read-back assertions against the re-asserted rect (±2px): the ack
+  // Real read-back assertions against the re-asserted rect (+/-2px): the ack
   // proves the final message was applied, and that message carried all four
   // components, so the cache-backed getters pin the applied position too.
   let pos = webview
@@ -2921,7 +2921,7 @@ pub fn get_ime_position_result() -> Result<String, String> {
 /// Used by manual test buttons in TestRunner to verify clipboard/zoom/https flags
 /// without needing to modify app config and rebuild.
 // OHOS-only: calls WebviewWindowBuilder::disable_clipboard_access, which exists
-// only under cfg(target_env = "ohos") — without this gate the host
+// only under cfg(target_env = "ohos") -- without this gate the host
 // `cargo test --all-targets` workspace build fails with E0599.
 #[cfg(target_env = "ohos")]
 #[command]

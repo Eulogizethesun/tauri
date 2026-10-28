@@ -55,7 +55,7 @@ pub struct PopupMenu<R: Runtime>(tauri::menu::Menu<R>);
 
 // Two-line entry-point form (issue Eulogizethesun/tauri#242): the OHOS
 // Ability/NAPI entry is required on the 2in1 desktop form too, where
-// cfg(mobile) is false — a lone cfg_attr(mobile, mobile_entry_point) would
+// cfg(mobile) is false -- a lone cfg_attr(mobile, mobile_entry_point) would
 // silently produce no entry there.
 /// Builds the example app runtime and runs it on the current thread.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -288,10 +288,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       window.__TAURI_INTERNALS__.__TEST_INVOKE_INIT_SCRIPT__ = 'executed';
     "#)
     // 1. Test custom URI scheme protocol (sync)
-    // #186 (fix-variant M1): response headers exercise the new write path —
+    // #186 (fix-variant M1): response headers exercise the new write path --
     // ACAO + Expose-Headers make the cross-origin fetch provable from JS, and
     // the echo header is the JS-visible receipt that headers set by the Rust
-    // protocol handler reach the page through wry→wire→setResponseHeader.
+    // protocol handler reach the page through wry->wire->setResponseHeader.
     .register_uri_scheme_protocol("myapp", |_ctx, request| {
       log::info!("Custom scheme request: {:?}", request.uri());
 

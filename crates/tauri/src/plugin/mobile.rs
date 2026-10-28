@@ -379,7 +379,7 @@ impl<R: Runtime> PluginHandle<R> {
 /// Both the main-thread path (`Webview::on_message`) and the OHOS
 /// lock-contention path (`AppManager::extend_api` offloads to the blocking
 /// pool when the plugin store lock is busy) must run this same fallback when
-/// the command is not handled — otherwise the JS promise never settles.
+/// the command is not handled -- otherwise the JS promise never settles.
 #[cfg(any(mobile, target_env = "ohos"))]
 pub(crate) fn run_mobile_channel_fallback<R: Runtime>(
   plugin: &str,
@@ -400,7 +400,7 @@ pub(crate) fn run_mobile_channel_fallback<R: Runtime>(
     }
   }
 
-  // resolve/reject take the resolver by value — take ownership of a clone
+  // resolve/reject take the resolver by value -- take ownership of a clone
   let resolver = resolver.clone();
 
   let payload = message.payload.into_json();

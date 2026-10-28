@@ -13,13 +13,13 @@ use syn::{spanned::Spanned, Attribute, ItemFn};
 /// without the leading `::`).
 ///
 /// Namespace-qualified matching only: a bare `#[entry_point]` does NOT match
-/// — `entry_point` is a generic name any crate may define, and stripping it
+/// -- `entry_point` is a generic name any crate may define, and stripping it
 /// here would silently delete a foreign attribute from the passthrough
 /// function (issue Eulogizethesun/tauri#241). Write the full path
 /// (`tauri::ohos::entry_point` / `ohos::entry_point` via a module import) so
 /// the sibling stripping recognizes it. An aliased import (`use
 /// tauri::ohos::entry_point as x;` used as `#[x]`) renames the path and
-/// deliberately does NOT match either — the stripping degrades and the build
+/// deliberately does NOT match either -- the stripping degrades and the build
 /// fails with E0428 (visible, not silent). Issue Eulogizethesun/tauri#242.
 fn is_entry_point_attr(attr: &Attribute) -> bool {
   let segments: Vec<String> = attr
@@ -40,7 +40,7 @@ fn is_entry_point_attr(attr: &Attribute) -> bool {
 
 /// Removes the sibling entry-point attribute (if any) from the function's
 /// remaining attributes, so exactly one expander runs when both attributes
-/// are written on the same function — independent of the writing order (the
+/// are written on the same function -- independent of the writing order (the
 /// outer macro sees the inner attribute on its input; stripping it from the
 /// passthrough function stops the inner expansion).
 fn strip_sibling_entry_point_attrs(function: &mut ItemFn) {
@@ -72,7 +72,7 @@ pub fn entry_point(_attributes: TokenStream, item: TokenStream) -> TokenStream {
 
 /// The expansion body, on `proc_macro2` types so it stays unit-testable
 /// (`proc_macro::TokenStream` is only usable inside a live macro-expansion
-/// bridge — calling the attribute fn directly in a unit test panics).
+/// bridge -- calling the attribute fn directly in a unit test panics).
 fn entry_point_impl(item: TokenStream2) -> TokenStream2 {
   let mut function = match syn::parse2::<ItemFn>(item) {
     Ok(function) => function,
@@ -81,7 +81,7 @@ fn entry_point_impl(item: TokenStream2) -> TokenStream2 {
   // Issue Eulogizethesun/tauri#242: when both entry-point attributes are
   // written on the same function, the outer expander sees the inner one on
   // its input (`cfg_attr` is already evaluated by rustc at this point).
-  // Strip it from the passthrough function so exactly one expander runs —
+  // Strip it from the passthrough function so exactly one expander runs --
   // otherwise both would emit the fixed-name glue items (stop_unwind /
   // _start_app / openharmony) and the build dies with E0428.
   strip_sibling_entry_point_attrs(&mut function);
@@ -169,7 +169,7 @@ mod tests {
   use super::*;
   use std::sync::Mutex;
 
-  /// `std::env::set_var` mutates process-global state — serialize the
+  /// `std::env::set_var` mutates process-global state -- serialize the
   /// expansion tests that need the Android package env vars set.
   static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -189,7 +189,7 @@ mod tests {
 
   /// UT for entry-point attribute recognition: both entry-point attributes in
   /// every namespace-qualified spelling match; a bare `#[entry_point]` (a
-  /// generic name other crates may define — stripping it would silently drop
+  /// generic name other crates may define -- stripping it would silently drop
   /// a foreign attribute) and unrelated attributes do not.
   #[test]
   fn ut_entry_point_attr_recognition_matches_both_attributes_full_paths() {
@@ -277,7 +277,7 @@ mod tests {
       .parse::<TokenStream2>()
       .unwrap();
       // The outer attribute (mobile_entry_point here) is consumed by rustc
-      // before the macro runs; in a direct call the input still carries it —
+      // before the macro runs; in a direct call the input still carries it --
       // which doubles as the stripping check for a same-attribute sibling.
       let out = entry_point_impl(item).to_string();
       assert!(

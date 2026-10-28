@@ -623,7 +623,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
   ///   not consume a window icon during window creation (committer #168);
   ///   there is no runtime `set_window_icon` on OHOS either, so the icon has
   ///   no effect for the lifetime of the window.
@@ -942,7 +942,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
   ///   not consume a `visible: false` attribute during window creation
   ///   (committer #168); windows are created visible. Toggle visibility with
   ///   `Window::set_visible` after
@@ -958,7 +958,7 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **macOS**: Only supported on macOS 10.14+.
-  /// - **OpenHarmony:** Ignored at creation time — the platform backend does
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
   ///   not consume a preferred theme during window creation (committer #168);
   ///   the window follows the system theme. `Window::set_theme` runtime
   ///   requests are unaffected.
@@ -1697,7 +1697,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   /// - **OpenHarmony:** on a UIAbility main window this reads as always
-  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   available -- the three decoration buttons are OS-managed and carry no
   ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
   ///   Sub-windows read the flag last written by [`Self::set_maximizable`] /
   ///   the creation seed.
@@ -1711,7 +1711,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   /// - **OpenHarmony:** on a UIAbility main window this reads as always
-  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   available -- the three decoration buttons are OS-managed and carry no
   ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
   ///   Sub-windows read the flag last written by [`Self::set_minimizable`] /
   ///   the creation seed.
@@ -1725,7 +1725,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// - **Linux / iOS / Android:** Unsupported.
   /// - **OpenHarmony:** on a UIAbility main window this reads as always
-  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   available -- the three decoration buttons are OS-managed and carry no
   ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
   ///   Sub-windows read the flag last written by [`Self::set_closable`] /
   ///   the creation seed.
@@ -1959,14 +1959,14 @@ impl<R: Runtime> Window<R> {
   ///   by #241 to match the tao T28-4 contract). On a main window there is no
   ///   hide semantics: per the SDK d.ts `minimize()` has dual semantics by
   ///   caller type (main window = taskbar minimize, restored from the dock),
-  ///   and UIAbility-level `hideAbility` is out of reach on PC/2in1 — the
+  ///   and UIAbility-level `hideAbility` is out of reach on PC/2in1 -- the
   ///   window is left untouched. Sub-windows / floating windows hide for
   ///   real (the SDK `minimize()` IS the hide primitive there, restored via
   ///   [`Self::show`]).
   ///
   /// # Errors
   ///
-  /// - **OpenHarmony:** main window — `NotSupported` ("hiding the main window
+  /// - **OpenHarmony:** main window -- `NotSupported` ("hiding the main window
   ///   is not supported on OpenHarmony").
   pub fn hide(&self) -> crate::Result<()> {
     self.window.dispatcher.hide().map_err(Into::into)
@@ -2171,7 +2171,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// # Errors
   ///
-  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
   ///   on the main window is not supported on OpenHarmony").
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
     self
@@ -2192,7 +2192,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// # Errors
   ///
-  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
   ///   on the main window is not supported on OpenHarmony").
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self
@@ -2215,7 +2215,7 @@ impl<R: Runtime> Window<R> {
   ///
   /// # Errors
   ///
-  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
   ///   on the main window is not supported on OpenHarmony").
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self

@@ -161,7 +161,7 @@ pub fn command(options: Options) -> Result<()> {
 
 /// `#[tauri::mobile_entry_point]` generates an `openharmony_ability_mod`
 /// module registering this app's NAPI entry points (`init`, `render`, ...)
-/// — the ArkTS runtime's only way into the Rust library. Without it the app
+/// -- the ArkTS runtime's only way into the Rust library. Without it the app
 /// fails at runtime with an opaque module-load error, so fail the build
 /// early instead, mirroring the Android check for the
 /// `Java_app_tauri_plugin_PluginManager_handlePluginResponse` symbol.
@@ -169,7 +169,7 @@ pub fn command(options: Options) -> Result<()> {
 /// The registration symbols are Rust-mangled locals, so the static symbol
 /// table is searched for the module-name fragment instead of an exact
 /// symbol. A stripped library (release profile with `strip = true`, which
-/// the tauri workspace itself uses) has no symbol table left to inspect —
+/// the tauri workspace itself uses) has no symbol table left to inspect --
 /// in that case fall back to checking that the NAPI module registration
 /// export is present and log that the entry-point check was skipped.
 const REQUIRED_SYMBOL_FRAGMENT: &str = "openharmony_ability_mod";

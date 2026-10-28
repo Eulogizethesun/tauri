@@ -43,11 +43,11 @@ pub fn mobile_entry_point(attributes: TokenStream, item: TokenStream) -> TokenSt
   mobile::entry_point(attributes, item)
 }
 
-/// OHOS-only alias of [`mobile_entry_point`] — expands to the exact same
+/// OHOS-only alias of [`mobile_entry_point`] -- expands to the exact same
 /// entry-point glue (issue Eulogizethesun/tauri#242).
 ///
 /// The OHOS entry contract is the NAPI module the Ability framework loads,
-/// not a mobile `main()` — on the 2in1 (desktop) device form `cfg(mobile)`
+/// not a mobile `main()` -- on the 2in1 (desktop) device form `cfg(mobile)`
 /// is false, so a lone `#[cfg_attr(mobile, tauri::mobile_entry_point)]`
 /// would silently produce no entry. This alias lets applications write the
 /// two-line form so the name in the source names the actual platform model:

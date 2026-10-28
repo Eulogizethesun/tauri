@@ -95,17 +95,17 @@ impl ExitRequestApi {
   ///   (`UIAbility.onPrepareToTerminateAsync`), which requires the app to
   ///   declare `ohos.permission.PREPARE_APP_TERMINATE` (normal, system_grant;
   ///   already included in the tauri-cli open-harmony template) in its entry
-  ///   `module.json5` — older projects or custom `module.json5` files need to
+  ///   `module.json5` -- older projects or custom `module.json5` files need to
   ///   add it. The probe is an API 15+ (HarmonyOS 5.0.3+) interface: on
   ///   older systems the framework has no such callback, so it is never
   ///   invoked and the exit proceeds silently with no interception chance.
-  ///   On API 15–18 it only executes on PC and 2-in-1 devices (Tablet is
+  ///   On API 15-18 it only executes on PC and 2-in-1 devices (Tablet is
   ///   additionally covered from API 19); when the permission is missing or
   ///   the device form factor is not supported, the system skips the
   ///   callback entirely, so the exit proceeds and `prevent_exit` is never
   ///   invoked for it. The last-window teardown
   ///   path also emits `code: None`, but by then the system has already
-  ///   committed to destroying the UIAbility window stage — calling
+  ///   committed to destroying the UIAbility window stage -- calling
   ///   `prevent_exit` there cannot keep the app alive.
   pub fn prevent_exit(&self) {
     if self.code != Some(RESTART_EXIT_CODE) {
@@ -223,10 +223,10 @@ pub enum RunEvent {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** `code: None` events come from the PC/2-in-1
-  ///   pre-close probe — the only preventable source, requiring
-  ///   `ohos.permission.PREPARE_APP_TERMINATE` — and from last-window
+  ///   pre-close probe -- the only preventable source, requiring
+  ///   `ohos.permission.PREPARE_APP_TERMINATE` -- and from last-window
   ///   teardown, which is not preventable because the window stage
-  ///   destruction is already committed — see
+  ///   destruction is already committed -- see
   ///   [`ExitRequestApi::prevent_exit`] for details.
   #[non_exhaustive]
   ExitRequested {
@@ -551,7 +551,7 @@ impl<R: Runtime> AppHandle<R> {
   /// but accepts a boxed trait object instead of a generic type.
   #[cfg_attr(feature = "tracing", tracing::instrument(name = "app::plugin::register", skip(plugin), fields(name = plugin.name())))]
   pub fn plugin_boxed(&self, plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
-    // OHOS: initialize outside the plugins lock — a plugin's setup may round-trip
+    // OHOS: initialize outside the plugins lock -- a plugin's setup may round-trip
     // the ArkTS bridge, which pumps the event loop and would otherwise deadlock
     // against on_event_loop_event's lock below. Non-OHOS keeps the upstream
     // in-lock ordering through the PluginStore::initialize wrapper.
@@ -607,7 +607,7 @@ impl<R: Runtime> AppHandle<R> {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** `exit_code` is not propagated to the process exit
-  ///   status — the teardown terminates the ability with a hardcoded `0`
+  ///   status -- the teardown terminates the ability with a hardcoded `0`
   ///   through the app-control bridge, so the process always exits with code
   ///   0. The requested code is still delivered on the
   ///   [`RunEvent::ExitRequested`] event, and `App::run_return` likewise
@@ -631,7 +631,7 @@ impl<R: Runtime> AppHandle<R> {
   ///
   /// - **OpenHarmony:** the actual restart is always performed on the main
   ///   thread (directly, or through the event loop when triggered from another
-  ///   thread); see [`crate::process::restart`] for the platform semantics —
+  ///   thread); see [`crate::process::restart`] for the platform semantics --
   ///   the focus requirement (background restarts fail with 16000053 and end
   ///   as exit-without-restart) and the park-without-timeout after a
   ///   successful request.
@@ -667,7 +667,7 @@ impl<R: Runtime> AppHandle<R> {
   ///
   /// - **OpenHarmony:** the actual restart is performed on the main thread
   ///   through the event loop; see [`crate::process::restart`] for the
-  ///   platform semantics — the focus requirement (background restarts fail
+  ///   platform semantics -- the focus requirement (background restarts fail
   ///   with 16000053 and end as exit-without-restart) and the
   ///   park-without-timeout after a successful request.
   pub fn request_restart(&self) {
@@ -2493,7 +2493,7 @@ tauri::Builder::default()
             .icon_as_template(tray_config.icon_as_template);
         // The menu-on-left-click config keys are unsupported on OHOS (see
         // tray-icon's build-time warnings for the builder methods), and the
-        // config struct always materializes them from serde defaults —
+        // config struct always materializes them from serde defaults --
         // forwarding would trip that warning for every app that merely has
         // a tray config. Skip the forward on OHOS: the attrs stay unset,
         // which resolves to the same platform default (true).
@@ -2726,7 +2726,7 @@ fn on_event_loop_event<R: Runtime>(
 
   // The plugins lock is never held across an ArkTS bridge round-trip (see
   // plugin_boxed / initialize_plugins), so the event loop can take the
-  // blocking lock like upstream — plugin events are no longer dropped.
+  // blocking lock like upstream -- plugin events are no longer dropped.
   manager
     .plugins
     .lock()
@@ -2750,7 +2750,7 @@ mod tests {
     }
   }
 
-  /// S7 pure-transform batch: runtime window events → public WindowEvent
+  /// S7 pure-transform batch: runtime window events -> public WindowEvent
   /// mapping. CloseRequested/Moved/ScaleFactorChanged/ThemeChanged never fire
   /// naturally on OHOS.
   #[test]

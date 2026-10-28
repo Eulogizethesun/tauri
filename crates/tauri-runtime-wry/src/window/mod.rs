@@ -26,7 +26,7 @@ pub trait WindowExt {
   /// ## Platform-specific:
   ///
   /// - **Android / iOS**: Unsupported.
-  /// - **OpenHarmony**: Unsupported, returns an error (#225 — the dispatcher
+  /// - **OpenHarmony**: Unsupported, returns an error (#225 -- the dispatcher
   ///   fails early instead of silently discarding the message).
   fn set_enabled(&self, enabled: bool);
 

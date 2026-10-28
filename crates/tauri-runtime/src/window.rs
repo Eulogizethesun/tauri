@@ -542,7 +542,7 @@ pub enum OHOSWindowKind {
   /// container; a SubWindow has nothing to attach to); subsequent
   /// windows may opt in explicitly and take the spawned-instance path.
   UIAbility,
-  /// Sub-window — created via `windowStage.createSubWindow`, lives inside an
+  /// Sub-window -- created via `windowStage.createSubWindow`, lives inside an
   /// existing UIAbility container and is destroyed with it. This is an
   /// application sub-window, NOT the OS-wide floating window type
   /// (`WindowType.TYPE_FLOAT`, whose windows float above all apps); the

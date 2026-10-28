@@ -2316,10 +2316,10 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   caller type (main window = taskbar minimize, not hide, restored from
   ///   the dock; sub-window / float = hide, restorable via `showWindow()`
   ///   since API 12), and UIAbility-level `hideAbility` is out of reach on
-  ///   PC/2in1 — so this call returns a `NotSupported` error naming
+  ///   PC/2in1 -- so this call returns a `NotSupported` error naming
   ///   OpenHarmony and the window is left untouched. Sub-windows / floating
   ///   windows hide for real (the SDK `minimize()` is the hide primitive
-  ///   there) and [`Self::show`] restores them — the former blanket error
+  ///   there) and [`Self::show`] restores them -- the former blanket error
   ///   regressed every sub-window hide. Use [`Self::minimize`] on the main
   ///   window for taskbar minimization (issue Eulogizethesun/tauri#241).
   pub fn hide(&self) -> crate::Result<()> {

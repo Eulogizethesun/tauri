@@ -19,7 +19,7 @@ mod ohos_log {
 
 // Two-line entry-point form (issue Eulogizethesun/tauri#242): the OHOS
 // Ability/NAPI entry is required on the 2in1 desktop form too, where
-// cfg(mobile) is false — a lone cfg_attr(mobile, mobile_entry_point) would
+// cfg(mobile) is false -- a lone cfg_attr(mobile, mobile_entry_point) would
 // silently produce no entry there.
 /// Builds the example app runtime and runs it on the current thread.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

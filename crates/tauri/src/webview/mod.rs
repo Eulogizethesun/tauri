@@ -1619,7 +1619,7 @@ impl<R: Runtime> Webview<R> {
   /// - **OpenHarmony:** this reads the webview's bounds cache, not the live
   ///   rendered geometry. For a natural-layout webview (created without
   ///   `bounds`) that cache holds the upstream `WebViewAttributes::default()`
-  ///   200×200 placeholder — never the actual on-screen geometry, which is
+  ///   200x200 placeholder -- never the actual on-screen geometry, which is
   ///   container-driven and not reported back by the platform. After a
   ///   partial [`Self::set_size`] / [`Self::set_position`], the components
   ///   the call did not set read back as the "unspecified" sentinel
@@ -1635,7 +1635,7 @@ impl<R: Runtime> Webview<R> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** cache-backed — see [`Self::bounds`]; for a
+  /// - **OpenHarmony:** cache-backed -- see [`Self::bounds`]; for a
   ///   natural-layout webview this returns the cached placeholder, not the
   ///   live position.
   pub fn position(&self) -> crate::Result<PhysicalPosition<i32>> {
@@ -1646,8 +1646,8 @@ impl<R: Runtime> Webview<R> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** cache-backed — see [`Self::bounds`]; for a
-  ///   natural-layout webview this returns the cached placeholder (200×200),
+  /// - **OpenHarmony:** cache-backed -- see [`Self::bounds`]; for a
+  ///   natural-layout webview this returns the cached placeholder (200x200),
   ///   not the live size.
   pub fn size(&self) -> crate::Result<PhysicalSize<u32>> {
     self.webview.dispatcher.size().map_err(Into::into)
@@ -2008,8 +2008,8 @@ tauri::Builder::default()
     // Clean the JS-side registration in the frame that owns it. The listen
     // registration eval runs in the MAIN document (webview evals are not
     // frame-targeted), so a listener registered from inside an iframe has
-    // its `_listeners` entry — and the `transformCallback` handler id it
-    // points to — in the top frame, while the JS-side `_unlisten` helper ran
+    // its `_listeners` entry -- and the `transformCallback` handler id it
+    // points to -- in the top frame, while the JS-side `_unlisten` helper ran
     // in the calling (child) frame and could not reach either. Evaluating
     // the unlisten script here unregisters the handler callback in the main
     // frame and deletes the stale table entry; on OHOS a callback-id miss is

@@ -799,12 +799,12 @@ pub trait Manager<R: Runtime>: sealed::ManagerBase<R> {
   ///
   /// The above example assumes the following directory layout:
   /// ```md
-  /// ├── capabilities
-  /// │   ├── app (default capabilities used by any app flavor)
+  /// |-- capabilities
+  /// |   |-- app (default capabilities used by any app flavor)
   /// |   |   |-- cap.json
-  /// │   ├── beta (capabilities only added to a `beta` flavor)
+  /// |   |-- beta (capabilities only added to a `beta` flavor)
   /// |   |   |-- cap.json
-  /// │   ├── stable (capabilities only added to a `stable` flavor)
+  /// |   |-- stable (capabilities only added to a `stable` flavor)
   /// |       |-- cap.json
   /// ```
   ///
@@ -1091,7 +1091,7 @@ impl<T> UnsafeSend<T> {
 
 // On OHOS, `run_on_main_thread` + `rx.recv()` deadlocks: the closure is scheduled
 // onto Chrome_IOThread, but the ArkTS main-thread event loop that resolves those
-// tasks is the very thread the caller is waiting on (ohos-constraints §1.2). The
+// tasks is the very thread the caller is waiting on (ohos-constraints section1.2). The
 // OHOS muda/tray backends are safe to call from any non-main thread (muda OHOS
 // setters are pure Rust / AtomicBool; tray uses TSFN NonBlocking internally), so
 // the closure is executed inline on the calling thread and its result wrapped in
@@ -1129,8 +1129,8 @@ pub(crate) use run_main_thread;
 /// `zoom-hotkey.js`).
 ///
 /// OHOS reports `linux` through `std::env::consts::OS`, but the templates
-/// check for the `ohos` name explicitly — `ipc-protocol.js` disables the
-/// custom-protocol IPC path for it — so the injection uses `ohos` instead.
+/// check for the `ohos` name explicitly -- `ipc-protocol.js` disables the
+/// custom-protocol IPC path for it -- so the injection uses `ohos` instead.
 /// The remaining template checks (`windows`, `android`, `macos`) fall through
 /// to their generic branches for both names, so the value only matters where
 /// an `ohos` check exists.

@@ -386,7 +386,7 @@ pub struct Context<T: UserEvent> {
   /// reply-channel ordering (`sender.send(Ok)` after the handler ran)
   /// guarantees the entry exists once `recv()` returns. Entries are removed
   /// when the window leaves the store (`on_window_close_ohos`), so the map
-  /// holds at most one entry per live window — repeated create/destroy of a
+  /// holds at most one entry per live window -- repeated create/destroy of a
   /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
   #[cfg(target_env = "ohos")]
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
@@ -424,7 +424,7 @@ impl<T: UserEvent> Context<T> {
 
   /// OHOS: record a window's UIAbility-main status at creation time (issue
   /// Eulogizethesun/tauri#238). Called from `create_window` while the tao
-  /// window is in hand — before any creation reply is sent, so both
+  /// window is in hand -- before any creation reply is sent, so both
   /// dispatcher constructors read a populated entry.
   #[cfg(target_env = "ohos")]
   fn ohos_record_main_window(&self, window_id: WindowId, is_ui_ability_main: bool) {
@@ -2383,7 +2383,7 @@ pub struct WryWindowDispatcher<T: UserEvent> {
   window_id: WindowId,
   context: Context<T>,
   /// OHOS: captured at dispatcher construction (issue
-  /// Eulogizethesun/tauri#238) — true for UIAbility-container windows whose
+  /// Eulogizethesun/tauri#238) -- true for UIAbility-container windows whose
   /// decoration buttons are OS-managed, gating main-window-only operations
   /// with an Err at this layer.
   #[cfg(target_env = "ohos")]
@@ -2629,7 +2629,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     #[cfg(target_env = "ohos")]
     {
       // #225: OHOS has no window enabled/disabled API (tao returns Err from
-      // the main-thread arm, which the message handler discards) — fail at
+      // the main-thread arm, which the message handler discards) -- fail at
       // the dispatcher so the caller sees it.
       let _ = enabled;
       return Err(ohos_unsupported("setEnabled"));
@@ -2648,7 +2648,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
       // decoration buttons are OS-managed (@ohos.window has no API for these
       // operation-level flags: per-button visibility via
       // setWindowTitleButtonVisible (API 14+) and style injection via
-      // setDecorButtonStyle exist, but neither disables the operations) —
+      // setDecorButtonStyle exist, but neither disables the operations) --
       // fail at the dispatcher so the caller sees the Err
       // (the message handlers discard tao Results; tao only log::errors).
       // Sub-windows dispatch normally: the flags drive their buttons.
@@ -2668,7 +2668,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   fn set_minimizable(&self, minimizable: bool) -> Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      // Issue Eulogizethesun/tauri#238 — see set_maximizable.
+      // Issue Eulogizethesun/tauri#238 -- see set_maximizable.
       if self.is_ui_ability_main {
         let _ = minimizable;
         return Err(ohos_unsupported(
@@ -2685,7 +2685,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   fn set_closable(&self, closable: bool) -> Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      // Issue Eulogizethesun/tauri#238 — see set_maximizable.
+      // Issue Eulogizethesun/tauri#238 -- see set_maximizable.
       if self.is_ui_ability_main {
         let _ = closable;
         return Err(ohos_unsupported(
@@ -2751,7 +2751,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
       // window (restorable via showWindow(), @since 12). So the main window
       // has no hide semantics at all (UIAbility-level hideAbility is out of
       // reach on PC/2in1 until the A1 entitlement) and fails at the
-      // dispatcher — the message handlers intentionally discard tao Results,
+      // dispatcher -- the message handlers intentionally discard tao Results,
       // so this is the only layer the caller sees (same pattern as setEnabled
       // #225). Sub-windows fall through to tao, whose `set_visible(false)` is
       // THE hide primitive for them (tao T28-4 restores the kind-split); the
@@ -3053,7 +3053,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     #[cfg(target_env = "ohos")]
     {
       // OHOS startMoving must be called from inside a touch-down callback
-      // (SubWindowPage title bar) — it cannot work from a command context.
+      // (SubWindowPage title bar) -- it cannot work from a command context.
       // tao's drag_window is a documented no-op returning Ok.
       return Err(ohos_unsupported("startDragging"));
     }
@@ -4620,8 +4620,8 @@ fn handle_user_message<T: UserEvent>(
             // Only the size component is being set. Back-filling the position
             // from `webview.bounds()` would read wry's bounds cache, which for
             // a natural-layout (bounds-less) webview holds the upstream
-            // `WebViewAttributes` default 200×200 placeholder — never live
-            // geometry — so the call would write a placeholder position into
+            // `WebViewAttributes` default 200x200 placeholder -- never live
+            // geometry -- so the call would write a placeholder position into
             // the render layer and flip the webview away from container
             // layout (issue Eulogizethesun/tauri#241). On OHOS the unset
             // component is sent as the cross-repo sentinel instead
@@ -4674,8 +4674,8 @@ fn handle_user_message<T: UserEvent>(
             // Only the position component is being set. Back-filling the size
             // from `webview.bounds()` would read wry's bounds cache, which for
             // a natural-layout (bounds-less) webview holds the
-            // `WebViewAttributes` default (200×200) — the call would shrink
-            // the webview to 200×200 and flip it away from container layout
+            // `WebViewAttributes` default (200x200) -- the call would shrink
+            // the webview to 200x200 and flip it away from container layout
             // (issue Eulogizethesun/tauri#241). On OHOS the unset component is
             // sent as the cross-repo sentinel instead
             // (`ohos_unspecified_size`, skipped by the ArkTS render layer),
@@ -4836,14 +4836,14 @@ fn handle_user_message<T: UserEvent>(
             {
               // Disabling always clears the runtime rates. Enabling does NOT
               // source the base rect from `webview.bounds()`: that cache holds
-              // the `WebViewAttributes` default (200×200) for a natural-layout
+              // the `WebViewAttributes` default (200x200) for a natural-layout
               // webview and sentinel components after a partial
               // set_size/set_position, so rates derived from it would pin or
               // shrink the webview on the next window resize (issue
               // Eulogizethesun/tauri#241). A webview already armed keeps its
               // live rates (maintained by the SetBounds/SetSize/SetPosition
-              // handlers); a natural-layout webview needs none — it follows
-              // the window through container layout — and the auto-resize
+              // handlers); a natural-layout webview needs none -- it follows
+              // the window through container layout -- and the auto-resize
               // base for a webview armed after creation is read from the
               // actual layout by the ArkTS render layer (cross-repo contract,
               // openharmony-ability WebviewPlugin.ets).
@@ -5590,13 +5590,13 @@ fn on_window_close_ohos<'a, T: UserEvent>(
       .remove(&window_id);
 
     // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
-    // kind) call destroyWindow; the main (UIAbility) window is system-managed — the
+    // kind) call destroyWindow; the main (UIAbility) window is system-managed -- the
     // bridge's destroy-window handler rejects window id 0, so for it this is
     // a rejected fire-and-forget and the OS window remains until the system
     // closes it. Without this call the OS sub-window stays on
     // screen → ghost windows that diverge from Rust's records.
     //
-    // Recursion safety: close → ArkTS destroyWindow → SubWindowPage
+    // Recursion safety: close -> ArkTS destroyWindow -> SubWindowPage
     // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
     // The second on_window_close call hits `removed == None` (this block already
     // removed it) and returns early — the idempotent remove breaks the cycle.
@@ -5934,7 +5934,7 @@ struct WebviewBounds {
   height_rate: f32,
 }
 
-// ─── OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) ───────────
+// --- OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) -----------
 
 /// OHOS wire sentinel for "this bounds component is not set by this call".
 ///
@@ -5944,7 +5944,7 @@ struct WebviewBounds {
 /// The sentinel is sent as a LOGICAL value on purpose: wry's OHOS
 /// `set_bounds` converts physical input to ArkUI vp by dividing it by the
 /// live display ratio (physical / vp, wry's `to_logical`), but passes logical
-/// input through unchanged — so the
+/// input through unchanged -- so the
 /// exact value reaches the ArkTS render layer (`WebviewPlugin.ets`) whatever
 /// the vp is. The ArkTS side skips any component equal to the sentinel and
 /// applies only the components the call actually sets; the unspecified ones
@@ -6266,12 +6266,12 @@ You may have it installed on another user account, but it is not available for t
       None
     }
     // On OHOS, a webview created without explicit bounds must stay bounds-less:
-    // wry marks it natural-layout in WebViewStyle (no width/height → the ArkTS
+    // wry marks it natural-layout in WebViewStyle (no width/height -> the ArkTS
     // render layer renders the wrapper at "100%"), so it follows window resizes
     // through container layout. Explicit bounds are consumed by the ArkTS render
     // layer as the rendered geometry (create-time style.width/height drive the
     // wrapper Stack; a runtime set_bounds applies the full geometry and flips a
-    // natural webview to explicit sizing — openspec ohos-webview-sizing).
+    // natural webview to explicit sizing -- openspec ohos-webview-sizing).
     #[cfg(target_env = "ohos")]
     None
   };

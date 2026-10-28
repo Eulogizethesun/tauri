@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 pub use openharmony_ability_derive;
 pub use tauri_runtime::OHOSWindowKind;
 
-/// OHOS entry-point attribute — re-export of
+/// OHOS entry-point attribute -- re-export of
 /// [`tauri_macros::ohos_entry_point`](../tauri_macros/attr.ohos_entry_point.html)
 /// (issue Eulogizethesun/tauri#242).
 ///
