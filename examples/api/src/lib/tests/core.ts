@@ -2089,24 +2089,42 @@ export const coreTests: TestCase[] = [
       // resolve branch → the reading must be a real fed coordinate: finite
       // and inside the current monitor's physical size (+40px tolerance).
       // catch branch → tolerated ONLY as the untracked fail-safe contract,
-      // never a required path: the suite always has mouse interaction before
-      // this case, so EVER_FED is already set and this branch is unreachable
-      // in practice; the authoritative cold-start reject verification lives
-      // in the ability device UT (cursor_position_with_untracked_feed_
+      // never a required path: the auto suite injects no real mouse
+      // interaction, so on OHOS this branch is reached deterministically
+      // (device-verified 2026-10-28 — see the catch comment); the
+      // authoritative cold-start reject verification lives in the ability
+      // device UT (cursor_position_with_untracked_feed_
       // returns_untracked_error).
       let pos: { x: number; y: number };
       try {
         pos = await cursorPosition();
       } catch (e) {
         // Only the untracked fail-safe contract's rejection is tolerated —
-        // and only by its known message. tao's OHOS cursor_position Err is
-        // mapped to the runtime FailedToSendMessage variant on its way to JS
-        // ("runtime error: failed to send message to the webview"); any other
-        // rejection is a real defect and must fail the case (issue
-        // Eulogizethesun/tauri#241: the previous bare catch swallowed
-        // arbitrary rejects as a fake pass).
+        // and only by its known message. Source-verified mapping chain:
+        // tao's OHOS cursor_position Err is the untracked fail-safe (the
+        // auto suite injects no real mouse interaction, so the reading is
+        // untracked here), and tauri-runtime-wry maps it through BOTH arms
+        // to Error::FailedToGetCursorPosition (event_loop_window_getter!
+        // macro arm lib.rs:3475-3479, direct main-thread arm :3829-3837);
+        // tauri-runtime's Display (crates/tauri-runtime/src/lib.rs:162)
+        // renders it as "failed to get cursor position" (JS: "runtime
+        // error: failed to get cursor position"). FailedToSendMessage
+        // lives only on the event-loop inner path (lib.rs:5061-5062) and
+        // is remapped by :3479 before reaching JS — it reaches JS only
+        // when the invoke channel itself is dead, which is a real defect
+        // and must FAIL, never be tolerated. Device evidence (2026-10-28
+        // regression run): this case rejected deterministically in two
+        // consecutive rounds with exactly "runtime error: failed to get
+        // cursor position" (row65, 110/111ms) — so the previous
+        // send-message regex turned the contracted fail-safe into a false
+        // red, while the pre-tightening bare catch had turned the same
+        // reject into G6's fake green (swallow family, third instance:
+        // T28-1 window_client:None blind spot -> 23857d325 blind() -> this
+        // bare catch). Any other rejection is a real defect and must fail
+        // the case (issue Eulogizethesun/tauri#241: the original bare
+        // catch swallowed arbitrary rejects as a fake pass).
         const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
-        if (!/failed to send message to the webview/.test(msg)) {
+        if (!/failed to get cursor position/.test(msg)) {
           throw e;
         }
         console.warn(`[cursorPosition] rejected — tolerated as the untracked fail-safe contract: ${e}`);
