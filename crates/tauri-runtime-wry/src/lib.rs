@@ -4847,6 +4847,17 @@ fn handle_user_message<T: UserEvent>(
               // base for a webview armed after creation is read from the
               // actual layout by the ArkTS render layer (cross-repo contract,
               // openharmony-ability WebviewPlugin.ets).
+              //
+              // KNOWN LIMITATION (issue Eulogizethesun/tauri#241): a disable
+              // followed by an enable permanently de-arms an explicit-bounds
+              // webview on OHOS. The disable clears the rate cache below, the
+              // enable leg stays a no-op (deliberately, see above), and the
+              // Resized handler only re-fires while the cache is `Some`, so
+              // the webview stops following window resizes for good. Desktop
+              // re-arms (its enable leg re-derives the rates from the live
+              // bounds). Re-arming would need a rate re-derivation from the
+              // live layout or an ArkTS-side re-derive; both are out of scope
+              // for this fix wave and are disclosed rather than fixed here.
               if !auto_resize {
                 *webview.bounds.lock().unwrap() = None;
               }
@@ -5338,6 +5349,13 @@ fn handle_event_loop<T: UserEvent>(
               .map(|w| (w.inner.clone(), w.webviews.clone()))
             {
               let size = size.to_logical::<f32>(window.scale_factor());
+              // This leg only re-fires for webviews that still hold a rate
+              // cache. On OHOS a SetAutoResize(false) then (true) cycle never
+              // re-arms an explicit-bounds webview: the disable clears the
+              // cache and the enable leg deliberately does not re-derive it
+              // (see the SetAutoResize handler), so this loop skips it for
+              // good. Irreversible de-arm, not a transient drop (issue
+              // Eulogizethesun/tauri#241).
               for webview in webviews {
                 if let Some(b) = &*webview.bounds.lock().unwrap() {
                   if let Err(e) = webview.set_bounds(wry::Rect {
@@ -5924,8 +5942,9 @@ struct WebviewBounds {
 /// are routinely negative, so `-1` could collide with a genuine position.
 ///
 /// The sentinel is sent as a LOGICAL value on purpose: wry's OHOS
-/// `set_bounds` converts physical input to ArkUI vp by multiplying with the
-/// live display ratio, but passes logical input through unchanged — so the
+/// `set_bounds` converts physical input to ArkUI vp by dividing it by the
+/// live display ratio (physical / vp, wry's `to_logical`), but passes logical
+/// input through unchanged — so the
 /// exact value reaches the ArkTS render layer (`WebviewPlugin.ets`) whatever
 /// the vp is. The ArkTS side skips any component equal to the sentinel and
 /// applies only the components the call actually sets; the unspecified ones
