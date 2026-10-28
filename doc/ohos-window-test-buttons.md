@@ -117,7 +117,7 @@
 | 窗口可关闭 | `Toggle Closable` | flag=false 时点关闭按钮关不掉(拦截) |
 | 窗口可最大化 | `Toggle Maximizable` | flag=false 时点最大化按钮无效(拦截) |
 | 窗口可最小化 | `Toggle Minimizable` | flag=false 时点最小化按钮无效(拦截) |
-| 窗口可调整大小 | `Toggle Resizable` | flag=false 时 setInnerSize 被拦截 |
+| 窗口可调整大小 | `Toggle Resizable` | ✅ 双腿（2026-10-28 与 ohos-window-test-mapping.md #46 对齐,旧"写 LocalStorage/无 UI 效果"口径作废）:① decoration-flags bit3→LocalStorage(API 拦截层,flag=false 时 setInnerSize 仍被拦截) ② set-resize-by-drag→子窗(id>0)`enableDrag(false)`(API20+)——**用户可感面=边缘拖拽缩放开关**(false 时子窗边缘拖不动,恢复后可拖);创建期 resizable(false) 双腿播种(tao seed_creation_attrs) |
 | 窗口可聚焦 | `setFocusable(false) (3s)` | ✅ 已生效但**无视觉变化**(2026-08-27 A/B 实测)。`setWindowFocusable` 语义=窗口不接受键盘焦点,不产生任何视觉现象。按钮已改**自验式**:① 先点击主窗口空白处获得焦点 ② 点本按钮 ③ 3 秒内点击子窗口一次 → 自动判定 PASS(主窗口焦点保持=子窗口拒绝焦点)/FAIL(焦点被抢)。底层判据:主窗口 `isFocused`(读 app 级 HAS_FOCUS 位,主窗口专属;子窗口无独立焦点读回 API);正常态点子窗口主窗口失焦(对照),focusable=false 时保持(实验组,真机 A/B 验证)。⚠️ 程序化 `setFocus()` 不能用于验证——raiseToAppTop 只抬 z-order 不转移焦点 |
 
 ### 🟦 OHOS Window Ops — 光标

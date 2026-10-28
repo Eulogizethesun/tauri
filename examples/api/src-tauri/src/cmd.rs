@@ -2543,8 +2543,11 @@ pub fn devtools_close_only<R: tauri::Runtime>(
 ///
 /// Returns true when the wait ELAPSED (the blocking task sent its completion
 /// token) and false when the channel closed first: a panicking
-/// spawn_blocking task, or a runtime shutting down, drops the sender so
-/// `recv()` resolves INSTANTLY with None. The old `let _ = rx.recv().await`
+/// spawn_blocking task drops the sender before sending - the ONLY reachable
+/// None cause here, because the global `tauri::async_runtime` RUNTIME is a
+/// `OnceLock` with no shutdown or drop path (crates/tauri/src/async_runtime.rs),
+/// so "runtime shutting down" never happens. `recv()` then resolves
+/// INSTANTLY with None. The old `let _ = rx.recv().await`
 /// treated both outcomes alike, so the None path degenerated into a 0ms hot
 /// loop that burned the whole 5s ack budget before failing with a misleading
 /// "no rendered ack" timeout. The bool return is what lets the caller bail.
@@ -2673,13 +2676,15 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
         ));
       }
       // Bail instead of spinning (tauri-F8): false means the sleep never
-      // happened (blocking task panicked or the runtime is shutting down)
-      // and recv() resolved instantly - continuing would burn the whole ack
+      // happened (a panicking blocking task dropped the sender - the only
+      // reachable None cause; the global async runtime is a OnceLock with no
+      // shutdown path) and recv() resolved instantly - continuing would burn
+      // the whole ack
       // budget as a 0ms hot loop before failing with a misleading "no
       // rendered ack" timeout. Fail fast with the real diagnosis.
       if !async_sleep(POLL_INTERVAL).await {
         return Err(
-          "set_bounds_test: ack poll aborted - the async runtime dropped the sleep before the poll interval elapsed (spawn_blocking task panicked or runtime shutdown)"
+          "set_bounds_test: ack poll aborted - the sleep's completion token never arrived (the spawn_blocking task panicked and dropped its sender; the async runtime itself never shuts down)"
             .to_string(),
         );
       }
@@ -3114,8 +3119,9 @@ pub fn set_exit_confirmation(enabled: bool) {
 
 /// tauri-F8 regression tests: the closed-channel (None) path of the ack-poll
 /// sleep must be OBSERVABLE so `wait_rendered_ack` can bail instead of
-/// spinning. Host + desktop only: the helpers are cfg(desktop) and the tests
-/// need a live async runtime.
+/// spinning. Non-mobile targets only - host builds and desktop-form builds
+/// (including OHOS 2in1, where OHOS_DEVICE_TYPE=desktop enables cfg(desktop)):
+/// the helpers are cfg(desktop) and the tests need a live async runtime.
 #[cfg(all(test, desktop))]
 mod async_sleep_tests {
   use super::{async_sleep, wait_sleep_token};

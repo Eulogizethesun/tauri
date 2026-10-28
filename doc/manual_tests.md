@@ -792,14 +792,14 @@
 
 ### 36.7 OHOS Window Ops — 装饰按钮（Float 子窗口生效）
 
-> 需先 Create Decorated Window（36.3）。closable 是唯一被 SubWindowPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable/resizable 写入 LocalStorage 但 SubWindowPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。
+> 需先 Create Decorated Window（36.3）。closable 是唯一被 SubWindowPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable 写入 LocalStorage 但 SubWindowPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。**resizable 例外（2026-10-28 与 ohos-window-test-mapping.md #46 对齐，旧"写 LocalStorage/无 UI 效果"口径作废）**：运行期双腿——① decoration-flags bit3→LocalStorage（API 拦截层：set_inner_size 的 FLAG_RESIZABLE 门）② set-resize-by-drag deferred 腿→ArkTS 按 windowId===0 路由（主窗 setResizeByDragEnabled API14+ / 子窗 enableDrag API20+，失败仅 log::warn）——**用户可感面=边缘拖拽缩放开关**；创建期 resizable(false) 同样双腿播种（tao seed_creation_attrs）。
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 SubWindowPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 SubWindowPage 消费的 flag |
 | ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | SubWindowPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
 | ohos | decoration-flags | 可最小化 | Toggle Minimizable — 最小化 flag | **T1** | 同上 | 1. 点击 "Toggle Minimizable" | isMinimizable 读数翻转（state-only） | 同上（无最小化按钮） |
-| ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag | **T1** | 同上 | 1. 点击 "Toggle Resizable" | isResizable 读数翻转（state-only） | 真正禁用子窗 resize 需走 enableDrag(false)；本 flag 层为 API 拦截语义 |
+| ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag（双腿） | **T1** | 同上 | 1. 点击 "Toggle Resizable" 2. resizable=false 时拖子窗口边缘 3. 再点恢复 | ① isResizable 读数翻转 ② **用户可感**：false 时子窗口边缘拖拽缩放失效（enableDrag(false)），恢复后重新可拖 ③ 程序化 setInnerSize 被拦截（FLAG_RESIZABLE 门，不变） | 双腿（tao set_resizable，2026-10-28 对齐 mapping #46）：bit3→LocalStorage（API 拦截层）+ set-resize-by-drag→子窗（id>0）走 enableDrag（API20+）；用户可感面=边缘拖拽开关；创建期有双腿种子。旧"state-only/需另走 enableDrag"口径作废 |
 | ohos | decoration-flags | 可聚焦 | setFocusable(false) — 拒绝键盘焦点（自验式） | **T0** | 已创建子窗口；**主窗口当前持有焦点**（先点主窗口空白处） | 1. 点击 "setFocusable(false) (3s)" 2. **3 秒内点击子窗口一次** 3. 等自动判定 | ① ✅ PASS：主窗口焦点保持（子窗拒绝焦点点击）② ❌ FAIL：3 秒内主窗焦点丢失（子窗仍抢走焦点） | setWindowFocusable **无视觉变化**（语义=不接受键盘焦点，2026-08-27 A/B 实测定案）；按钮自验（轮询主窗 isFocused 3s 后判定）；程序化 setFocus() 不能用于验证（raiseToAppTop 只抬 z-order 不转移焦点） |
 
 ### 36.8 OHOS Window Ops — 光标
