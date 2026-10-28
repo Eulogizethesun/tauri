@@ -1407,31 +1407,54 @@ Expected behavior:
   // the tao kind-split set_visible path). The button asserts the rejection and
   // that the window stays visible, then exercises the supported equivalent
   // (minimize → restore) so the operator still sees real window motion.
+  // The rejection contract is OHOS-ONLY: on other desktop platforms
+  // win.hide() on the main window legitimately resolves, so the assert below
+  // is platform-gated (same plugin-os detection as manualOsInfo) — unguarded
+  // it reported a bogus "hide gate regressed" on the Windows baseline.
   async function manualShowHide() {
     await wrapManual('showHide', async () => {
       const win = getCurrentWindow();
-      let rejected = null;
-      try {
+      const isOhos = (await import('@tauri-apps/plugin-os')).platform() === 'ohos';
+      if (!isOhos) {
+        // Non-OHOS: hide()/show() is a supported round-trip — prove it
+        // instead of asserting a rejection that only exists on OHOS.
         await win.hide();
-      } catch (e) {
-        rejected = e;
+        const hidden = await win.isVisible();
+        if (hidden) {
+          throw new Error(`non-OHOS: main window still visible (isVisible=${hidden}) after hide() resolved`);
+        }
+        await win.show();
+        const shown = await win.isVisible();
+        if (!shown) {
+          throw new Error(`non-OHOS: main window not visible (isVisible=${shown}) after show()`);
+        }
+        ohosWinState = `hide → isVisible=${hidden}; show → isVisible=${shown}`;
+        manualResult = `hide()/show() round-trip on the main window (non-OHOS: no reject contract; #241 TR-2 is OHOS-only)。\nhide → isVisible=${hidden}, show → isVisible=${shown}。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。`;
+        onMessage(manualResult);
+      } else {
+        let rejected = null;
+        try {
+          await win.hide();
+        } catch (e) {
+          rejected = e;
+        }
+        if (rejected === null) {
+          throw new Error(
+            'hide() on the main window unexpectedly RESOLVED — the main-window hide gate regressed (must reject per issue Eulogizethesun/tauri#241)'
+          );
+        }
+        const text = typeof rejected === 'string' ? rejected : rejected instanceof Error ? rejected.message : String(rejected);
+        if (!/not supported on OpenHarmony/.test(text)) {
+          throw new Error(`hide() rejected with an unexpected error (expected the "not supported on OpenHarmony" contract message): ${text}`);
+        }
+        const visible = await win.isVisible();
+        if (!visible) {
+          throw new Error(`main window reported isVisible()=${visible} after the rejected hide() — the window must stay visible`);
+        }
+        ohosWinState = `hide 按契约拒绝; isVisible=${visible}; minimize→restore 验证`;
+        manualResult = `hide() on main window → 按契约拒绝（${text}）。\n窗口仍可见（isVisible=${visible}）。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。\n若三步均无报错、窗口未消失 → PASS。`;
+        onMessage(manualResult);
       }
-      if (rejected === null) {
-        throw new Error(
-          'hide() on the main window unexpectedly RESOLVED — the main-window hide gate regressed (must reject per issue Eulogizethesun/tauri#241)'
-        );
-      }
-      const text = typeof rejected === 'string' ? rejected : rejected instanceof Error ? rejected.message : String(rejected);
-      if (!/not supported on OpenHarmony/.test(text)) {
-        throw new Error(`hide() rejected with an unexpected error (expected the "not supported on OpenHarmony" contract message): ${text}`);
-      }
-      const visible = await win.isVisible();
-      if (!visible) {
-        throw new Error(`main window reported isVisible()=${visible} after the rejected hide() — the window must stay visible`);
-      }
-      ohosWinState = `hide 按契约拒绝; isVisible=${visible}; minimize→restore 验证`;
-      manualResult = `hide() on main window → 按契约拒绝（${text}）。\n窗口仍可见（isVisible=${visible}）。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。\n若三步均无报错、窗口未消失 → PASS。`;
-      onMessage(manualResult);
       await win.minimize();
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await win.unminimize();
