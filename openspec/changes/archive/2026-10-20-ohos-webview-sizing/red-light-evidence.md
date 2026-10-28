@@ -25,6 +25,7 @@
 - 红灯判据(design/tasks 1.5):case a/b 全部 + case c 翻转段失败,且失败读数≈整窗/前值而非 `undefined` —— **全部满足**。
 - 主窗 viewport 地面真值:主窗页面 `window.innerWidth/innerHeight` = 1101×657(用例内 console `[viewport-probe] main window viewport M=...`);子 webview 探针读数与 M 完全相等 ⇒ 渲染层整窗膨胀,非探针链路伪值。
 - 单位契约:探针(ArkWeb `innerWidth/innerHeight`)与请求几何同为 vp/CSS px,二者直接可比且与屏密度无关(wry bounds() doc 单位契约)。**更正**:红灯记录时曾注「density 1.0」——绿灯阶段经 Rust 读回实测,本机 `Window.scaleFactor()`(OHOS Display scaledDensity)实为 **1.9**;该密度只影响 Rust 物理读回换算,不影响探针 vp 比较,红灯结论不变。
+> **勘误注记(2026-10-28,PR#241 P2-3,原文本保留)**:参照设备 scaleFactor 实测 1.9(非 1.0)。本段「与屏密度无关」仅指**探针 vp 读数 vs 请求几何**这一条比较链;Rust 侧物理读回(position()/size() = 缓存 × sf)与 Physical→vp 换算链**依赖**该 1.9,不适用此句。另:本 change 的 311 例全部以 Logical 几何驱动(创建 x/y/width/height 与 setSize/setPosition 均 Logical),运行时 **Physical→vp 分支在真机上从未被执行**——其行为仅有 host 检查与单元推理覆盖,读本文档的消费者不得把探针比较的密度无关性外推到 Physical 输入路径。
 
 ## 结论
 
@@ -48,6 +49,7 @@
 - 根因链(源码级):JS `new Webview({x:50,...})` → `webview/plugin.rs::create_webview` 包 `LogicalPosition/LogicalSize` → `webview_attributes.bounds` 原样 Logical → `with_bounds` 透传 wry → `bounds_cache` 存 **Logical**;而 JS `Webview.position()/size()` 是**文档化 Physical API**——`tauri-runtime-wry` 读缓存后 `.to_physical(window.scale_factor())`(lib.rs WebviewMessage::Position/Size 处理段)。本机 scale factor = 1.9 → round(50×1.9)=95,readback 正确,是**用例把物理读回当逻辑值断言**。
 - 修复:case a 读回腿改为 `Math.round(logical × sf)` 期望值(`getCurrentWindow().scaleFactor()` 取数),失败消息携带 sf 与物理期望,自描述。IEEE 乘积两侧一致(50×1.9 的 double 最近邻即 95),严格相等成立。
 - 佐证:95 = 50×1.9 双轴精确成立;tao `Window::scale_factor()` = `OpenHarmonyApp::scale()` = `default_display_scaled_density()`(NDK NativeDisplayManager),设备实测 1.9。
+> **勘误注记(2026-10-28,PR#241 P2-3,原文本保留)**:本段换算链是「Logical 请求 → 缓存 Logical → 读回 × 1.9 → Physical」;设备上**没有任何用例走 Physical→vp 正向分支**(311 例全 Logical,见上一勘误注记)。因此「95 = 50×1.9 精确成立」只证明读回乘法链,不构成 Physical 输入换算(vp = physical / 1.9 再进 ArkTS)的真机证据;该分支的 round 语义(P2-1 哨兵契约依赖 Logical 值位透传)由 PR#241 的实现注释与 host 检查覆盖。
 
 ## 绿灯 run 汇总
 

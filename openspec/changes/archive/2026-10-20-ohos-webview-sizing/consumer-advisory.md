@@ -91,6 +91,7 @@ HEAD 新桥 ArkTS 渲染层(`WebviewPlugin.ets`)把「100% 兜底 + set_bounds �
 ### R2 尺寸归属 —— 判甲
 
 1. **渲染真值(R2.1)**:CDP 读 Tab 内容层 viewport = **1101×734 CSS(= 2090×1394 物理)= 整窗**;NWeb 尺寸记录(15:30:15.808 创建):1×1 → 3120×2080 → **2090×1394**,全程无内容层高度(≈1302 物理)出现。§1 指纹在客户真包上复现。
+   > **勘误注记(2026-10-28,PR#241 P2-3,原文本保留)**:本行 CSS↔物理换算按参照设备 scaleFactor=1.9(1101×1.9≈2090,734×1.9≈1394)。配套说明:本 change 套件的 311 例全部以 Logical 几何驱动,runtime **Physical→vp 分支在真机从未执行**(仅 host 检查/单元推理覆盖);消费方若以 Physical 值直调 set_bounds,换算语义以 PR#241 实现注释与 `crates/tauri/src/webview/mod.rs` 单位契约文档为准,勿以本文「与密度无关」表述外推(该表述只覆盖探针 vp 比较,见 red-light-evidence.md 勘误注记)。
 2. **栈考古(R2.2)**:提取 beta.1 HAR 的 webview 渲染层(`wv-beta1.ets`,2798 行):
    - builder 中 Web 组件**无条件 `.width("100%").height("100%")`**——全文件仅有的 8 处 `.width/.height` 调用全部是 `"100%"` 字面量,注释自陈「only .position() below consumes style.{x,y}」;
    - create 载荷 `style.width/height` 经 `normalizeStyle`(843-881)解析入 style 后**无任何消费者**;
