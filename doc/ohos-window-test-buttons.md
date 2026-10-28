@@ -89,7 +89,7 @@
 | 窗口最大化 | `Toggle Maximize` | 最大化/还原（主窗口）；子窗口用 Create Decorated Window 后点其 ❐/□ 标题栏按钮 |
 | 窗口最小化 | `Minimize (2s restore)` | 最小化 2 秒后恢复 |
 | 全屏模式 | `Toggle Fullscreen` | 全屏/退出(隐藏系统标题栏/Dock+应用菜单栏,Esc 或再点按钮退出)。✅ 2026-08-27 修复:① WindowPlugin `set-fullscreen` action 迁移降级——pluginize 重构(ec27af6)把 action 迁到插件时写成 inline 纯手机路径(setWindowLayoutFullScreen),桌面 2in1 上视觉 no-op;已改委托 `WindowManager.setFullscreen`(双路径:桌面 maximize(ENTER_IMMERSIVE)+隐藏标题栏/Dock,手机沉浸式) ② tao `fullscreen()` rebase 时取了本地旧版硬编码返回 None→`isFullscreen` 恒 false→只能进不能退;已对齐 upstream 读镜像位(Borderless(None)) ③ 预定义菜单 fullscreen(托盘/菜单栏 Fullscreen 项)inline 实现与窗口 API 行为分裂(不隐藏系统标题栏/Dock)+菜单栏回调只在预定义路径——已统一:`menu.ets` 'fullscreen'/'recover' 委托 `WindowManager.setFullscreen`,MW-5 菜单栏回调收进 setFullscreen(macOS 语义:进全屏隐藏菜单栏,退出恢复),Esc 退出经 recoverFn→setFullscreen(0,false) 完整还原(openharmony-ability 8d59c75) |
-| 窗口可见性 | `Hide/Show (2s restore)` | ✅ 已修(主窗口:hide=minimize,show=startAbility instanceKey='main' 复用实例;2 秒后恢复) |
+| 窗口可见性 | `Hide/Show (2s restore)` | ✅ 契约收窄(2026-10-28,#241 TR-2):主窗口 hide() 按契约**拒绝**(报错含 "not supported on OpenHarmony"),按钮断言拒绝成立 + isVisible=true + minimize/unminimize 验证;子窗口 hide 走 tao set_visible(kind-split,T28-4)。hide() 意外 resolve 即回归 |
 
 > **子窗口最大化三连修复(2026-08-27,真机验证通过)**:`Create Decorated Window` → 点子窗口标题栏 □ → ❐,窗口应回到原位。
 > ① **Fix A(maximizeSupported)**:API19+ `createSubWindowWithOptions` 须传 `maximizeSupported:true`,否则 `win.maximize()` 报 1300004、□ 点击无效。

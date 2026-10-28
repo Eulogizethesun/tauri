@@ -1400,19 +1400,41 @@ Expected behavior:
     });
   }
 
-  // Main-window Hide/Show — window-level ops via tao set_visible: hide →
-  // minimize_window (main window = ArkTS win.minimize(); hideAbility is not
-  // supported on PC/2in1), show → restore_window (API14+ documented inverse
-  // of minimize) + show_window (raise). No startAbility/onAcceptWant routing
-  // — that is the tray/menu showMainAbility restore path, not win.show().
+  // Main-window Hide/Show — TR-2 (issue Eulogizethesun/tauri#241): hide() on the
+  // MAIN window is contractually REJECTED at the dispatcher ("hiding the main
+  // window is not supported on OpenHarmony" — hideAbility is not supported on
+  // PC/2in1; the pre-#241 blanket hide no longer exists, while sub-windows keep
+  // the tao kind-split set_visible path). The button asserts the rejection and
+  // that the window stays visible, then exercises the supported equivalent
+  // (minimize → restore) so the operator still sees real window motion.
   async function manualShowHide() {
     await wrapManual('showHide', async () => {
       const win = getCurrentWindow();
-      await win.hide();
-      ohosWinState = `main hide dispatched; 2s 后 show(restore+showWindow)`;
-      manualResult = `hide() on main window（窗口级 minimize → 退后台）。\n2 秒后 show()（restore + showWindow 窗口级恢复，不经 startAbility 实例路由）。\n若主窗口先消失再恢复 → PASS。`;
+      let rejected = null;
+      try {
+        await win.hide();
+      } catch (e) {
+        rejected = e;
+      }
+      if (rejected === null) {
+        throw new Error(
+          'hide() on the main window unexpectedly RESOLVED — the main-window hide gate regressed (must reject per issue Eulogizethesun/tauri#241)'
+        );
+      }
+      const text = typeof rejected === 'string' ? rejected : rejected instanceof Error ? rejected.message : String(rejected);
+      if (!/not supported on OpenHarmony/.test(text)) {
+        throw new Error(`hide() rejected with an unexpected error (expected the "not supported on OpenHarmony" contract message): ${text}`);
+      }
+      const visible = await win.isVisible();
+      if (!visible) {
+        throw new Error(`main window reported isVisible()=${visible} after the rejected hide() — the window must stay visible`);
+      }
+      ohosWinState = `hide 按契约拒绝; isVisible=${visible}; minimize→restore 验证`;
+      manualResult = `hide() on main window → 按契约拒绝（${text}）。\n窗口仍可见（isVisible=${visible}）。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。\n若三步均无报错、窗口未消失 → PASS。`;
       onMessage(manualResult);
-      setTimeout(() => getCurrentWindow().show(), 2000);
+      await win.minimize();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await win.unminimize();
     });
   }
 
