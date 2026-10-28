@@ -384,9 +384,10 @@ pub struct Context<T: UserEvent> {
   /// The user-thread `Context::create_window` constructor does not have the
   /// tao window (it is created asynchronously on the event loop); the OHOS
   /// reply-channel ordering (`sender.send(Ok)` after the handler ran)
-  /// guarantees the entry exists once `recv()` returns. Bounded by the
-  /// app's window count (one bool per window). Issue
-  /// Eulogizethesun/tauri#238.
+  /// guarantees the entry exists once `recv()` returns. Entries are removed
+  /// when the window leaves the store (`on_window_close_ohos`), so the map
+  /// holds at most one entry per live window — repeated create/destroy of a
+  /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
   #[cfg(target_env = "ohos")]
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 }
@@ -2743,20 +2744,24 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   fn hide(&self) -> Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      // Issue Eulogizethesun/tauri#237: per the @ohos.window SDK d.ts,
-      // minimize() has dual semantics by caller type: on a MAIN window it
-      // minimizes to the taskbar (not hide; restored from the dock), while on
-      // sub-windows / floating windows it hides the window (restorable via
-      // showWindow(), @since 12). So the main window has no hide semantics at
-      // all, and UIAbility-level hideAbility is out of reach on PC/2in1 until
-      // the A1 entitlement. The blanket Err is retained per #237 requirement 4
-      // pending the A1 hide_ability real implementation. Fail at the
-      // dispatcher: the message handlers intentionally discard tao Results, so
-      // this is the only layer the caller sees (same pattern as setEnabled
-      // #225); tao's former minimize downgrade was removed with the same issue.
-      return Err(ohos_unsupported("hiding windows"));
+      // Issue Eulogizethesun/tauri#237 (+ #241 kind-split): per the
+      // @ohos.window SDK d.ts, minimize() has dual semantics by caller type:
+      // on a MAIN window it minimizes to the taskbar (not hide; restored from
+      // the dock), while on sub-windows / floating windows it hides the
+      // window (restorable via showWindow(), @since 12). So the main window
+      // has no hide semantics at all (UIAbility-level hideAbility is out of
+      // reach on PC/2in1 until the A1 entitlement) and fails at the
+      // dispatcher — the message handlers intentionally discard tao Results,
+      // so this is the only layer the caller sees (same pattern as setEnabled
+      // #225). Sub-windows fall through to tao, whose `set_visible(false)` is
+      // THE hide primitive for them (tao T28-4 restores the kind-split); the
+      // former blanket Err regressed every sub-window hide (issue
+      // Eulogizethesun/tauri#241, aligned with the driver-generated
+      // float.hide+show+center contract).
+      if self.is_ui_ability_main {
+        return Err(ohos_unsupported("hiding the main window"));
+      }
     }
-    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::Hide),
@@ -3977,6 +3982,12 @@ where
   let active_tracing_spans = runtime.context.main_thread.active_tracing_spans.clone();
   let proxy = runtime.event_loop.create_proxy();
 
+  // OHOS: the close path drops the window's UIAbility-main registry entry
+  // (issue Eulogizethesun/tauri#241); thread the shared map through the
+  // iteration context.
+  #[cfg(target_env = "ohos")]
+  let ohos_main_window_registry = runtime.context.ohos_main_window_registry.clone();
+
   move |event, event_loop, control_flow| {
     for p in plugins.lock().unwrap().iter_mut() {
       let prevent_default = p.on_event(
@@ -3989,6 +4000,8 @@ where
           window_id_map: window_id_map.clone(),
           windows: windows.clone(),
           exit_state: exit_state.clone(),
+          #[cfg(target_env = "ohos")]
+          ohos_main_window_registry: ohos_main_window_registry.clone(),
           #[cfg(feature = "tracing")]
           active_tracing_spans: active_tracing_spans.clone(),
         },
@@ -4007,6 +4020,8 @@ where
         window_id_map: window_id_map.clone(),
         windows: windows.clone(),
         exit_state: exit_state.clone(),
+        #[cfg(target_env = "ohos")]
+        ohos_main_window_registry: ohos_main_window_registry.clone(),
         #[cfg(feature = "tracing")]
         active_tracing_spans: active_tracing_spans.clone(),
       },
@@ -4024,6 +4039,11 @@ pub struct EventLoopIterationContext<'a, T: UserEvent> {
   pub windows: Arc<WindowsStore>,
   /// Guards against duplicate `ExitRequested` run events.
   pub exit_state: Arc<ExitState>,
+  /// OHOS: window id -> is_ui_ability_main registry, threaded to the close
+  /// path so a window's entry is dropped when it leaves the store (issue
+  /// Eulogizethesun/tauri#241).
+  #[cfg(target_env = "ohos")]
+  pub ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
 }
@@ -4596,48 +4616,113 @@ fn handle_user_message<T: UserEvent>(
               log::error!("failed to set webview size: {e}");
             }
           }
-          WebviewMessage::SetSize(size) => match webview.bounds() {
-            Ok(mut bounds) => {
-              bounds.size = size;
-
+          WebviewMessage::SetSize(size) => {
+            // Only the size component is being set. Back-filling the position
+            // from `webview.bounds()` would read wry's bounds cache, which for
+            // a natural-layout (bounds-less) webview holds the upstream
+            // `WebViewAttributes` default 200×200 placeholder — never live
+            // geometry — so the call would write a placeholder position into
+            // the render layer and flip the webview away from container
+            // layout (issue Eulogizethesun/tauri#241). On OHOS the unset
+            // component is sent as the cross-repo sentinel instead
+            // (`ohos_unspecified_position`, skipped by the ArkTS render
+            // layer), leaving the live position untouched. Other platforms
+            // keep the previous behavior: there `bounds()` returns real
+            // geometry, so preserving it is correct.
+            #[cfg(target_env = "ohos")]
+            {
               let scale_factor = window.scale_factor();
-              let size = size.to_logical::<f32>(scale_factor);
+              let logical_size = size.to_logical::<f32>(scale_factor);
 
               if let Some(b) = &mut *webview.bounds.lock().unwrap() {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                b.width_rate = size.width / window_size.width;
-                b.height_rate = size.height / window_size.height;
+                b.width_rate = logical_size.width / window_size.width;
+                b.height_rate = logical_size.height / window_size.height;
               }
 
-              if let Err(e) = webview.set_bounds(bounds) {
+              if let Err(e) = webview.set_bounds(wry::Rect {
+                position: ohos_unspecified_position(),
+                size,
+              }) {
                 log::error!("failed to set webview size: {e}");
               }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
-            }
-          },
-          WebviewMessage::SetPosition(position) => match webview.bounds() {
-            Ok(mut bounds) => {
-              bounds.position = position;
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(mut bounds) => {
+                bounds.size = size;
 
+                let scale_factor = window.scale_factor();
+                let size = size.to_logical::<f32>(scale_factor);
+
+                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                  let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                  b.width_rate = size.width / window_size.width;
+                  b.height_rate = size.height / window_size.height;
+                }
+
+                if let Err(e) = webview.set_bounds(bounds) {
+                  log::error!("failed to set webview size: {e}");
+                }
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
+            }
+          }
+          WebviewMessage::SetPosition(position) => {
+            // Only the position component is being set. Back-filling the size
+            // from `webview.bounds()` would read wry's bounds cache, which for
+            // a natural-layout (bounds-less) webview holds the
+            // `WebViewAttributes` default (200×200) — the call would shrink
+            // the webview to 200×200 and flip it away from container layout
+            // (issue Eulogizethesun/tauri#241). On OHOS the unset component is
+            // sent as the cross-repo sentinel instead
+            // (`ohos_unspecified_size`, skipped by the ArkTS render layer),
+            // leaving the live size untouched. Other platforms keep the
+            // previous behavior: there `bounds()` returns real geometry, so
+            // preserving it is correct.
+            #[cfg(target_env = "ohos")]
+            {
               let scale_factor = window.scale_factor();
-              let position = position.to_logical::<f32>(scale_factor);
+              let logical_position = position.to_logical::<f32>(scale_factor);
 
               if let Some(b) = &mut *webview.bounds.lock().unwrap() {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                b.x_rate = position.x / window_size.width;
-                b.y_rate = position.y / window_size.height;
+                b.x_rate = logical_position.x / window_size.width;
+                b.y_rate = logical_position.y / window_size.height;
               }
 
-              if let Err(e) = webview.set_bounds(bounds) {
+              if let Err(e) = webview.set_bounds(wry::Rect {
+                position,
+                size: ohos_unspecified_size(),
+              }) {
                 log::error!("failed to set webview position: {e}");
               }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(mut bounds) => {
+                bounds.position = position;
+
+                let scale_factor = window.scale_factor();
+                let position = position.to_logical::<f32>(scale_factor);
+
+                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                  let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                  b.x_rate = position.x / window_size.width;
+                  b.y_rate = position.y / window_size.height;
+                }
+
+                if let Err(e) = webview.set_bounds(bounds) {
+                  log::error!("failed to set webview position: {e}");
+                }
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
             }
-          },
+          }
           WebviewMessage::SetZoom(scale_factor) => {
             if let Err(e) = webview.zoom(scale_factor) {
               log::error!("failed to set webview zoom: {e}");
@@ -4746,27 +4831,49 @@ fn handle_user_message<T: UserEvent>(
               log::error!("failed to focus webview: {e}");
             }
           }
-          WebviewMessage::SetAutoResize(auto_resize) => match webview.bounds() {
-            Ok(bounds) => {
-              let scale_factor = window.scale_factor();
-              let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-              *webview.bounds.lock().unwrap() = if auto_resize {
-                let size = bounds.size.to_logical::<f32>(scale_factor);
-                let position = bounds.position.to_logical::<f32>(scale_factor);
-                Some(WebviewBounds {
-                  x_rate: position.x / window_size.width,
-                  y_rate: position.y / window_size.height,
-                  width_rate: size.width / window_size.width,
-                  height_rate: size.height / window_size.height,
-                })
-              } else {
-                None
-              };
+          WebviewMessage::SetAutoResize(auto_resize) => {
+            #[cfg(target_env = "ohos")]
+            {
+              // Disabling always clears the runtime rates. Enabling does NOT
+              // source the base rect from `webview.bounds()`: that cache holds
+              // the `WebViewAttributes` default (200×200) for a natural-layout
+              // webview and sentinel components after a partial
+              // set_size/set_position, so rates derived from it would pin or
+              // shrink the webview on the next window resize (issue
+              // Eulogizethesun/tauri#241). A webview already armed keeps its
+              // live rates (maintained by the SetBounds/SetSize/SetPosition
+              // handlers); a natural-layout webview needs none — it follows
+              // the window through container layout — and the auto-resize
+              // base for a webview armed after creation is read from the
+              // actual layout by the ArkTS render layer (cross-repo contract,
+              // openharmony-ability WebviewPlugin.ets).
+              if !auto_resize {
+                *webview.bounds.lock().unwrap() = None;
+              }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(bounds) => {
+                let scale_factor = window.scale_factor();
+                let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                *webview.bounds.lock().unwrap() = if auto_resize {
+                  let size = bounds.size.to_logical::<f32>(scale_factor);
+                  let position = bounds.position.to_logical::<f32>(scale_factor);
+                  Some(WebviewBounds {
+                    x_rate: position.x / window_size.width,
+                    y_rate: position.y / window_size.height,
+                    width_rate: size.width / window_size.width,
+                    height_rate: size.height / window_size.height,
+                  })
+                } else {
+                  None
+                };
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
             }
-          },
+          }
           WebviewMessage::WithWebview(_f) => {
             #[cfg(all(
               any(
@@ -4965,6 +5072,8 @@ fn handle_event_loop<T: UserEvent>(
     window_id_map,
     windows,
     exit_state,
+    #[cfg(target_env = "ohos")]
+    ohos_main_window_registry,
     #[cfg(feature = "tracing")]
     active_tracing_spans,
   } = context;
@@ -5179,7 +5288,13 @@ fn handle_event_loop<T: UserEvent>(
             // return value is intentionally ignored.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_close_requested_ohos(callback, window_id, windows, exit_state);
+              let _ = on_close_requested_ohos(
+                callback,
+                window_id,
+                windows,
+                exit_state,
+                ohos_main_window_registry.clone(),
+              );
             }
           }
           TaoWindowEvent::Destroyed => {
@@ -5206,7 +5321,13 @@ fn handle_event_loop<T: UserEvent>(
             // any Destroyed event that arrives without a prior close.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_window_close_ohos(callback, window_id, windows, exit_state);
+              let _ = on_window_close_ohos(
+                callback,
+                window_id,
+                windows,
+                exit_state,
+                ohos_main_window_registry.clone(),
+              );
             }
           }
           TaoWindowEvent::Resized(size) => {
@@ -5269,7 +5390,13 @@ fn handle_event_loop<T: UserEvent>(
         on_close_requested(callback, id, windows);
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_close_requested_ohos(callback, id, windows, exit_state);
+          let _ = on_close_requested_ohos(
+            callback,
+            id,
+            windows,
+            exit_state,
+            ohos_main_window_registry.clone(),
+          );
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
@@ -5279,7 +5406,13 @@ fn handle_event_loop<T: UserEvent>(
         // to avoid recursion.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_window_close_ohos(callback, id, windows, exit_state);
+          let _ = on_window_close_ohos(
+            callback,
+            id,
+            windows,
+            exit_state,
+            ohos_main_window_registry.clone(),
+          );
         }
       }
       Message::UserEvent(t) => callback(RunEvent::UserEvent(t)),
@@ -5375,6 +5508,7 @@ fn on_close_requested_ohos<'a, T: UserEvent>(
   window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 ) -> bool {
   let (tx, rx) = channel();
   let windows_ref = windows.0.borrow();
@@ -5398,7 +5532,13 @@ fn on_close_requested_ohos<'a, T: UserEvent>(
     if let Ok(true) = rx.try_recv() {
       // User prevented close, do not call on_window_close
     } else {
-      return on_window_close_ohos(callback, window_id, windows, exit_state);
+      return on_window_close_ohos(
+        callback,
+        window_id,
+        windows,
+        exit_state,
+        ohos_main_window_registry,
+      );
     }
   }
   false
@@ -5414,6 +5554,7 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 ) -> bool {
   // Remove window entry from WindowsStore (idempotent)
   let removed = windows.0.borrow_mut().remove(&window_id);
@@ -5421,6 +5562,15 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   // never applies inside this OHOS-only function; the OHOS path only reads
   // `inner` and moves `label`.
   if let Some(window_wrapper) = removed {
+    // Drop the window's UIAbility-main record together with the store entry
+    // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
+    // live window count across repeated create/destroy cycles of the same
+    // label. Idempotent: the close paths can run more than once per window.
+    ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .remove(&window_id);
+
     // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
     // kind) call destroyWindow; the main (UIAbility) window is system-managed — the
     // bridge's destroy-window handler rejects window id 0, so for it this is
@@ -5764,6 +5914,39 @@ struct WebviewBounds {
   y_rate: f32,
   width_rate: f32,
   height_rate: f32,
+}
+
+// ─── OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) ───────────
+
+/// OHOS wire sentinel for "this bounds component is not set by this call".
+///
+/// `i32::MIN` rather than `-1`: real multi-monitor window/webview coordinates
+/// are routinely negative, so `-1` could collide with a genuine position.
+///
+/// The sentinel is sent as a LOGICAL value on purpose: wry's OHOS
+/// `set_bounds` converts physical input to ArkUI vp by multiplying with the
+/// live display ratio, but passes logical input through unchanged — so the
+/// exact value reaches the ArkTS render layer (`WebviewPlugin.ets`) whatever
+/// the vp is. The ArkTS side skips any component equal to the sentinel and
+/// applies only the components the call actually sets; the unspecified ones
+/// keep the webview's live geometry (for a natural-layout webview that is
+/// container-driven layout, not the cached default). This is the cross-repo
+/// wire contract with openharmony-ability (issue Eulogizethesun/tauri#241).
+#[cfg(target_env = "ohos")]
+const OHOS_BOUNDS_UNSET: f64 = i32::MIN as f64;
+
+/// OHOS: the position sent when a bounds update must not touch the live
+/// position (every component equals [`OHOS_BOUNDS_UNSET`]).
+#[cfg(target_env = "ohos")]
+fn ohos_unspecified_position() -> Position {
+  Position::Logical(LogicalPosition::new(OHOS_BOUNDS_UNSET, OHOS_BOUNDS_UNSET))
+}
+
+/// OHOS: the size sent when a bounds update must not touch the live size
+/// (every component equals [`OHOS_BOUNDS_UNSET`]).
+#[cfg(target_env = "ohos")]
+fn ohos_unspecified_size() -> Size {
+  Size::Logical(LogicalSize::new(OHOS_BOUNDS_UNSET, OHOS_BOUNDS_UNSET))
 }
 
 fn create_webview<T: UserEvent>(
