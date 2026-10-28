@@ -1,12 +1,15 @@
 # OHOS 窗口能力与测试用例映射
 
 > 创建时间: 2026-07-04
+> 最后更新: 2026-10-29(Round-14 勘误:补抬 2026-10-27 抬戳后三笔未盖戳改动[f391aa465 set_resizable 双腿+创建期种子、a7bf7b6cb 可见性行 T28-4 主/子分裂口径——两者正文均已入表,6c2dedc91 仅 tauri-runtime kind rustdoc 无本表增量];#238 装饰按钮增量核对——可关闭/可最大化/可最小化三行补「UIAbility-kind 窗口 setter log::error+no-op、仅子窗真派发」限定)
 > 最后更新: 2026-10-27(#237 hide 契约措辞收窄为主窗口口径——`minimize()` 按调用者类型双语义;#240 Float→SubWindow 更名残留清扫,FloatPage→SubWindowPage)
 > 最后更新: 2026-08-20(①三批共 11 行更正,均为过时描述→实际状态、源码链路验证:拖拽/大小限制/主题/标题/置顶/注意力/销毁/多窗口/状态持久化/窗口 ID ②大小获取/位置获取/透明度三行更正,含 inner_position 标题栏补偿**代码修复+真机验证** ③折叠屏/窗口图标/置底三行归类更正为「接口不支持」,附官方 API 依据)
 > 数据来源: 设备 test-report.md（220 项，214 ✅ / 6 ❌）+ TestRunner Manual Tests + window-ops.ts
 > 关联: [ohos-window-design.md](ohos-window-design.md)（落地状态与预期效果）
 
 原表为早期版本，部分标注与当前代码不符。下表合并「原标注 / 实际状态 / 具体 API / 测试用例 / 测试结果」五列。
+
+> 2026-10-29 Round-14 本轮覆盖: 抬戳如上;正文增量仅一处——#238 增量核对后给「窗口可关闭/可最大化/可最小化」三行补 UIAbility-kind 主窗限定（与「窗口可调整大小」行 2026-10-28 已有的 T28-2 限定对齐），其余正文未动。
 
 API 列格式：`tao 方法 → openharmony-ability 函数 → OHOS API`（空实现/平台限制只标 tao 层）。
 
@@ -39,9 +42,9 @@ API 列格式：`tao 方法 → openharmony-ability 函数 → OHOS API`（空�
 | 窗口置顶 | ❌ | ✅ 已实现 | `set_always_on_top`→记 AtomicBool（`is_always_on_top` 读值保留）+ 真实调用 `set_window_topmost`→`win.setWindowTopmost(bool)`（API14+，需 ohos.permission.WINDOW_TOPMOST；<14 no-op）。跨应用常驻最前，非仅本应用内 | #139 setAlwaysOnTop smoke + 手动 `Toggle AlwaysOnTop` | ✅ / 手动 |
 | 窗口置底 | ❌ | ❌ 接口不支持 | 无对应 OHOS API——窗口 z-order 仅有置顶方向 `setWindowTopmost`（API14+，公开 normal 权限，仅主窗口），无置底/bottommost 对应接口；SubWindow 子窗口天然浮于主窗口只是创建类型行为，非可编程置底。tao `set_always_on_bottom(){}`（空） | 无 | ❌ |
 | 用户注意力请求 | ❌ | ✅ 已实现（通知形态） | `request_user_attention`→ArkTS `requestUserAttention`→`notificationManager.publish`（静态 import——动态 import 加载 libnotificationkit.z.so 失败；单调递增 notifId 防并发覆盖，PR#45 review F3）。publish 报 1600004（未授权）→`requestEnableNotification()` 弹系统授权框→允许后重试 publish。注意：OHOS 窗口层无 attention API，语义为**发通知**而非任务栏闪烁；tao `_request_type` 参数被忽略 | 手动 `Request User Attention (notification)`（首次弹授权框→允许→右下角弹 "Tauri App / 请查看应用窗口" 通知） | 手动 |
-| 窗口可关闭 | ❌ | ✅ 已实现 | `set_closable`→`set_window_decoration_flags`(bit0)→LocalStorage | #141 decoration flags smoke | ✅ |
-| 窗口可最大化 | ❌ | ✅ 已实现（两层 flag 语义不同） | `set_maximizable`→`set_window_decoration_flags`(bit1)→LocalStorage（**应用层拦截**：flag=false 时 WindowManager.maximizeWindow 拒绝，hilog "maximizeWindow blocked: maximizable flag not set"）。与创建期 `maximizeSupported`（**系统层**，createSubWindowWithOptions API19+，决定 win.maximize() 是否报 1300004）是两个独立 flag：系统层 true + 应用层 true 才能最大化。SubWindowPage ❐/□ 按钮点击经应用层拦截 | 同上 | ✅ |
-| 窗口可最小化 | ❌ | ✅ 已实现 | `set_minimizable`→`set_window_decoration_flags`(bit2)→LocalStorage | 同上 | ✅ |
+| 窗口可关闭 | ❌ | ✅ 已实现 | `set_closable`→`set_window_decoration_flags`(bit0)→LocalStorage（#238 收紧：仅子窗真派发；UIAbility-kind 窗口[主窗+后续实例] setter log::error+no-op 不派发——装饰按钮 OS 管理、无逐钮控制 API） | #141 decoration flags smoke | ✅ |
+| 窗口可最大化 | ❌ | ✅ 已实现（两层 flag 语义不同） | `set_maximizable`→`set_window_decoration_flags`(bit1)→LocalStorage（**应用层拦截**：flag=false 时 WindowManager.maximizeWindow 拒绝，hilog "maximizeWindow blocked: maximizable flag not set"）。与创建期 `maximizeSupported`（**系统层**，createSubWindowWithOptions API19+，决定 win.maximize() 是否报 1300004）是两个独立 flag：系统层 true + 应用层 true 才能最大化。SubWindowPage ❐/□ 按钮点击经应用层拦截。#238 收紧：UIAbility-kind 窗口[主窗+后续实例] setter log::error+no-op 不派发（同上行） | 同上 | ✅ |
+| 窗口可最小化 | ❌ | ✅ 已实现 | `set_minimizable`→`set_window_decoration_flags`(bit2)→LocalStorage（#238 收紧：仅子窗真派发；UIAbility-kind 窗口 setter log::error+no-op，同「窗口可关闭」行） | 同上 | ✅ |
 | 窗口可聚焦 | ❌ | ✅ 已实现（生效但无视觉变化） | `set_focusable`→`set_window_focusable`→`win.setWindowFocusable`（主窗口 id=0 系统管理 no-op）。语义=窗口不接受键盘焦点，**无任何视觉现象**；可观测判据（2026-08-27 A/B 实测）：focusable=false 时点击子窗口，主窗口 `is_focused`（app 级 HAS_FOCUS 位）保持 true；正常态点击则变 false（焦点被抢）。程序化 setFocus() 不受影响（raiseToAppTop 只抬 z-order 不转移焦点，两组同值无差异）。子窗口无独立焦点读回 API | 手动 `setFocusable(false) (3s)`（自验式：按钮轮询主窗口焦点自动判定） | 手动 ✅（A/B 验证） |
 | 窗口可调整大小 | ❌ | ✅ 已实现 | `set_resizable` **双腿**（tao src/platform_impl/ohos/window.rs set_resizable，2026-10-28 补记 tao-F-03，原行只记了①）：① `set_window_decoration_flags`(bit3)→LocalStorage——仅子窗腿（UIAbility-kind 窗口只写镜像缓存不派发该 ArkTS 命令，PR#28 T28-2）；② `set-resize-by-drag` deferred 腿（spawn_or_queue_deferred，握手中排队重放）→ArkTS 按 `windowId===0` 路由：id0 主窗→`setResizeByDragEnabled`(API14+)，id>0 子窗/spawned 实例→`enableDrag`(API20+)（#104/#238 T28-5；失败仅 log::warn 不回滚）——这才是用户可感的边缘拖拽缩放开关；③ 创建期种子（920fc181，gate F1）：builder `resizable(false)` 时双腿同播（子窗=bit3 装饰种子+drag 种子，创建/运行同构；主窗仅 drag 种子——装饰派发对 UIAbility-kind 必炸故砍），默认 `resizable(true)` 零派发 | 同上 | ✅ |
 | 光标位置 (读) | ❌ | 已工作 | `cursor_position`→读 `CURSOR_POSITION_X/Y`（ArkTS onMouse 经 NAPI 更新） | #58 cursorPosition | ✅ |
