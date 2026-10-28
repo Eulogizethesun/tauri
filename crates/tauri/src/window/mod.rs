@@ -1690,6 +1690,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_maximizable`] /
+  ///   the creation seed.
   pub fn is_maximizable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_maximizable().map_err(Into::into)
   }
@@ -1699,6 +1704,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_minimizable`] /
+  ///   the creation seed.
   pub fn is_minimizable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_minimizable().map_err(Into::into)
   }
@@ -1708,6 +1718,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available — the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_closable`] /
+  ///   the creation seed.
   pub fn is_closable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_closable().map_err(Into::into)
   }
@@ -1931,6 +1946,22 @@ impl<R: Runtime> Window<R> {
   }
 
   /// Hide this window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** kind-split (issue Eulogizethesun/tauri#237, refined
+  ///   by #241 to match the tao T28-4 contract). On a main window there is no
+  ///   hide semantics: per the SDK d.ts `minimize()` has dual semantics by
+  ///   caller type (main window = taskbar minimize, restored from the dock),
+  ///   and UIAbility-level `hideAbility` is out of reach on PC/2in1 — the
+  ///   window is left untouched. Sub-windows / floating windows hide for
+  ///   real (the SDK `minimize()` IS the hide primitive there, restored via
+  ///   [`Self::show`]).
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window — `NotSupported` ("hiding the main window
+  ///   is not supported on OpenHarmony").
   pub fn hide(&self) -> crate::Result<()> {
     self.window.dispatcher.hide().map_err(Into::into)
   }
@@ -2126,6 +2157,16 @@ impl<R: Runtime> Window<R> {
   ///
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed (`@ohos.window` has no API for these operation-level
+  ///   flags), so calling this on the main window returns an error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind) support
+  ///   the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
     self
       .window
@@ -2139,6 +2180,14 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed, so calling this on the main window returns an error
+  ///   (issue Eulogizethesun/tauri#238). Sub-windows support the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self
       .window
@@ -2154,6 +2203,14 @@ impl<R: Runtime> Window<R> {
   /// - **Linux:** "GTK+ will do its best to convince the window manager not to show a close button.
   ///   Depending on the system, this function may not have any effect when called on a window that is already visible"
   /// - **iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed, so calling this on the main window returns an error
+  ///   (issue Eulogizethesun/tauri#238). Sub-windows support the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window — `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self
       .window

@@ -2308,15 +2308,18 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// ## Platform-specific
   ///
-  /// - **OpenHarmony:** on a main window there is no hide semantics: per the
-  ///   SDK d.ts `minimize()` has dual semantics by caller type (main window =
-  ///   taskbar minimize, not hide, restored from the dock; sub-window / float
-  ///   = hide, restorable via `showWindow()` since API 12), and
-  ///   UIAbility-level `hideAbility` is out of reach on PC/2in1. This call
-  ///   returns a `NotSupported` error naming OpenHarmony instead of degrading
-  ///   to a taskbar minimize (issue Eulogizethesun/tauri#237, requirement 4
-  ///   pending the A1 `hide_ability` implementation). Use [`Self::minimize`]
-  ///   for taskbar minimization.
+  /// - **OpenHarmony:** kind-split (issue Eulogizethesun/tauri#237, refined
+  ///   by #241 to match the tao T28-4 contract). On a MAIN window there is no
+  ///   hide semantics: per the SDK d.ts `minimize()` has dual semantics by
+  ///   caller type (main window = taskbar minimize, not hide, restored from
+  ///   the dock; sub-window / float = hide, restorable via `showWindow()`
+  ///   since API 12), and UIAbility-level `hideAbility` is out of reach on
+  ///   PC/2in1 — so this call returns a `NotSupported` error naming
+  ///   OpenHarmony and the window is left untouched. Sub-windows / floating
+  ///   windows hide for real (the SDK `minimize()` is the hide primitive
+  ///   there) and [`Self::show`] restores them — the former blanket error
+  ///   regressed every sub-window hide. Use [`Self::minimize`] on the main
+  ///   window for taskbar minimization (issue Eulogizethesun/tauri#241).
   pub fn hide(&self) -> crate::Result<()> {
     self.window.hide()
   }
