@@ -523,7 +523,11 @@ pub trait WindowBuilder: WindowBuilderBase {
 
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: Main window (reuses existing UIAbility container). Only one can exist.
+  /// - `UIAbility`: a window backed by its own UIAbility instance. The FIRST
+  ///   window of the process must be this kind (it bootstraps the
+  ///   EntryAbility container; a SubWindow has nothing to attach to);
+  ///   subsequent windows may opt in explicitly and take the
+  ///   spawned-instance path.
   /// - `SubWindow`: Sub-window of an existing UIAbility container.
   #[cfg(target_env = "ohos")]
   fn ohos_window_kind(self, kind: OHOSWindowKind) -> Self;
@@ -533,7 +537,10 @@ pub trait WindowBuilder: WindowBuilderBase {
 #[cfg(target_env = "ohos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OHOSWindowKind {
-  /// Main window — reuses the existing UIAbility container. Only one can exist per application.
+  /// A window backed by its own UIAbility instance. The FIRST window of
+  /// the process must be this kind (it bootstraps the EntryAbility
+  /// container; a SubWindow has nothing to attach to); subsequent
+  /// windows may opt in explicitly and take the spawned-instance path.
   UIAbility,
   /// Sub-window — created via `windowStage.createSubWindow`, lives inside an
   /// existing UIAbility container and is destroyed with it. This is an
