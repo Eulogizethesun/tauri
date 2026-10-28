@@ -1551,7 +1551,7 @@ Expected behavior:
       await win.setResizable(!before);
       const after = await win.isResizable();
       ohosWinState = `isResizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('resizable') 但没消费(无 resize 手柄)。\nflag 写入 LocalStorage 但无 UI 效果。要真正禁用 resize 需走 enableDrag(false) API。`;
+      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n✅ 双腿(tao set_resizable, 2026-10-28 对齐 mapping #46): ① decoration-flags bit3→LocalStorage(API 拦截层: flag=false 时 set_inner_size 被 FLAG_RESIZABLE 门拦截) ② set-resize-by-drag 腿→按 windowId 路由(主窗 setResizeByDragEnabled / 子窗 enableDrag)。\n用户可感面=子窗边缘拖拽缩放开关: false 时边缘拖不动, 恢复后重新可拖。`;
       onMessage(manualResult);
     });
   }
