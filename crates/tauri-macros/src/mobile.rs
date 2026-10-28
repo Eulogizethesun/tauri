@@ -12,10 +12,15 @@ use syn::{spanned::Spanned, Attribute, ItemFn};
 /// (`tauri::mobile_entry_point` or `tauri::ohos::entry_point`, with or
 /// without the leading `::`).
 ///
-/// Full-path matching: an aliased import (`use tauri::ohos::entry_point as
-/// x;` used as `#[x]`) renames the path and deliberately does NOT match —
-/// the stripping degrades and the build fails with E0428 (visible, not
-/// silent). Issue Eulogizethesun/tauri#242.
+/// Namespace-qualified matching only: a bare `#[entry_point]` does NOT match
+/// — `entry_point` is a generic name any crate may define, and stripping it
+/// here would silently delete a foreign attribute from the passthrough
+/// function (issue Eulogizethesun/tauri#241). Write the full path
+/// (`tauri::ohos::entry_point` / `ohos::entry_point` via a module import) so
+/// the sibling stripping recognizes it. An aliased import (`use
+/// tauri::ohos::entry_point as x;` used as `#[x]`) renames the path and
+/// deliberately does NOT match either — the stripping degrades and the build
+/// fails with E0428 (visible, not silent). Issue Eulogizethesun/tauri#242.
 fn is_entry_point_attr(attr: &Attribute) -> bool {
   let segments: Vec<String> = attr
     .path()
@@ -28,7 +33,6 @@ fn is_entry_point_attr(attr: &Attribute) -> bool {
     segments.as_slice(),
     ["mobile_entry_point"]
       | ["tauri", "mobile_entry_point"]
-      | ["entry_point"]
       | ["ohos", "entry_point"]
       | ["tauri", "ohos", "entry_point"]
   )
@@ -184,14 +188,15 @@ mod tests {
   }
 
   /// UT for entry-point attribute recognition: both entry-point attributes in
-  /// every full-path spelling match; unrelated attributes do not.
+  /// every namespace-qualified spelling match; a bare `#[entry_point]` (a
+  /// generic name other crates may define — stripping it would silently drop
+  /// a foreign attribute) and unrelated attributes do not.
   #[test]
   fn ut_entry_point_attr_recognition_matches_both_attributes_full_paths() {
     for path in [
       "mobile_entry_point",
       "tauri::mobile_entry_point",
       "::tauri::mobile_entry_point",
-      "entry_point",
       "ohos::entry_point",
       "tauri::ohos::entry_point",
       "::tauri::ohos::entry_point",
@@ -202,6 +207,7 @@ mod tests {
       );
     }
     for path in [
+      "entry_point",
       "inline",
       "cfg_attr(mobile, tauri::mobile_entry_point)",
       "command",
