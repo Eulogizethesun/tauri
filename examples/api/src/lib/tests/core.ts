@@ -108,6 +108,26 @@ interface IframeIpcProbe {
   matrixTargets?: Record<string, string>;
   runSentAt?: number;
 }
+/**
+ * Platforms where an iframe can drive the Tauri IPC end to end (issue
+ * Eulogizethesun/tauri#241). Windows delivers the iframe's `window.ipc`
+ * postMessage straight to the bridge; OHOS additionally runs the frame
+ * relay in core.js. On macOS and Linux upstream injects the init scripts
+ * into the MAIN frame only (assertion 1 fails immediately), and on Android
+ * the scripts land but there is no relay, so `invoke` never settles and the
+ * case just burns its whole timeout — skip those instead of reporting a
+ * platform-inherent failure.
+ */
+async function iframeIpcSupportedPlatform(): Promise<boolean> {
+  try {
+    const { platform } = await import('@tauri-apps/plugin-os');
+    const p = platform();
+    return p === 'ohos' || p === 'windows';
+  } catch {
+    return false;
+  }
+}
+
 function runIframeIpcProbe(): Promise<IframeIpcProbe> {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe');
@@ -401,6 +421,11 @@ export const coreTests: TestCase[] = [
     category: 'auto',
     timeout: 25000,
     async fn() {
+      if (!(await iframeIpcSupportedPlatform())) {
+        skip(
+          'iframe IPC routing needs the platform frame relay (OHOS) or direct per-frame ipc bridge (Windows); on macOS/Linux the init scripts never reach the child frame and on Android invoke would never settle, so the case would only burn its timeout'
+        );
+      }
       // Phase A v2: capture the main frame's runCallback miss warns with
       // absolute timestamps — correlating them with the child's relay-arrival
       // timestamps decomposes the round trip into uplink/Rust vs downlink.
@@ -1746,6 +1771,7 @@ export const coreTests: TestCase[] = [
     // case budget so a failure reports the leg message, not the outer timeout.
     timeout: 20000,
     async fn() {
+      await skipOnMobile('webview sizing commands (create_webview with bounds / position / size) are upstream cfg(desktop) and absent from the mobile build');
       const mainWindow = getCurrentWindow();
       const M = window.innerWidth;
       console.log(`[viewport-probe] main window viewport M=${window.innerWidth}×${window.innerHeight}`);
@@ -1829,6 +1855,7 @@ export const coreTests: TestCase[] = [
     // budget so a failure reports the leg message, not the outer timeout.
     timeout: 25000,
     async fn() {
+      await skipOnMobile('webview setSize/setPosition are upstream cfg(desktop) and absent from the mobile build');
       const tag = 'test-sizing-resize-' + Date.now();
       const child = new Webview(getCurrentWindow(), tag, {
         url: '/webview-viewport-probe.html',
@@ -1846,6 +1873,19 @@ export const coreTests: TestCase[] = [
         await child.setSize(new LogicalSize(400, 300));
         await child.setPosition(new LogicalPosition(60, 70));
         await pollViewportProbe(tag, 400, 300, 7000, 'setSize(400,300) rendered geometry');
+        // Position read-back (issue Eulogizethesun/tauri#241): setPosition(60,70)
+        // must land — the physical read-back pins the position component of the
+        // applied geometry. Deliberately placed BEFORE the last-wins setSize
+        // leg below: under the P2-1 sentinel contract a partial setSize sends
+        // an unspecified position component, so AFTER it the cache-backed
+        // position() legitimately reads back as the sentinel, not (60,70).
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const sfB = await getCurrentWindow().scaleFactor();
+        const posB = await child.position();
+        assert(
+          Math.abs(posB.x - Math.round(60 * sfB)) <= 2 && Math.abs(posB.y - Math.round(70 * sfB)) <= 2,
+          `child position (${posB.x},${posB.y}) ≠ setPosition(60,70) logical × sf=${sfB} (expected ${Math.round(60 * sfB)},${Math.round(70 * sfB)} ±2) — the position component was lost`
+        );
         // S8: consecutive set_bounds — the final call must win, no merge/drop.
         await child.setSize(new LogicalSize(250, 150));
         await pollViewportProbe(tag, 250, 150, 7000, 'setSize(250,150) after consecutive calls (last-wins)');
@@ -1867,6 +1907,7 @@ export const coreTests: TestCase[] = [
     // case budget so a failure reports the leg message, not the outer timeout.
     timeout: 25000,
     async fn() {
+      await skipOnMobile('the flip leg drives Webview setSize (upstream cfg(desktop), absent from the mobile build)');
       // Float sub-window via the existing demo command — JS `new WebviewWindow`
       // defaults to the OHOS UIAbility kind which conflicts with the main window
       // (see the vibrancy NOTE). Its single webview is the window content:
@@ -2048,10 +2089,17 @@ export const coreTests: TestCase[] = [
       try {
         pos = await cursorPosition();
       } catch (e) {
-        // Only the invoke's own rejection is tolerated, as the untracked
-        // fail-safe contract (unreachable in suite runs — the suite always
-        // has mouse interaction before this case; the authoritative
-        // cold-start reject verification lives in the ability device UT).
+        // Only the untracked fail-safe contract's rejection is tolerated —
+        // and only by its known message. tao's OHOS cursor_position Err is
+        // mapped to the runtime FailedToSendMessage variant on its way to JS
+        // ("runtime error: failed to send message to the webview"); any other
+        // rejection is a real defect and must fail the case (issue
+        // Eulogizethesun/tauri#241: the previous bare catch swallowed
+        // arbitrary rejects as a fake pass).
+        const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
+        if (!/failed to send message to the webview/.test(msg)) {
+          throw e;
+        }
         console.warn(`[cursorPosition] rejected — tolerated as the untracked fail-safe contract: ${e}`);
         return;
       }
@@ -2223,6 +2271,22 @@ export const coreTests: TestCase[] = [
         assert(
           report.matches === true,
           `bounds should match after round-trip, got: ${JSON.stringify(report)}`
+        );
+        // Real read-back assertions (issue Eulogizethesun/tauri#241): the
+        // command already awaited the rendered ack (probe-page viewport) and
+        // asserted its own read-back; here the physical read-back is pinned
+        // against the CREATION rect (40,40,220×160 logical × sf) so a
+        // regression in either the position or the size component — or a
+        // never-applied rect surfacing as a rejection — fails the case.
+        const sf = await getCurrentWindow().scaleFactor();
+        const rb = report.readback;
+        assert(
+          Math.abs(rb.x - Math.round(40 * sf)) <= 2 && Math.abs(rb.y - Math.round(40 * sf)) <= 2,
+          `read-back position (${rb.x},${rb.y}) ≠ requested (40,40) logical × sf=${sf} (expected ${Math.round(40 * sf)},${Math.round(40 * sf)} ±2)`
+        );
+        assert(
+          Math.abs(rb.width - Math.round(220 * sf)) <= 2 && Math.abs(rb.height - Math.round(160 * sf)) <= 2,
+          `read-back size ${rb.width}x${rb.height} ≠ requested 220×160 logical × sf=${sf} (expected ${Math.round(220 * sf)}×${Math.round(160 * sf)} ±2)`
         );
       } finally {
         try { await child.close(); } catch { /* cleanup best-effort */ }
