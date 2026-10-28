@@ -2583,6 +2583,23 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
       .unwrap_or(0)
   }
 
+  /// Async sleep: the wall-clock wait runs on the async runtime's blocking
+  /// pool while the awaiting task yields, so the ack poll loop below never
+  /// pins an async worker thread (the previous `std::thread::sleep` blocked
+  /// the worker for every 100ms tick, up to the whole 5s ack budget). tokio
+  /// is not a direct dependency of this crate, so `tokio::time::sleep` is
+  /// unavailable; this is the equivalent built on the `tauri::async_runtime`
+  /// re-exports (tokio mpsc channel + spawn_blocking), with the poll window
+  /// (POLL_INTERVAL / ACK_BUDGET) unchanged.
+  async fn async_sleep(duration: Duration) {
+    let (tx, mut rx) = tauri::async_runtime::channel::<()>(1);
+    tauri::async_runtime::spawn_blocking(move || {
+      std::thread::sleep(duration);
+      let _ = tx.send(());
+    });
+    let _ = rx.recv().await;
+  }
+
   /// Physical px (x, y, w, h) of a rect under the given scale factor,
   /// accepting either dpi variant (the bounds cache preserves whatever
   /// variant was last sent).
@@ -2629,7 +2646,7 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
           "set_bounds_test: no rendered ack from the probe page within 5s (expected viewport ~{viewport_w}x{viewport_h}, newer than {since_ms}) — the final set_bounds was never applied (or the webview does not run /webview-viewport-probe.html)"
         ));
       }
-      std::thread::sleep(POLL_INTERVAL);
+      async_sleep(POLL_INTERVAL).await;
     }
   }
 
