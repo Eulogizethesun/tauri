@@ -116,4 +116,45 @@ export const riskSupplementTests: TestCase[] = [
       assert(gotClose, 'kill 后 8s 内未收到 close（Terminated）事件');
     },
   },
+  {
+    // tauri#207 (C64): shell open on OHOS used to fall into the desktop
+    // cfg path (xdg-open, always failing); it now routes through the
+    // openharmony-ability url bridge to the system default app — resolve
+    // means the bridge accepted it (before the fix this call always
+    // rejected with "Scoped shell IO error: No such file or directory").
+    // Side effect: on the 2in1 desktop form it opens a browser window
+    // (this case runs late in the batch so it does not disturb later cases).
+    name: 'shell.open URL 经 OHOS url 桥接 resolve（#207 修复回归）',
+    category: 'side-effect',
+    fn: async () => {
+      await requireOhos();
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open('https://tauri.app/');
+    },
+  },
+  {
+    // tauri#226 (C101): resource_dir used to compose
+    // /data/storage/el1/base/<lib>/assets from the .so library name —
+    // both parts wrong (moduleName is the library name, not the HAP module
+    // name; el1/base is the data directory and has no such subdir). It now
+    // reads currentHapModuleInfo.name (hapModuleName injection chain) and
+    // points at the system-extracted resfile location; the CLI-injected
+    // tauri.conf.json must actually exist in that directory.
+    name: 'path.resourceDir 指向 OHOS 解包 resfile 且内容可读（#226 修复回归）',
+    category: 'auto',
+    fn: async () => {
+      await requireOhos();
+      const dir = await path.resourceDir();
+      assert(
+        dir.startsWith('/data/storage/el1/bundle/') && dir.endsWith('/resources/resfile'),
+        `resource_dir 形态不符: ${dir}`
+      );
+      const entries = await fs.readDir(dir);
+      const names = entries.map((e) => e.name);
+      assert(
+        names.includes('tauri.conf.json'),
+        `resfile 目录应含 CLI 注入的 tauri.conf.json，实际: ${JSON.stringify(names)}`
+      );
+    },
+  },
 ];

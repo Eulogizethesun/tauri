@@ -167,6 +167,7 @@
     "fs:allow-read-dir",
     "fs:allow-remove",
     "fs:scope-appcache-recursive",
+    "fs:allow-resource-read-recursive",
     "fs:allow-watch",
     "shell:default",
     "shell:allow-open",
