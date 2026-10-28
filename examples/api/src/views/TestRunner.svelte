@@ -101,6 +101,10 @@
   // NFC batch was later inserted at #137, and the 2026-10-12 review-fix cases at #50
   // (clearAllBrowsingData routing) and #297 (setSizeConstraints min-floor read-back),
   // each shifting subsequent case numbers by one).
+  // The 2026-10-23 #207 regression case (shell.open URL via the OHOS url bridge, side-effect) was
+  // appended at the end of the risk-supplement batch, shifting the stronghold batch by one (#1-#314 now).
+  // The 2026-10-26 #226 regression case (resourceDir → extracted OHOS resfile) was appended right
+  // after it, shifting the stronghold batch once more (#1-#315 now).
   // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
   // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
@@ -537,6 +541,25 @@ Expected behavior:
     });
   }
 
+  // ─── OS locale live refresh (issue Eulogizethesun/tauri#215 / C76) ───
+  // locale() reads the live language (refreshed by onConfigurationUpdate)
+  // with the init snapshot as cold-start fallback. A/B: change the system
+  // language while the app keeps running, then re-run this case — the new
+  // locale must appear WITHOUT an app restart.
+  async function manualOsLocaleLive() {
+    await wrapManual('osLocaleLive', async () => {
+      const { locale } = await import('@tauri-apps/plugin-os');
+      const current = locale();
+      manualResult =
+        `locale() = ${JSON.stringify(current)}\n\n` +
+        `A/B (issue #215): change the system language (Settings → System → Language & region),\n` +
+        `then click this button again WITHOUT restarting the app.\n` +
+        `PASS: locale() reflects the new language (e.g. "zh-CN" ↔ "en-US").\n` +
+        `FAIL: still the old value after the system change (stale init snapshot).`;
+      onMessage(manualResult);
+    });
+  }
+
   // ─── Menu Bar Manual Tests ───
   const MB_TEST_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
@@ -711,6 +734,31 @@ Expected behavior:
       await new Promise(r => setTimeout(r, 500));
       await check.setChecked(true);
       manualResult = 'Menu bar: "Refresh → Check Me" (unchecked).\nsetChecked(true) called → auto_refresh should update.\nClick "Refresh" dropdown → "Check Me" should show a checkmark.\nIf checked state updated → PASS.';
+      onMessage(manualResult);
+    });
+  }
+
+  // ─── Mnemonic stripping (issue Eulogizethesun/tauri#205 / C60) ───
+  // OHOS has no keyboard mnemonics; the menubar/popup renderer strips `&`
+  // markers (`&&` collapses to one literal `&`). The tray/status-bar path
+  // strips its own copy (tray-icon #86) — this case covers the MenuBar
+  // component's render path, which is the one that used to show raw labels.
+  async function manualMenuBarMnemonicStrip() {
+    await wrapManual('menuBarMnemonicStrip', async () => {
+      const { Menu, Submenu, MenuItem } = await import('@tauri-apps/api/menu');
+      const single = await MenuItem.new({ text: '保存(&S)' });
+      const escaped = await MenuItem.new({ text: 'A&&B' });
+      const midText = await MenuItem.new({ text: 'Save &As' });
+      const sub = await Submenu.new({ text: '文件(&F)', items: [single, escaped, midText] });
+      const menu = await Menu.new({ items: [sub] });
+      await menu.setAsWindowMenu();
+      // Same labels through the popup path — both paths render through the
+      // same RenderMenuItems, so one look at each verifies the single
+      // stripping point.
+      const popupMenu = await Menu.new({ items: [sub] });
+      popupMenu.popup();
+      manualResult =
+        'Menu bar: "文件(&F)" set + popup with the same labels.\nCheck BOTH the menubar top label and the dropdown/popup items.\nExpected rendered labels (mnemonics stripped):\n  文件(F) / 保存(S) / A&B / Save As\nIf any label still shows a literal & (e.g. "文件(&F)" or "A&&B") → FAIL.\nClick "Restore Default Menu" to restore.';
       onMessage(manualResult);
     });
   }
@@ -2835,7 +2883,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
       let count = 0;
       let last = '(none)';
       const channelId = await watchPosition(
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 },
+        { enableHighAccuracy: false, timeout: 1000, maximumAge: 0 },
         (location, error) => {
           if (error) {
             last = `error: ${error}`;
@@ -2859,6 +2907,47 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
           : '⚠️ 未收到位置事件（设备未产生位置 fix）。注册/注销链路已验证；' +
             '事件流验证需设备能产生位置 fix（Wi-Fi/网络定位）');
       onMessage(`geolocation watch: ${count} events, last=${last}`);
+    });
+  }
+
+  async function manualGeolocationWatchMulti() {
+    await wrapManual('geolocationWatchMulti', async () => {
+      const { watchPosition, clearWatch } = await import('@tauri-apps/plugin-geolocation');
+      let n1 = 0, n2 = 0, last1 = '(none)', last2 = '(none)';
+      const id1 = await watchPosition(
+        { enableHighAccuracy: true, timeout: 1000, maximumAge: 0 },
+        (p, e) => { if (p) { n1 += 1; last1 = `lat=${p.coords.latitude}`; } else if (e) { last1 = `err:${e}`; } }
+      );
+      const id2 = await watchPosition(
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 },
+        (p, e) => { if (p) { n2 += 1; last2 = `lat=${p.coords.latitude}`; } else if (e) { last2 = `err:${e}`; } }
+      );
+      // Window 1 (30s): both counters live — G1 coexistence (n1>0 && n2>0)
+      for (let i = 0; i < 30; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        manualResult = `窗1 并存采集 (${i + 1}s/30s)\nwatch#1(id=${id1}): ${n1} 次, ${last1}\nwatch#2(id=${id2}): ${n2} 次, ${last2}`;
+      }
+      await clearWatch(id1);
+      // Window 2 (15s): G2 selective clear (n1 frozen, n2 continues)
+      const n2AtClear = n2;
+      for (let i = 0; i < 15; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        manualResult = `窗2 clearWatch(id1) 后 (${i + 1}s/15s)\nwatch#1: ${n1} 次（应冻结）\nwatch#2: ${n2} 次（应继续）`;
+      }
+      // G3 fake id is harmless: clearWatch(9999) must resolve and leave n2 untouched
+      await clearWatch(9999);
+      await clearWatch(id2);
+      // Window 3 (10s): G4 clear-all (both silent)
+      const n1Final = n1, n2Final = n2;
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        manualResult = `窗3 全清后 (${i + 1}s/10s)\nwatch#1: ${n1} 次（应=${n1Final}）\nwatch#2: ${n2} 次（应=${n2Final}）`;
+      }
+      const g1 = n1 > 0 && n2 > 0;
+      const g2 = n1 === n1Final && n2 > n2AtClear;
+      const g4 = n1 === n1Final && n2 === n2Final;
+      manualResult = `多路 watch 回归：\nG1 并存(两路都有事件): ${g1 ? '✅' : '❌'} (n1=${n1}, n2=${n2})\nG2 选择性清除(id1 冻结/id2 继续): ${g2 ? '✅' : '❌'}\nG3 伪造 id 9999 无害: ✅（已 resolve，n2=${n2}）\nG4 全清静默: ${g4 ? '✅' : '❌'}\n注意：若 n1>0 而 n2=0，判读为「多订阅成立但 DAILY_LIFE_SERVICE 慢场景未出 fix」而非 FAIL`;
+      onMessage(`geolocation watchMulti: n1=${n1}, n2=${n2}`);
     });
   }
 
@@ -3585,6 +3674,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       <button class="btn" onclick={manualAppCacheDir}>appCacheDir</button>
       <button class="btn" onclick={manualWindowDpi}>Window DPI (resize/drag to verify)</button>
       <button class="btn" onclick={manualOsInfo}>OS Info (platform/type/version)</button>
+      <button class="btn" onclick={manualOsLocaleLive}>OS Locale Live Refresh (issue #215)</button>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
       <h5 class="my-1 text-xs text-gray-500">Deep-Link</h5>
@@ -3793,6 +3883,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualMenuBarRemove}>MenuBar Remove Menu</button>
         <button class="btn" onclick={manualMenuBarAutoRefreshText}>MenuBar Auto Refresh Text</button>
         <button class="btn" onclick={manualMenuBarAutoRefreshChecked}>MenuBar Auto Refresh Checked</button>
+        <button class="btn" onclick={manualMenuBarMnemonicStrip}>MenuBar Mnemonic Strip (issue #205)</button>
         <button class="btn" onclick={manualMenuBarAccelerator}>MenuBar Accelerator Ctrl+O</button>
         <button class="btn" onclick={manualMenuBarAcceleratorCopy}>MenuBar Accelerator Ctrl+C</button>
         <button class="btn" onclick={manualMenuBarFullscreen}>MenuBar Fullscreen</button>
@@ -3915,6 +4006,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualGeolocationPermission}>请求权限 + 打开定位设置</button>
         <button class="btn" onclick={manualGeolocationCurrent}>Get Current Position</button>
         <button class="btn" onclick={manualGeolocationWatch}>Watch Position (emit)</button>
+        <button class="btn" onclick={manualGeolocationWatchMulti}>Watch x2 + interleaved clear</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
