@@ -2529,8 +2529,6 @@ pub fn devtools_close_only<R: tauri::Runtime>(
   Ok(())
 }
 /// Test set_bounds / bounds round-trip on the webview named by `label`.
-/// Verifies that set_bounds calls ArkTS setBounds without error and bounds()
-/// returns consistent values after the round-trip.
 ///
 /// The caller must pass a DEDICATED (explicit-bounds child) webview label, not
 /// the window-content webview: under the ohos-webview-sizing D2 semantics a
@@ -2539,30 +2537,167 @@ pub fn devtools_close_only<R: tauri::Runtime>(
 /// bounds-cache value (observed 200×200) and opt it out of container-following.
 /// Re-asserting an explicit-bounds child's own geometry is side-effect-free.
 ///
+/// The command is a discriminating probe, not a smoke test (issue
+/// Eulogizethesun/tauri#241):
+/// - `set_bounds` dispatches asynchronously on OHOS (runtime → wry → ArkTS
+///   render layer) and wry updates its bounds cache at DISPATCH time, so an
+///   immediate `bounds()` read-back would "match" regardless of whether the
+///   rect was ever applied. `set_ok` therefore awaits the RENDERED ack: the
+///   webview must run the viewport probe page, which reports its rendered
+///   viewport through the real invoke path on every resize; the command polls
+///   the tracker until a sample newer than the sends reports the requested
+///   size (±2px ArkWeb constant + DPI-rounding slack), else it errors.
+/// - Two back-to-back set_bounds calls with DISTINCT sizes exercise the
+///   last-wins contract: a dropped, merged, or never-applied final rect keeps
+///   the rendered viewport at the probe size and the ack never arrives.
+/// - After the ack, position()/size() are read back and asserted against the
+///   re-asserted rect (±2px) — the rendered ack proves the final message was
+///   applied, and that message carried all four components, so the read-back
+///   pins the position component of the APPLIED geometry too.
+///
 /// Desktop-only: `Webview::bounds`/`set_bounds` are in tauri's `#[cfg(desktop)]`
 /// impl block. On OHOS mobile the methods don't exist, so the command is not
-/// registered; the frontend test wraps the invoke in try/catch to skip silently.
+/// registered; the frontend test skips via skipOnMobile.
 #[cfg(desktop)]
 #[command]
-pub fn set_bounds_test<R: tauri::Runtime>(
+pub async fn set_bounds_test<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,
   label: String,
-) -> tauri::Result<serde_json::Value> {
+) -> Result<serde_json::Value, String> {
+  use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
   use tauri::Manager;
+  use tauri::{Position, Rect, Size};
+
+  /// Ack budget — the probe page reports on resize; 5s covers slow renders
+  /// while staying inside the 15s case timeout (creation wait + command).
+  const ACK_BUDGET: Duration = Duration::from_secs(5);
+  const POLL_INTERVAL: Duration = Duration::from_millis(100);
+  /// Rendered/read-back tolerance: the measured ArkWeb viewport constant
+  /// (+1px) plus DPI-rounding slack.
+  const TOLERANCE_PX: f64 = 2.0;
+
+  fn now_ms() -> u64 {
+    SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|d| d.as_millis() as u64)
+      .unwrap_or(0)
+  }
+
+  /// Physical px (x, y, w, h) of a rect under the given scale factor,
+  /// accepting either dpi variant (the bounds cache preserves whatever
+  /// variant was last sent).
+  fn physical_px(rect: &Rect, sf: f64) -> (f64, f64, f64, f64) {
+    let (x, y) = match rect.position {
+      Position::Physical(p) => (p.x as f64, p.y as f64),
+      Position::Logical(p) => (p.x * sf, p.y * sf),
+    };
+    let (w, h) = match rect.size {
+      Size::Physical(s) => (s.width as f64, s.height as f64),
+      Size::Logical(s) => (s.width * sf, s.height * sf),
+    };
+    (x, y, w, h)
+  }
+
+  async fn wait_rendered_ack(
+    app: &tauri::AppHandle<impl tauri::Runtime>,
+    label: &str,
+    viewport_w: f64,
+    viewport_h: f64,
+    since_ms: u64,
+  ) -> Result<(), String> {
+    use tauri::Manager;
+    let deadline = Instant::now() + ACK_BUDGET;
+    loop {
+      let tracker = app.state::<EventTracker>();
+      let hit = tracker
+        .viewport_probes
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|s| {
+          s.tag == label
+            && s.reported_at_ms >= since_ms
+            && (s.inner_width - viewport_w).abs() <= TOLERANCE_PX
+            && (s.inner_height - viewport_h).abs() <= TOLERANCE_PX
+        });
+      drop(tracker);
+      if hit {
+        return Ok(());
+      }
+      if Instant::now() >= deadline {
+        return Err(format!(
+          "set_bounds_test: no rendered ack from the probe page within 5s (expected viewport ~{viewport_w}x{viewport_h}, newer than {since_ms}) — the final set_bounds was never applied (or the webview does not run /webview-viewport-probe.html)"
+        ));
+      }
+      std::thread::sleep(POLL_INTERVAL);
+    }
+  }
+
   let webview = app
     .get_webview(&label)
-    .ok_or(tauri::Error::WebviewNotFound)?;
-  let original = webview.bounds()?;
-  // Round-trip: set_bounds with original → should not error
-  webview.set_bounds(original)?;
-  let after_set = webview.bounds()?;
-  let original_str = format!("{:?}", original);
-  let after_set_str = format!("{:?}", after_set);
+    .ok_or_else(|| format!("set_bounds_test: webview \"{label}\" not found"))?;
+  let original = webview
+    .bounds()
+    .map_err(|e| format!("set_bounds_test: bounds() failed before the round-trip: {e}"))?;
+  let sf = webview
+    .window()
+    .scale_factor()
+    .map_err(|e| format!("set_bounds_test: scale_factor failed: {e}"))?;
+  let (ox, oy, ow, oh) = physical_px(&original, sf);
+  // Expected rendered viewport (CSS px) of the re-asserted rect = logical size.
+  let (vw, vh) = (ow / sf, oh / sf);
+
+  // Back-to-back sends (last-wins): first a DISTINCT probe size (guarantees a
+  // resize event on the way there), then the original rect again. The final
+  // rendered state must be the original rect; a pipeline that drops, merges,
+  // or never applies the final call leaves the viewport at the probe size and
+  // the ack below never arrives.
+  let since_ms = now_ms();
+  let probe_rect = Rect {
+    position: original.position,
+    size: Size::Physical(tauri::PhysicalSize::new(
+      ((ow - 40.0).max(1.0)).round() as u32,
+      ((oh - 30.0).max(1.0)).round() as u32,
+    )),
+  };
+  webview
+    .set_bounds(probe_rect)
+    .map_err(|e| format!("set_bounds_test: set_bounds(probe rect) failed: {e}"))?;
+  webview
+    .set_bounds(original.clone())
+    .map_err(|e| format!("set_bounds_test: set_bounds(original) failed: {e}"))?;
+
+  wait_rendered_ack(&app, &label, vw, vh, since_ms).await?;
+
+  // Real read-back assertions against the re-asserted rect (±2px): the ack
+  // proves the final message was applied, and that message carried all four
+  // components, so the cache-backed getters pin the applied position too.
+  let pos = webview
+    .position()
+    .map_err(|e| format!("set_bounds_test: position() read-back failed: {e}"))?;
+  let size = webview
+    .size()
+    .map_err(|e| format!("set_bounds_test: size() read-back failed: {e}"))?;
+  let (px, py) = (pos.x as f64, pos.y as f64);
+  let (pw, ph) = (size.width as f64, size.height as f64);
+  let position_matches =
+    (px - ox).abs() <= TOLERANCE_PX && (py - oy).abs() <= TOLERANCE_PX;
+  let size_matches = (pw - ow).abs() <= TOLERANCE_PX && (ph - oh).abs() <= TOLERANCE_PX;
+  if !position_matches || !size_matches {
+    return Err(format!(
+      "set_bounds_test: read-back mismatch after the rendered ack — position ({px},{py}) vs expected ({ox},{oy}), size {pw}x{ph} vs expected {ow}x{oh} (tolerance {TOLERANCE_PX}px)"
+    ));
+  }
+
   Ok(serde_json::json!({
     "set_ok": true,
-    "original": original_str,
-    "after_set": after_set_str,
-    "matches": original_str == after_set_str,
+    "matches": position_matches && size_matches,
+    "ack": "rendered",
+    "original": format!("{original:?}"),
+    "readback": {
+      "x": px, "y": py, "width": pw, "height": ph,
+      "scaleFactor": sf,
+    },
   }))
 }
 
