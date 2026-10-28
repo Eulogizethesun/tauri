@@ -41,6 +41,8 @@
 | Tray 仅在 desktop 模式可用 | mobile 设备无 tray 功能 |
 | Tray `rect()` 始终返回 None | StatusBar API 不提供图标位置/尺寸。`AvoidArea.topRect` 返回整个状态栏区域, 不是单个图标 |
 | Tray 事件数据有限 | 只有 `iconClickType` ("leftClick"/"rightClick") 和 `menuCode`。无坐标、无双击、无 hover、无中键 |
+| Tray 菜单项无法禁用 | StatusBar API 的 `StatusBarMenuItem` 无 enabled 字段，禁用标志被忽略、禁用项仍可点仍触发命令（tray-icon 侧每进程 warn 一次）。menubar/弹窗菜单路径不受限 |
+| Tray 右键菜单子菜单封顶一层 | StatusBar API 的 `StatusBarSubMenuItem` 无嵌套字段（`@hms.pcService.statusBarManager.d.ts`），二层以上子菜单子项被丢弃（tray-icon 侧有一次 warn 提示）、嵌套标题降级为可点叶子项。muda menubar 路径（`MenuBarComponent` 递归渲染）多层不受限 |
 
 ### 1.5 tao OHOS 层 ExternalError 错误转换限制
 
