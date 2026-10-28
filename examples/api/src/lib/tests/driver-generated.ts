@@ -2,7 +2,7 @@
 // 生成器: jobs/97f58082/tmp/gen-driver.py；候选清单与安全标注: s1-cov/driver-candidates.md
 // 用例语义: 盲调用（执行即覆盖）——错误被吞掉但错误分支被点亮；
 //           命令/插件不存在 → skip；其余任何结果（含业务错误）→ pass。
-import type { TestCase } from '../test-runner';
+import { skip, type TestCase } from '../test-runner';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, Window, getAllWindows, monitorFromPoint } from '@tauri-apps/api/window';
 import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
@@ -20,6 +20,10 @@ async function blind(fn: () => Promise<unknown>): Promise<void> {
     await fn();
   } catch (e) {
     const m = String((e as Error)?.message ?? e);
+    // Explicit skip intent must never be swallowed by the blind coverage
+    // wrapper: relay it so runTests sees the `skip:` prefix (status 'skip')
+    // instead of recording a false pass below.
+    if (m.startsWith('skip:')) throw e;
     if (NOT_IMPLEMENTED.test(m)) throw new Error('skip: ' + m);
     // 其他错误也是覆盖（错误分支被点亮）——按通过计
   }
@@ -713,6 +717,31 @@ export const driverTests: TestCase[] = [
   }),
 ];
 
+// --- Unattended-build gate for modal-waiting side replays --------------------
+//
+// requestPermissions() blocks on the system permission dialog and message()
+// blocks on a modal message dialog: both settle only after USER interaction
+// and hang forever in an unattended run (blind() guards rejections, not a
+// promise that never settles, so the runner's withTimeout burns its budget).
+// Device evidence 2026-10-28: on the coverage build (VITE_COVERAGE_TESTS=true)
+// these two cases failed deterministically 2/2 across two rounds (report
+// lines 548 and 553) while the other 13 side replays that ran settled
+// unattended (581 ok, only these two red). Suite hygiene, not a platform
+// defect. Unattended means either suite flag is set -- VITE_AUTOTEST (std
+// autotest build) or VITE_COVERAGE_TESTS (coverage build) -- the same
+// predicate as TestRunner.svelte isAutotest/coverageTests. On those builds
+// the cases skip instead of reporting a platform-inherent failure
+// (precedent 6232bcd24 P3-3 iframe gate); interactive demo builds (neither
+// flag set) keep both cases manually clickable.
+function skipModalWaitOnUnattendedBuild(what: string): void {
+  const unattended =
+    ['true', '1'].includes(String(import.meta.env.VITE_AUTOTEST)) ||
+    ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS));
+  if (unattended) {
+    skip(`waits for user interaction (${what}) which never settles in an unattended run`);
+  }
+}
+
 // ══════ SIDE: side-effect 复放（无断言，放套件末尾） ══════
 export const sideReplayTests: TestCase[] = [
   sideCase('side.win.setEffects.acrylic', async () => {
@@ -749,6 +778,7 @@ export const sideReplayTests: TestCase[] = [
     const g = await import('@tauri-apps/plugin-geolocation'); const un = await g.watchPosition(() => {}, () => {}); await delay(1500); un();
   }),
   sideCase('side.geolocation.requestPermissions', async () => {
+    skipModalWaitOnUnattendedBuild('geolocation permission dialog');
     const { requestPermissions } = await import('@tauri-apps/plugin-geolocation'); await requestPermissions();
   }),
   sideCase('side.clipboard.writeImage.tiny', async () => {
@@ -764,6 +794,7 @@ export const sideReplayTests: TestCase[] = [
     const { check } = await import('@tauri-apps/plugin-updater'); const u = await check(); if (u) { await u.downloadAndInstall(); }
   }),
   sideCase('side.dialog.message.last', async () => {
+    skipModalWaitOnUnattendedBuild('modal message dialog');
     const { message } = await import('@tauri-apps/plugin-dialog'); await message('driver side-effect replay done');
   }),
 ];
