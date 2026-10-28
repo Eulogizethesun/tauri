@@ -1880,6 +1880,15 @@ export const coreTests: TestCase[] = [
         // an unspecified position component, so AFTER it the cache-backed
         // position() legitimately reads back as the sentinel, not (60,70).
         await new Promise((resolve) => setTimeout(resolve, 300));
+        // KNOWN COUPLING (issue Eulogizethesun/tauri#241): this expectation
+        // mixes two independent device-ratio sources. The wire side converts
+        // the logical bounds to ArkUI vp with wry's OHOS vp
+        // (default_display_virtual_pixel_ratio); the expected physical
+        // read-back here multiplies the logical input by Window.scaleFactor()
+        // (tao app.scale() = default_display_scaled_density). Both read 1.9
+        // on the reference device, but they are different NativeDisplayManager
+        // C APIs - on a device where the two ratios diverge this +/-2px
+        // assert can spuriously fail. Disclosed only: no tolerance change.
         const sfB = await getCurrentWindow().scaleFactor();
         const posB = await child.position();
         assert(
