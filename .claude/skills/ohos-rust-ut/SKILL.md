@@ -107,15 +107,20 @@ stdout 即标准 libtest 报告
 `PathResolver` 依赖 `AppHandle`，不好直接 mock。做法是把逻辑抽成独立函数，测试函数而不是方法：
 
 ```rust
-// ohos.rs
-fn compute_resource_dir(module_name: Option<&str>) -> PathBuf {
-    let module = module_name.unwrap_or("entry");
-    PathBuf::from("/data/storage/el1/base").join(module).join("assets")
+// ohos.rs — the HAP module name comes from the ability init context
+// (currentHapModuleInfo.name, injected as hap_module_name) and is stored
+// separately from MODULE_NAME, which carries the .so library name.
+fn compute_resource_dir(hap_module_name: Option<&str>) -> Result<PathBuf> {
+    let module = hap_module_name.ok_or(Error::UnknownPath)?;
+    Ok(PathBuf::from("/data/storage/el1/bundle")
+        .join(module)
+        .join("resources")
+        .join("resfile"))
 }
 
 pub fn resource_dir(&self) -> Result<PathBuf> {
-    let module_name = crate::ohos::MODULE_NAME.get().and_then(|m| m.as_deref());
-    Ok(compute_resource_dir(module_name))
+    let hap = crate::ohos::HAP_MODULE_NAME.get().and_then(|m| m.as_deref());
+    compute_resource_dir(hap)
 }
 
 #[cfg(test)]
@@ -123,10 +128,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resource_dir_defaults_to_entry() {
+    fn resource_dir_errors_when_hap_module_missing() {
+        assert!(compute_resource_dir(None).is_err());
+    }
+
+    #[test]
+    fn resource_dir_points_at_the_extracted_resfile() {
         assert_eq!(
-            compute_resource_dir(None),
-            PathBuf::from("/data/storage/el1/base/entry/assets")
+            compute_resource_dir(Some("entry_desktop")).unwrap(),
+            PathBuf::from("/data/storage/el1/bundle/entry_desktop/resources/resfile")
         );
     }
 }
