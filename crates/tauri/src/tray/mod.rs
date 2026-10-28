@@ -517,6 +517,25 @@ impl<R: Runtime> Clone for TrayIcon<R> {
 unsafe impl<R: Runtime> Sync for TrayIcon<R> {}
 unsafe impl<R: Runtime> Send for TrayIcon<R> {}
 
+// The OHOS status-bar click behavior is system-fixed (right click always
+// opens the registered menu, left click opens the QuickOperation popup), so
+// the JS-facing click setters are no-ops there. tray-icon warns once for its
+// own Rust surface; this crate keeps a separate once-flag because the static
+// cannot be shared across crates.
+#[cfg(target_env = "ohos")]
+static WARNED_MENU_CLICK_CONFIG: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_env = "ohos")]
+fn warn_menu_click_config_once() {
+  use std::sync::atomic::Ordering;
+  if !WARNED_MENU_CLICK_CONFIG.swap(true, Ordering::Relaxed) {
+    log::warn!(
+      "[TrayIcon] set_show_menu_on_left_click is a no-op on OHOS — status-bar click behavior is system-controlled; see set_quick_operation"
+    );
+  }
+}
+
 impl<R: Runtime> TrayIcon<R> {
   fn register(
     &self,
@@ -694,6 +713,10 @@ impl<R: Runtime> TrayIcon<R> {
     run_item_main_thread!(self, |self_: Self| {
       self_.inner.set_show_menu_on_left_click(enable)
     })?;
+    #[cfg(target_env = "ohos")]
+    {
+      warn_menu_click_config_once();
+    }
     Ok(())
   }
 
