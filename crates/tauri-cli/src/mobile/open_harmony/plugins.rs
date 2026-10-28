@@ -932,6 +932,7 @@ const BRIDGE_PLUGIN_FACTORIES: &[(&str, &str)] = &[
   ("WindowPlugin", "WindowPlugin"),
   ("WebviewPlugin", "WebviewPlugin"),
   ("UrlPlugin", "UrlPlugin"),
+  ("WebviewUrlPlugin", "WebviewUrlPlugin"),
   ("ClipboardPlugin", "ClipboardPlugin"),
   (
     "GlobalShortcutPlugin as GlobalShortcutBridgePlugin",
