@@ -33,22 +33,35 @@
   }
 
   function unregisterCallback(id) {
-    callbacks.delete(id)
+    // A miss in the TOP frame may still be a child frame's callback: iframe
+    // invoke/listen handlers register in the frame that created them, while
+    // the matching unlisten runs against the main document. Forward the
+    // unregister down the relay so the child frame reclaims its `callbacks`
+    // entry too (issue Eulogizethesun/tauri#241). Deliberately silent — an
+    // unknown id is a legitimate no-op here (e.g. a double unlisten), unlike
+    // a missed response.
+    if (!callbacks.delete(id) && relayEnabled && isTopFrame && window.frames.length > 0) {
+      relayUnlistenToChildFrames(id)
+    }
   }
 
   function runCallback(id, data) {
     const callback = callbacks.get(id)
     if (callback) {
       callback(data)
+    } else if (relayEnabled && isTopFrame && window.frames.length > 0) {
+      // No local hit, but child frames exist: the id belongs to a callback
+      // registered inside a child frame (iframe invoke/listen handlers live
+      // in the frame that created them, while responses replay in the MAIN
+      // document). Forward first and stay quiet — a healthy iframe response
+      // missing the top-frame table is the normal path, not an error. The
+      // warning below is reserved for ids nothing could claim (e.g. the app
+      // reloaded while Rust was running an asynchronous operation).
+      relayToChildFrames(id, data)
     } else {
       console.warn(
         `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
       )
-      if (relayEnabled && isTopFrame) {
-        // The id belongs to a callback registered inside a child frame —
-        // relay the response down to the direct child frames.
-        relayToChildFrames(id, data)
-      }
     }
   }
 
@@ -62,7 +75,11 @@
   // registered inside an iframe would never receive their response. When the
   // top frame misses the callback id it relays `{ id, data }` to its direct
   // child frames; each child frame replays it against its own local `Map` and
-  // relays further down when nesting deeper. Delivery stays same-origin:
+  // relays further down when nesting deeper. The relay carries the reverse
+  // direction too (`__TAURI_FRAME_UNLISTEN__`): an unregister for a callback
+  // that lives in a child frame is forwarded down so the iframe's `callbacks`
+  // entry is reclaimed instead of leaking (issue Eulogizethesun/tauri#241).
+  // Delivery stays same-origin:
   // `postMessage` drops the message when the target origin does not match, so
   // cross-origin frames keep the pre-relay behavior (no delivery, no data
   // leak). Android shares the upstream defect but stays untouched here —
@@ -70,8 +87,7 @@
   const relayEnabled = osName === 'ohos'
   const isTopFrame = window.top === window
 
-  function relayToChildFrames(id, data) {
-    const message = { __TAURI_FRAME_CALLBACK__: true, id: id, data: data }
+  function postToChildFrames(message) {
     // A frame may already be detached by the app; give each `postMessage` its
     // own `try` so one dead frame cannot abort the broadcast to the others.
     for (let i = 0; i < window.frames.length; i++) {
@@ -81,6 +97,17 @@
         // frame is gone — keep relaying to the remaining ones
       }
     }
+  }
+
+  function relayToChildFrames(id, data) {
+    postToChildFrames({ __TAURI_FRAME_CALLBACK__: true, id: id, data: data })
+  }
+
+  // Unregister side of the relay (issue Eulogizethesun/tauri#241): reclaims
+  // the child frame's `callbacks` entry for callbacks whose unregister ran in
+  // the top frame (iframe event listeners register their handler there).
+  function relayUnlistenToChildFrames(id) {
+    postToChildFrames({ __TAURI_FRAME_UNLISTEN__: true, id: id })
   }
 
   if (relayEnabled && !isTopFrame) {
@@ -99,18 +126,26 @@
         return
       }
       const data = event.data
-      if (!data || data.__TAURI_FRAME_CALLBACK__ !== true) {
+      if (!data) {
         return
       }
-      const callback = callbacks.get(data.id)
-      if (callback) {
-        callback(data.data)
-      } else if (window.frames.length > 0) {
-        relayToChildFrames(data.id, data.data)
-      } else {
-        console.warn(
-          `[TAURI] Couldn't find callback id ${data.id} forwarded from the parent frame. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
-        )
+      if (data.__TAURI_FRAME_CALLBACK__ === true) {
+        const callback = callbacks.get(data.id)
+        if (callback) {
+          callback(data.data)
+        } else if (window.frames.length > 0) {
+          relayToChildFrames(data.id, data.data)
+        } else {
+          console.warn(
+            `[TAURI] Couldn't find callback id ${data.id} forwarded from the parent frame. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
+          )
+        }
+      } else if (data.__TAURI_FRAME_UNLISTEN__ === true) {
+        // Callback ids are unique: once this frame claims (and deletes) the
+        // entry the unregister stops, otherwise it cascades to nested frames.
+        if (!callbacks.delete(data.id) && window.frames.length > 0) {
+          relayUnlistenToChildFrames(data.id)
+        }
       }
     })
   }

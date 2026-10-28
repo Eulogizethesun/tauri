@@ -75,6 +75,14 @@ enum TauriEvent {
 /**
  * Unregister the event listener associated with the given name and id.
  *
+ * The JS-side cleanup runs in the CALLING frame, but the listener registration
+ * lives in the MAIN document (webview evals are not frame-targeted), so for a
+ * listener registered from inside an iframe this call alone cannot reach it —
+ * the backend `plugin:event|unlisten` command evaluates the unlisten script in
+ * the main frame and forwards a miss down the frame relay, reclaiming both the
+ * main-frame table entry and the child frame's handler callback (issue
+ * Eulogizethesun/tauri#241).
+ *
  * @ignore
  * @param event The event name
  * @param eventId Event identifier
