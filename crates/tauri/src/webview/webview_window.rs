@@ -1471,7 +1471,9 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///   living inside this application's window tree (not the OS-wide floating
   ///   window type `WindowType.TYPE_FLOAT`).
   ///
-  /// Default is `UIAbility` when not specified. Use `SubWindow` for sub-windows.
+  /// Default when not specified: the first window of the process is
+  /// `UIAbility`, any later window is `SubWindow`. Use `SubWindow` for
+  /// sub-windows.
   pub fn ohos_window_kind(mut self, kind: crate::ohos::OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
