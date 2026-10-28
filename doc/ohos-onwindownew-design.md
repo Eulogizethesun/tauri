@@ -871,13 +871,15 @@ async function testWindowOpenAllowed(): Promise<TestResult> {
 
 ### 11.1 核心决策：Allow→Create 折叠
 
+> 勘误（2026-10-29，Round-14 F3）：原 `OHOSWindowKind::Float` 命名已于 ec1a47233（#240）全仓更名为 `OHOSWindowKind::SubWindow`，且语义收窄为「应用子窗口」（经 `windowStage.createSubWindow`，非 OS 级全局悬浮窗 `WindowType.TYPE_FLOAT`）——本节及 §11.8 表格的行内代码已按现名勘正；本文其余「Float OS 窗口 / Float 窗口」等字样为改名前历史记叙，按现名阅读。
+
 `on_new_window` 闭包的 OHOS 分支把 **Allow 折叠为 Create**：除非显式 Deny，
-否则每次 `window.open()` 都构建一个真实的 `WebviewWindow`（`OHOSWindowKind::Float`
-OS 子窗口）并加载 target URL——而非 §四所述的在主 webview 上叠 dialog。
+否则每次 `window.open()` 都构建一个真实的 `WebviewWindow`（`OHOSWindowKind::SubWindow`
+应用子窗口）并加载 target URL——而非 §四所述的在主 webview 上叠 dialog。
 
 - **文件**: `examples/api/src-tauri/src/lib.rs`（`on_new_window` OHOS cfg 分支）
 - **行为**: `WebviewWindowBuilder::new(&app, "new-{n}", WebviewUrl::External(url))`
-  `.inner_size(900,700).position(120,90).ohos_window_kind(Float).build()`
+  `.inner_size(900,700).position(120,90).ohos_window_kind(SubWindow).build()`
   → 成功返回 `NewWindowResponse::Create { window }`，失败回退 `Allow`。
 - **`set_create_new_window` 标志已移除**：Create 现在是默认行为，不再需要前置开关。
 
@@ -953,7 +955,7 @@ create_req，由 `client.create(create_req)` 异步加载到 Float 窗口的 web
 
 | 行为 | OHOS（Phase 2 实现） |
 |------|------|
-| `Allow` | 折叠为 Create→建 Float OS 子窗口加载 target URL |
-| `Create` | **支持** — `WebviewWindowBuilder` + `OHOSWindowKind::Float` |
+| `Allow` | 折叠为 Create→建 SubWindow 应用子窗口加载 target URL |
+| `Create` | **支持** — `WebviewWindowBuilder` + `OHOSWindowKind::SubWindow` |
 | `Deny` | `setWebController(null)` |
 | `NewWindowFeatures.size/position` | builder 的 `.inner_size()/.position()` 经 tao 转 physical 生效 |

@@ -1460,7 +1460,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
 impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: UIAbility main window. The first one (windowId=0) reuses the
+  /// - `UIAbility`: a window backed by its own UIAbility instance. The first one (windowId=0) reuses the
   ///   existing container; subsequent ones start a new EntryAbility instance via
   ///   `context.startAbility` (requires `launchType: "specified"` + AbilityStage
   ///   `onAcceptWant` routing (tauri-window-N keys) in module.json5: the spawn
