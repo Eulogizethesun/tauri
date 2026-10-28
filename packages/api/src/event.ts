@@ -79,9 +79,15 @@ enum TauriEvent {
  * lives in the MAIN document (webview evals are not frame-targeted), so for a
  * listener registered from inside an iframe this call alone cannot reach it —
  * the backend `plugin:event|unlisten` command evaluates the unlisten script in
- * the main frame and forwards a miss down the frame relay, reclaiming both the
- * main-frame table entry and the child frame's handler callback (issue
- * Eulogizethesun/tauri#241).
+ * the main frame and reclaims the main-frame table entry. The child frame's
+ * handler callback is only reclaimed on OHOS, where the backend's callback-id
+ * miss is forwarded down the frame relay (`relayEnabled = osName === 'ohos'`
+ * in scripts/core.js) and each child frame drops its own `callbacks` entry.
+ * On other platforms (e.g. Windows) the relay is disabled, so the main-frame
+ * table entry is reclaimed but the child frame's handler callback stays
+ * registered until the frame itself is torn down (known limitation, issue
+ * Eulogizethesun/tauri#241; Android shares the upstream defect and extending
+ * the relay activation list is left for an upstream PR).
  *
  * @ignore
  * @param event The event name
