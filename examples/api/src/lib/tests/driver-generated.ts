@@ -36,6 +36,29 @@
 //               at it without listing it)
 //   8439603f0 - count-free header reword + TestRunner.svelte resizable
 //               dual-leg wording sync
+//   16c39c178 - the -S/-p resolution protocol paragraph above (BEST-EFFORT
+//               list, `git log -p -- <this file>` the authoritative
+//               resolver, -S a count-change hint only) and the float.hide
+//               skipOnMobile rationale corrected to coverage-only assembly
+//               (the gate IS live there: the coverage build also runs on
+//               OHOS mobile forms where create_borderless_window fails
+//               deterministically); also added the then-missing
+//               80d07cf00/8439603f0 entries and rewrote the float.hide
+//               still-visible failure text (that hunk, and the rationale's
+//               closing parenthetical, superseded by 585bbe8db below)
+//   585bbe8db - float.hide's still-visible failure text re-derived on-site:
+//               both success paths silent end to end, the two partial
+//               signals named truthfully (the debug bridge call_raw
+//               issuance marker; the Rust dispatch-failure warn that CAN
+//               coexist with the message) and the two instrumentation
+//               points (the enumeration was written as two signals; the
+//               next hand-edit extends it with a third, deferred-queue
+//               one); the deleted dead-pair rationale restated as outcome
+//               equivalence (not "never even evaluated"); header: the
+//               a71c948df entry added, 23857d325's anchor re-described and
+//               the intro scoped to live anchors - its own entry,
+//               header-touching, completed here by the next hand-edit per
+//               protocol
 // 用例语义: 盲调用（执行即覆盖）——错误被吞掉但错误分支被点亮；
 //           命令/插件不存在 → skip；其余任何结果（含业务错误）→ pass。
 import { skip, skipOnMobile, type TestCase } from '../test-runner';
@@ -650,7 +673,7 @@ export const driverTests: TestCase[] = [
           visible = await w.isVisible();
         }
         if (visible) {
-          throw new Error(`float.hide: sub-window "${label}" still isVisible()=${visible} ${HIDE_ACK_BUDGET_MS}ms after hide() resolved - the visibility mirror never read false, which has two indistinguishable causes: (1) set_visible(false) never ran (a gate leak), or (2) it ran but a windowStatusChange event (Floating/Maximize/FullScreen/SplitScreen) re-backfilled visible=true via tao's apply_window_status within the poll window. Today's logs only PARTIALLY tell them apart, because both success paths are silent end to end: the hide dispatch logs nothing on success, the whole backfill leg (the windowStatusChange callback forwards, the notifyWindowStatus NAPI queueing, tao's event-loop drain arm and apply_window_status) logs nothing on the forward itself, and the window plugin's windowCommand "minimize" arm carries no hilog. What the chain DOES emit are two partial signals: (a) a debug-level bridge issuance marker ([bridge] call_raw: ohos.window/minimize) that records only that a dispatch was issued - present in a capture that covers the case it excludes the gate leak (1), but it is capture-dependent and says nothing about the outcome; (b) the Rust-side failure warn ([tao-ohos] minimize_window (sub-window hide) failed), the only dispatch-outcome log - a FAILED dispatch warns, but the eager mirror write has already set visible=false by then, and a later windowStatusChange backfill can still re-set it true regardless of the dispatch outcome, so that warn CAN coexist with this message (warn present = the dispatch was attempted and failed, a third shape distinct from a pure gate leak). With neither signal in the capture, the two causes above stay indistinguishable, so reliable discrimination needs instrumentation added FIRST: a hilog in the window plugin's windowCommand "minimize" arm, or at the windowStatusChange callback's notifyWindowStatus forward - with one of those in place the two sides' logs become discriminating (issue Eulogizethesun/tauri#241)`);
+          throw new Error(`float.hide: sub-window "${label}" still isVisible()=${visible} ${HIDE_ACK_BUDGET_MS}ms after hide() resolved - the visibility mirror never read false, which has two indistinguishable causes: (1) set_visible(false) never ran (a gate leak), or (2) it ran but a windowStatusChange event (Floating/Maximize/FullScreen/SplitScreen) re-backfilled visible=true via tao's apply_window_status within the poll window. Today's logs only PARTIALLY tell them apart, because both success paths stay silent on the outcome: the hide dispatch logs nothing on success (an inline dispatch logs nothing at all; a queued dispatch emits only the lifecycle logs in (c) below), the whole backfill leg (the windowStatusChange callback forwards, the notifyWindowStatus NAPI queueing, tao's event-loop drain arm and apply_window_status) logs nothing on the forward itself, and the window plugin's windowCommand "minimize" arm carries no hilog. What the chain DOES emit are three partial signals: (a) a debug-level bridge issuance marker ([bridge] call_raw: ohos.window/minimize) that records only that a dispatch was issued - when present in a capture that covers the case, it excludes the gate leak (1) - but it is capture-dependent and says nothing about the outcome; (b) the Rust-side failure warn ([tao-ohos] minimize_window (sub-window hide) failed), the only dispatch-outcome log - a FAILED dispatch warns, but the eager mirror write has already set visible=false by then, and a later windowStatusChange backfill can still re-set it true regardless of the dispatch outcome, so that warn CAN coexist with this message (warn present = the dispatch was attempted and failed, a third shape distinct from a pure gate leak); (c) the deferred-queue leg: set_visible(false) does not always dispatch inline - tao's spawn_or_queue_deferred queues the op while the window's creation handshake is still pending and warns "[tao-ohos] window {} not ready (creation handshake pending): {} window op(s) queued" (the first queue for that window id only), then once the handshake registers it logs the replay info "[tao-ohos] replaying {} queued window op(s) for window {} (creation handshake registered)" immediately before executing the queued op - that replay info is INFO level (hilog shows it by default) and proves the dispatch ran, so a capture containing it excludes the gate leak (1) and this variant is discriminable from a current capture with no new instrumentation (this case can reach it: create_borderless_window, a 600ms delay, then hide() - on a slow device the handshake can still be pending at hide() time; the queue warn alone only proves the op was queued, not yet that it ran). With none of the three signals in the capture, the dispatch ran inline on an already-ready window, and in that direct-dispatch variant the two causes above stay indistinguishable, so reliable discrimination needs instrumentation added FIRST: a hilog in the window plugin's windowCommand "minimize" arm, or at the windowStatusChange callback's notifyWindowStatus forward - with one of those in place the two sides' logs become discriminating (issue Eulogizethesun/tauri#241)`);
         }
         await w.show();
         await delay(300);
