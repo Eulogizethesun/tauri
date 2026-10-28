@@ -549,15 +549,54 @@ export const driverTests: TestCase[] = [
   driverCase('float.destroy', async () => {
     const label = uniq('fltd'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { await w.destroy(); }
   }),
-  driverCase('float.hide+show+center', async () => {
-    // #237/#241 (T28-4 kind-split): hide on a FLOAT SUB-WINDOW is supported —
-    // it dispatches to tao set_visible (sub-window branch: minimize_window +
-    // showWindow mirror), so hide() must RESOLVE here. A rejection means the
-    // main-window gate leaked onto sub-windows (the pre-fix blanket Err); the
-    // catch re-throws with that diagnosis so the case FAILS, never silently
-    // passes. show() then restores the window and center() re-centers it.
-    const label = uniq('flth'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { try { await w.hide(); } catch (e) { throw new Error(`float.hide: hide() on the sub-window rejected — the main-window gate leaked onto sub-windows: ${String((e as Error)?.message ?? e)}`); } await delay(300); await w.show(); await delay(300); await w.center(); } if (w) { await w.destroy(); }
-  }),
+  // float.hide+show+center is an ASSERTION case, not a blind coverage probe:
+  // blind() swallows every non-"skip:" error, which would turn the #241
+  // visibility assert below into dead code. It is therefore a plain TestCase
+  // whose failures reach the runner and FAIL, with an explicit timeout (the
+  // hide-ack poll adds up to 2s on top of the creation/settle delays).
+  {
+    name: 'driver: float.hide+show+center',
+    category: 'driver',
+    timeout: 8000,
+    fn: async () => {
+      // #237/#241 (T28-4 kind-split): hide on a FLOAT SUB-WINDOW is supported
+      // - it dispatches to tao set_visible (sub-window branch: minimize_window
+      // + showWindow mirror), so hide() must RESOLVE here. A rejection means
+      // the main-window gate leaked onto sub-windows (the pre-fix blanket
+      // Err) and fails the case with that diagnosis. Resolving is necessary
+      // but not sufficient (#241 F5): the hide must actually be APPLIED, so
+      // isVisible() is polled to false with a race-tolerance window (ArkTS
+      // dispatches asynchronously; same deadline-poll shape as the
+      // viewport-probe polls in core.ts). show() restores, center() recenters.
+      const label = uniq('flth');
+      await invoke('create_borderless_window', { windowId: label });
+      await delay(600);
+      const w = await Window.getByLabel(label);
+      if (w) {
+        try {
+          await w.hide();
+        } catch (e) {
+          throw new Error(`float.hide: hide() on the sub-window rejected - the main-window gate leaked onto sub-windows: ${String((e as Error)?.message ?? e)}`);
+        }
+        const HIDE_ACK_BUDGET_MS = 2000;
+        let visible = await w.isVisible();
+        const deadline = Date.now() + HIDE_ACK_BUDGET_MS;
+        while (visible && Date.now() < deadline) {
+          await delay(100);
+          visible = await w.isVisible();
+        }
+        if (visible) {
+          throw new Error(`float.hide: sub-window "${label}" still isVisible()=${visible} ${HIDE_ACK_BUDGET_MS}ms after hide() resolved - the hide was never applied (issue Eulogizethesun/tauri#241)`);
+        }
+        await w.show();
+        await delay(300);
+        await w.center();
+      }
+      if (w) {
+        await w.destroy();
+      }
+    }
+  },
   driverCase('float.setFocus+alwaysOnTop', async () => {
     const label = uniq('fltf'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { await w.setAlwaysOnTop(true); await delay(200); await w.setAlwaysOnTop(false); await w.setFocus(); } if (w) { await w.destroy(); }
   }),
