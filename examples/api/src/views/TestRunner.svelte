@@ -1407,7 +1407,7 @@ Expected behavior:
   // the tao kind-split set_visible path). The button asserts the rejection and
   // that the window stays visible, then exercises the supported equivalent
   // (minimize → restore) so the operator still sees real window motion.
-  // The rejection contract is OHOS-ONLY: on other desktop platforms
+  // The rejection contract is OHOS-ONLY: on non-OHOS platforms
   // win.hide() on the main window legitimately resolves, so the assert below
   // is platform-gated (same plugin-os detection as manualOsInfo) — unguarded
   // it reported a bogus "hide gate regressed" on the Windows baseline.
@@ -1418,15 +1418,30 @@ Expected behavior:
       if (!isOhos) {
         // Non-OHOS: hide()/show() is a supported round-trip — prove it
         // instead of asserting a rejection that only exists on OHOS.
+        // Visibility is asserted via deadline-poll (2s budget, same shape as
+        // the OHOS-side driver float.hide ack poll): hide()/show() resolving
+        // does not guarantee isVisible() has flipped on the same tick on
+        // every platform, and the previous same-tick assert made this arm
+        // stricter than the OHOS arm (cross-platform asymmetry, tauri-F5).
+        const VISIBILITY_ACK_BUDGET_MS = 2000;
+        const pollVisible = async (expected) => {
+          const deadline = Date.now() + VISIBILITY_ACK_BUDGET_MS;
+          let v = await win.isVisible();
+          while (v !== expected && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            v = await win.isVisible();
+          }
+          return v;
+        };
         await win.hide();
-        const hidden = await win.isVisible();
+        const hidden = await pollVisible(false);
         if (hidden) {
-          throw new Error(`non-OHOS: main window still visible (isVisible=${hidden}) after hide() resolved`);
+          throw new Error(`non-OHOS: main window still visible (isVisible=${hidden}) ${VISIBILITY_ACK_BUDGET_MS}ms after hide() resolved`);
         }
         await win.show();
-        const shown = await win.isVisible();
+        const shown = await pollVisible(true);
         if (!shown) {
-          throw new Error(`non-OHOS: main window not visible (isVisible=${shown}) after show()`);
+          throw new Error(`non-OHOS: main window not visible (isVisible=${shown}) ${VISIBILITY_ACK_BUDGET_MS}ms after show() resolved`);
         }
         ohosWinState = `hide → isVisible=${hidden}; show → isVisible=${shown}`;
         manualResult = `hide()/show() round-trip on the main window (non-OHOS: no reject contract; #241 TR-2 is OHOS-only)。\nhide → isVisible=${hidden}, show → isVisible=${shown}。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。`;
