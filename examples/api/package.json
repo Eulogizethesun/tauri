@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node ../../packages/api/scripts/build-if-stale.mjs && vite",
+    "build": "node ../../packages/api/scripts/build-if-stale.mjs && vite build",
     "preview": "vite preview",
     "tauri": "node ../../packages/cli/tauri.js"
   },
