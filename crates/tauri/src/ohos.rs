@@ -20,6 +20,11 @@ pub static BASE_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 pub static MODULE_NAME: OnceLock<Option<String>> = OnceLock::new();
 
+/// HAP module name from the ability init context (`currentHapModuleInfo.name`,
+/// e.g. `entry_desktop`). Distinct from [`MODULE_NAME`], which carries the
+/// `.so` library name (e.g. `api_lib`).
+pub static HAP_MODULE_NAME: OnceLock<Option<String>> = OnceLock::new();
+
 pub static PLUGIN_MANAGER: Mutex<Option<napi_ohos::bindgen_prelude::ObjectRef>> = Mutex::new(None);
 
 pub struct PluginRegistration {
@@ -60,6 +65,7 @@ pub fn init() -> openharmony_ability::OpenHarmonyApp {
     .expect("OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build");
   BASE_PATH.set(ohos_app.base_path()).ok();
   MODULE_NAME.set(ohos_app.module_name()).ok();
+  HAP_MODULE_NAME.set(ohos_app.hap_module_name()).ok();
   #[cfg(feature = "tray-icon")]
   {
     tray_icon::set_ohos_app(ohos_app.clone());

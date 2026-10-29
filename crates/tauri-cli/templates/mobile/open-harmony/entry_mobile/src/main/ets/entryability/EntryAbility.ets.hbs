@@ -179,28 +179,39 @@ export default class EntryAbility extends NativeAbility {
     await super.onWindowStageCreate(windowStage);
     console.info('[Tauri] ===== super.onWindowStageCreate done =====');
 
-    // Set window background AFTER super.onWindowStageCreate to avoid being overwritten
-    // by loadContentByName. OHOS default window background is black.
+    // Set window background AFTER super.onWindowStageCreate to avoid being
+    // overwritten by loadContentByName, and ONLY when tauri.conf's first
+    // `app.windows` background_color is explicitly configured (issue
+    // #224/C96) — setWindowBackgroundColor pins the window AND title-bar
+    // background, so an unconditional call (even the old hardcoded white)
+    // locks the bar in dark mode (white-on-white title text, device-verified);
+    // unconfigured apps keep the theme-following system default.
     // NOTE: OHOS requires #AARRGGBB format (8-digit hex), not #RRGGBB.
+    {{#if window-background-color-set}}
     try {
-      await win.setWindowBackgroundColor('#FFFFFFFF');
+      await win.setWindowBackgroundColor('{{window-background-color}}');
       // On API 20+, also set container color to cover the container layer default black
       if (deviceInfo.sdkApiVersion >= 20) {
         try {
-          await win.setWindowContainerColor('#FFFFFFFF', '#FFFFFFFF');
+          await win.setWindowContainerColor('{{window-background-color}}', '{{window-background-color}}');
         } catch (e) {
           console.warn('[Tauri] setWindowContainerColor failed (expected on non-2in1): ' + JSON.stringify(e));
         }
       }
+      console.info('[Tauri] Window background set to {{window-background-color}}');
+    } catch (e) {
+      console.error('[Tauri] Failed to set window background: ' + JSON.stringify(e));
+    }
+    {{/if}}
+    try {
       await win.setWindowSystemBarProperties({
         statusBarColor: '#00000000',
         statusBarContentColor: '#FF000000',
         navigationBarColor: '#00000000',
         navigationBarContentColor: '#FF000000'
       });
-      console.info('[Tauri] Window background and system bar set to white');
     } catch (e) {
-      console.error('[Tauri] Failed to set window background: ' + JSON.stringify(e));
+      console.error('[Tauri] Failed to set system bar properties: ' + JSON.stringify(e));
     }
   }
 }

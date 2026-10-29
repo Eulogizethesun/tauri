@@ -96,9 +96,33 @@ impl<R: Runtime> PathResolver<R> {
   }
 
   /// Returns the path to the resource directory.
+  ///
+  /// `/data/storage/el1/bundle/<hap-module-name>/resources/resfile` — the
+  /// system extracts a module's `resources/resfile` HAP content into a
+  /// directly readable directory (the official `resourceDir` location); this
+  /// is where the CLI injects `tauri.conf.json` and the configured
+  /// `bundle.resources`.
+  ///
+  /// Errors with [`Error::UnknownPath`] when the HAP module name injected by
+  /// the app init context is unavailable (`None` or empty). Normally
+  /// unreachable — init runs before the app fn — but an explicit error beats
+  /// silently assuming a default module and pointing at a directory that may
+  /// not exist.
   pub fn resource_dir(&self) -> Result<PathBuf> {
-    let module_name = crate::ohos::MODULE_NAME.get().and_then(|m| m.as_deref());
-    Ok(compute_resource_dir(module_name))
+    let module_name = normalize_module_name(
+      crate::ohos::HAP_MODULE_NAME
+        .get()
+        .and_then(|m| m.as_deref()),
+    );
+    match module_name {
+      Some(module) => Ok(compute_resource_dir(module)),
+      None => {
+        log::warn!(
+          "resource_dir: HAP module name unavailable from the app init context; refusing to guess the module"
+        );
+        Err(Error::UnknownPath)
+      }
+    }
   }
 
   /// Returns the path to the app's config directory.
@@ -137,13 +161,19 @@ impl<R: Runtime> PathResolver<R> {
   }
 }
 
-/// Internal helper: compute the resource directory from an optional module name.
+/// Internal helper: compute the resource directory for a HAP module name.
 /// Extracted for unit testing.
-fn compute_resource_dir(module_name: Option<&str>) -> PathBuf {
-  let module = module_name.unwrap_or("entry");
-  PathBuf::from("/data/storage/el1/base")
+fn compute_resource_dir(module: &str) -> PathBuf {
+  PathBuf::from("/data/storage/el1/bundle")
     .join(module)
-    .join("assets")
+    .join("resources")
+    .join("resfile")
+}
+
+/// Normalizes the injected module name: `None` and `Some("")` are both
+/// treated as missing.
+fn normalize_module_name(module_name: Option<&str>) -> Option<&str> {
+  module_name.filter(|m| !m.is_empty())
 }
 
 #[cfg(test)]
@@ -215,27 +245,38 @@ mod tests {
   }
 
   #[test]
-  fn resource_dir_defaults_to_entry_module() {
-    assert_eq!(
-      compute_resource_dir(None),
-      PathBuf::from("/data/storage/el1/base/entry/assets")
-    );
+  fn resource_dir_errors_when_module_missing() {
+    // Simulates the `Err(Error::UnknownPath)` branch when the module name is
+    // unavailable (None or empty) — mirrors base_path_returns_error_when_not_initialized
+    for missing in [None, Some("")] {
+      let module = normalize_module_name(missing);
+      let result: Result<PathBuf> = module.map(compute_resource_dir).ok_or(Error::UnknownPath);
+      assert!(result.is_err());
+      assert!(matches!(result.unwrap_err(), Error::UnknownPath));
+    }
+  }
+
+  #[test]
+  fn normalize_module_name_treats_empty_as_missing() {
+    assert_eq!(normalize_module_name(None), None);
+    assert_eq!(normalize_module_name(Some("")), None);
+    assert_eq!(normalize_module_name(Some("entry")), Some("entry"));
   }
 
   #[test]
   fn resource_dir_uses_custom_module_name() {
     assert_eq!(
-      compute_resource_dir(Some("feature1")),
-      PathBuf::from("/data/storage/el1/base/feature1/assets")
+      compute_resource_dir("entry_desktop"),
+      PathBuf::from("/data/storage/el1/bundle/entry_desktop/resources/resfile")
     );
   }
 
   #[test]
-  fn resource_dir_always_under_el1_and_ends_with_assets() {
-    for module in [None, Some("x"), Some("entry"), Some("mod_a")] {
+  fn resource_dir_always_under_bundle_and_ends_with_resfile() {
+    for module in ["x", "entry", "entry_desktop", "mod_a"] {
       let p = compute_resource_dir(module);
-      assert!(p.starts_with("/data/storage/el1/base"));
-      assert_eq!(p.file_name().unwrap(), "assets");
+      assert!(p.starts_with("/data/storage/el1/bundle"));
+      assert_eq!(p.file_name().unwrap(), "resfile");
     }
   }
 

@@ -5,7 +5,10 @@
 use super::{get_app, Target};
 use crate::{
   helpers::app_paths::Dirs,
-  helpers::{config::get_config as get_tauri_config, template::JsonMap},
+  helpers::{
+    config::{get_config as get_tauri_config, Config},
+    template::JsonMap,
+  },
   interface::AppInterface,
   ConfigValue, Result,
 };
@@ -250,6 +253,14 @@ fn exec(
 
       map.insert("bundle", bundle_map);
 
+      // First-frame window background from tauri.conf's first `app.windows`
+      // background_color (issue Eulogizethesun/tauri#224 / C96) — see
+      // window_background_color() below.
+      let (background_color_set, background_color) =
+        window_background_color(&tauri_config);
+      map.insert("window-background-color-set", background_color_set);
+      map.insert("window-background-color", background_color);
+
       let detected_plugins =
         super::open_harmony::plugins::detect_all_plugins(dirs.tauri).unwrap_or_default();
 
@@ -306,6 +317,35 @@ fn exec(
   )
   .print(wrapper);
   Ok(app)
+}
+
+/// Renders tauri.conf's first `app.windows` `background_color` as the OHOS
+/// `#AARRGGBB` value of the `window-background-color` template variable: the
+/// EntryAbility.ets.hbs templates apply it to the window layer in
+/// onWindowStageCreate, so the first frame matches the configured background
+/// instead of the system default until the webview layer paints — wry applies
+/// `background_color` only at webview creation, after the first frame (issue
+/// Eulogizethesun/tauri#224 / C96). Byte-identical rendering to wry's
+/// `rgba_to_argb_hex`. Returns `(false, "")` when no window (or no
+/// `background_color`) is configured: the template guards the background
+/// calls with `{{#if window-background-color-set}}` (a separate boolean —
+/// handlebars treats an empty string as truthy), because an unconditional
+/// setWindowBackgroundColor (even with a white default) pins the title-bar
+/// background and breaks dark mode. Alpha is passed through unclamped —
+/// window-layer alpha semantics are the OS's, same as the webview layer's.
+fn window_background_color(tauri_config: &Config) -> (bool, String) {
+  tauri_config
+    .app
+    .windows
+    .first()
+    .and_then(|w| w.background_color)
+    .map(|c| {
+      (
+        true,
+        format!("#{:02X}{:02X}{:02X}{:02X}", c.3, c.0, c.1, c.2),
+      )
+    })
+    .unwrap_or_else(|| (false, String::new()))
 }
 
 pub(crate) fn handlebars(app: &App) -> (Handlebars<'static>, JsonMap) {
@@ -526,4 +566,116 @@ fn is_pnpm_dlx() -> bool {
       }
       false
     })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn config_from(json: &str) -> Config {
+    serde_json::from_str(json).expect("valid test config")
+  }
+
+  #[test]
+  fn window_background_color_renders_argb_from_the_first_window() {
+    // Object form: {red, green, blue, alpha} -> #AARRGGBB (alpha first, the
+    // same byte order wry's rgba_to_argb_hex produces).
+    let config = config_from(
+      r##"{"identifier":"com.example.test","app":{"windows":[
+        {"label":"first","backgroundColor":{"red":16,"green":32,"blue":48,"alpha":255}},
+        {"label":"second","backgroundColor":{"red":1,"green":2,"blue":3,"alpha":4}}
+      ]}}"##,
+    );
+    let (set, color) = window_background_color(&config);
+    assert!(set);
+    assert_eq!(color, "#FF102030");
+  }
+
+  #[test]
+  fn window_background_color_accepts_the_string_and_rgb_forms() {
+    // tauri.conf string form is #RRGGBB(AA) — alpha LAST. The helper
+    // re-orders to OHOS #AARRGGBB (alpha first), same as wry's
+    // rgba_to_argb_hex.
+    let hex = config_from(
+      r##"{"identifier":"com.example.test","app":{"windows":[{"label":"main","backgroundColor":"#102030"}]}}"##,
+    );
+    let (hex_set, hex) = window_background_color(&hex);
+    assert!(hex_set);
+    assert_eq!(hex, "#FF102030");
+    let rgba = config_from(
+      r##"{"identifier":"com.example.test","app":{"windows":[{"label":"main","backgroundColor":"#10203080"}]}}"##,
+    );
+    let (rgba_set, rgba_color) = window_background_color(&rgba);
+    assert!(rgba_set);
+    assert_eq!(rgba_color, "#80102030");
+  }
+
+  #[test]
+  fn window_background_color_is_empty_when_unset() {
+    // Window without background_color, and no windows at all: unset means
+    // "not configured" — the template skips the background calls entirely.
+    let unconfigured =
+      config_from(r##"{"identifier":"com.example.test","app":{"windows":[{"label":"main"}]}}"##);
+    assert_eq!(window_background_color(&unconfigured), (false, String::new()));
+    let no_windows = config_from(r##"{"identifier":"com.example.test","app":{}}"##);
+    assert_eq!(window_background_color(&no_windows), (false, String::new()));
+  }
+
+  #[test]
+  fn ohos_entry_ability_templates_render_window_background_color() {
+    // End-to-end with the real template files: the dashed top-level key
+    // must survive handlebars' path grammar and land inside the quoted
+    // ArkTS arguments. Both form variants render the same scaffold (the two
+    // files are kept byte-identical on purpose).
+    let tpls = [
+      (
+        "mobile",
+        include_str!(
+          "../../templates/mobile/open-harmony/entry_mobile/src/main/ets/entryability/EntryAbility.ets.hbs"
+        ),
+      ),
+      (
+        "desktop",
+        include_str!(
+          "../../templates/mobile/open-harmony/entry_desktop/src/main/ets/entryability/EntryAbility.ets.hbs"
+        ),
+      ),
+    ];
+    for (form, tpl) in tpls {
+      let mut h = handlebars::Handlebars::new();
+      h.register_escape_fn(handlebars::no_escape);
+      h.register_template_string("entry", tpl).unwrap();
+      let data = serde_json::json!({"window-background-color-set": true, "window-background-color": "#FF102030"});
+      let out = h.render("entry", &data).unwrap();
+      assert!(
+        out.contains("setWindowBackgroundColor('#FF102030')"),
+        "{form}: background call not rendered as expected"
+      );
+      assert!(
+        out.contains("setWindowContainerColor('#FF102030', '#FF102030')"),
+        "{form}: container color call not rendered as expected"
+      );
+      // Unset background: the background calls are skipped entirely (an
+      // unconditional call pins the title bar and breaks dark mode), while
+      // the system-bar setup must survive the skip.
+      let unset = h
+        .render(
+          "entry",
+          &serde_json::json!({"window-background-color-set": false, "window-background-color": ""}),
+        )
+        .unwrap();
+      assert!(
+        !unset.contains("setWindowBackgroundColor('"),
+        "{form}: background call must be skipped when unset"
+      );
+      assert!(
+        !unset.contains("setWindowContainerColor('"),
+        "{form}: container color call must be skipped when unset"
+      );
+      assert!(
+        unset.contains("setWindowSystemBarProperties"),
+        "{form}: system bar setup must survive the background skip"
+      );
+    }
+  }
 }

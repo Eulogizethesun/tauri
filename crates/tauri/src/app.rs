@@ -2492,18 +2492,33 @@ tauri::Builder::default()
           tray_config.id.clone().unwrap_or_else(|| "main".into()),
         )
         .icon_as_template(tray_config.icon_as_template);
-        // The menu-on-left-click config keys are unsupported on OHOS (see
-        // tray-icon's build-time warnings for the builder methods), and the
-        // config struct always materializes them from serde defaults —
-        // forwarding would trip that warning for every app that merely has
-        // a tray config. Skip the forward on OHOS: the attrs stay unset,
-        // which resolves to the same platform default (true).
-        #[cfg(not(target_env = "ohos"))]
+        // The menu-on-left-click config keys have no OHOS counterpart (the
+        // status-bar click behavior is system-fixed). tray-icon warns at
+        // build time whenever these attrs are SET (Option semantics: any
+        // `Some` trips the warn), and both config fields are plain bools
+        // that serde materializes to `true` even when unset — forwarding
+        // them unconditionally would warn for every app that merely has a
+        // tray config. Forward on OHOS only the values that deviate from
+        // the default: those are the configurations the warn is for, and
+        // default-config apps stay silent (the runtime setter warns per
+        // call via warn_menu_click_config_once).
         #[allow(deprecated)]
         {
-          tray = tray
-            .menu_on_left_click(tray_config.menu_on_left_click)
-            .show_menu_on_left_click(tray_config.show_menu_on_left_click);
+          #[cfg(not(target_env = "ohos"))]
+          {
+            tray = tray
+              .menu_on_left_click(tray_config.menu_on_left_click)
+              .show_menu_on_left_click(tray_config.show_menu_on_left_click);
+          }
+          #[cfg(target_env = "ohos")]
+          {
+            if !tray_config.menu_on_left_click {
+              tray = tray.menu_on_left_click(false);
+            }
+            if !tray_config.show_menu_on_left_click {
+              tray = tray.show_menu_on_left_click(false);
+            }
+          }
         }
         if let Some(icon) = &app.manager.tray.icon {
           tray = tray.icon(icon.clone());
