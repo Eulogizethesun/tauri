@@ -31,7 +31,7 @@
 |------|------|---------|
 | 窗口 ID | ✅ | tao `id()` 返回携带真实 OHOS windowId 的 `WindowId`（i64 内值：主窗 0、子窗 >0，逐窗相异，供事件路由哈希）；`WindowId::dummy()` 仍在但仅为主窗值 `WindowId(0)`（tao `platform_impl/ohos/window.rs:34-36/:1505-1509`） |
 | 窗口创建 | ✅ | `Window::new` 区分 UIAbility（复用主容器，window_id=0）与 SubWindow（`create_os_window`，window_id>0） |
-| 窗口销毁 | ⚠️ | tao `Window::close()` 已实现（子窗→bridge `destroyWindow`，主窗 id=0 被 bridge 拒绝——系统管理）；子窗关闭经 ArkTS `notifyWindowClose`→`PENDING_WINDOW_CLOSES` 旁路（openharmony-ability `crates/ability/src/app.rs:1345`）→ tao 事件循环 drain 合成按真实 id 路由的 `CloseRequested`（`platform_impl/ohos/event_loop.rs:1005`）→ 下游走常规 close 链至 `Destroyed`（正确 label）；`MainEvent::WindowDestroy`（onWindowStageDestroy 触发）按自身 window_id 补发 `CloseRequested`+`Destroyed`（多 UIAbility D5/D13）；系统返回键/划任务/杀进程仍不派发 `Destroyed`（LoopDestroyed 兜底） |
+| 窗口销毁 | ⚠️ | tao `Window::close()` 已实现（子窗→bridge `destroyWindow`，主窗 id=0 被 bridge 拒绝——系统管理）；子窗关闭经 ArkTS `notifyWindowClose`→`PENDING_WINDOW_CLOSES` 旁路（openharmony-ability `crates/ability/src/app.rs:1346`）→ tao 事件循环 drain 合成按真实 id 路由的 `CloseRequested`（`platform_impl/ohos/event_loop.rs:1005`）→ 下游走常规 close 链至 `Destroyed`（正确 label）；`MainEvent::WindowDestroy`（onWindowStageDestroy 触发）按自身 window_id 补发 `CloseRequested`+`Destroyed`（多 UIAbility D5/D13）；系统返回键/划任务/杀进程仍不派发 `Destroyed`（LoopDestroyed 兜底） |
 | 请求重绘 | ⚠️ | **`request_redraw` 为空实现**；重绘实际由 `MainEvent::WindowRedraw` 驱动 |
 | 配置获取 | ✅ | `config()` 透传 `OpenHarmonyApp::config()` |
 | 多窗口 | ⚠️ | 子窗口可创建（`OHOSWindowKind::SubWindow` + `createSubWindow`(应用子窗口)）；`supports_multiple_windows` 在 OHOS 上返回 `cfg!(desktop)`（desktop 形态 true，仅 mobile false，crates/tauri/src/app.rs:1190-1193），`NewWindowResponse::Create` 变体已存在（crates/tauri/src/webview/mod.rs:263；on_new_window 全链已通，见 test-mapping「多窗口」行） |
