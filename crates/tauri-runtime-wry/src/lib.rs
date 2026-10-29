@@ -380,11 +380,13 @@ pub struct Context<T: UserEvent> {
   webview_runtime_installed: bool,
   /// OHOS: window id -> is_ui_ability_main, written by the event-loop side
   /// while the tao window is in hand (single write point inside
-  /// `create_window`) and read by the `WryWindowDispatcher` constructors.
-  /// The user-thread `Context::create_window` constructor does not have the
-  /// tao window (it is created asynchronously on the event loop); the OHOS
+  /// `create_window`). The only reader is the user-thread
+  /// `Context::create_window` constructor (via `ohos_is_ui_ability_main`):
+  /// its tao window is created asynchronously on the event loop, and the OHOS
   /// reply-channel ordering (`sender.send(Ok)` after the handler ran)
-  /// guarantees the entry exists once `recv()` returns. Entries are removed
+  /// guarantees the entry exists once `recv()` returns. The event-loop-side
+  /// constructor does not go through the map -- it captures the UIAbility-main
+  /// flag straight from the tao window in hand. Entries are removed
   /// when the window leaves the store (`on_window_close_ohos`), so the map
   /// holds at most one entry per live window -- repeated create/destroy of a
   /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
@@ -2748,7 +2750,8 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
       // @ohos.window SDK d.ts, minimize() has dual semantics by caller type:
       // on a MAIN window it minimizes to the taskbar (not hide; restored from
       // the dock), while on sub-windows / floating windows it hides the
-      // window (restorable via showWindow(), @since 12). So the main window
+      // window (restorable via showWindow(), @since 11; minimize itself is
+      // @since 12). So the main window
       // has no hide semantics at all (UIAbility-level hideAbility is out of
       // reach on PC/2in1 until the A1 entitlement) and fails at the
       // dispatcher -- the message handlers intentionally discard tao Results,
