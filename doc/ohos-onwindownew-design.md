@@ -879,7 +879,9 @@ async function testWindowOpenAllowed(): Promise<TestResult> {
 
 - **文件**: `examples/api/src-tauri/src/lib.rs`（`on_new_window` OHOS cfg 分支）
 - **行为**: `WebviewWindowBuilder::new(&app, "new-{n}", WebviewUrl::External(url))`
-  `.inner_size(900,700).position(120,90).ohos_window_kind(SubWindow).build()`
+  `.inner_size(450.0, 350.0).position(60.0, 45.0).ohos_window_kind(SubWindow).build()`
+  （logical px；DPR=2 下约合 900x700 物理 px——中幅弹窗；位置偏移使主窗口保持可见，
+  与 `examples/api/src-tauri/src/lib.rs` `on_new_window` 现行 builder 链一致）
   → 成功返回 `NewWindowResponse::Create { window }`，失败回退 `Allow`。
 - **`set_create_new_window` 标志已移除**：Create 现在是默认行为，不再需要前置开关。
 
@@ -911,19 +913,19 @@ fire-and-forget。**全 create 路径无 `block_on`、无 `recv()`、无 await-r
   （`setWebController(null)`）取消自己的 popup，真正的 popup 是 Rust 建的 Float 窗口。
 - Allow/Deny 维持 `true`/`false` 不变。
 
-### 11.4 tao 侧：Float 窗口尺寸/位置生效
+### 11.4 tao 侧：SubWindow 窗口尺寸/位置生效
 
-- **文件**: `tao/src/platform_impl/ohos/mod.rs` `Window::new` Float 分支（原 line ~1001）
+- **文件**: `tao/src/platform_impl/ohos/mod.rs` `Window::new` SubWindow 分支（原 line ~1001）
 - **修正**: 原代码用 `..WindowCreateParams::default()`（width=800/height=600/x=100/
   y=100），**忽略** `window_attrs.inner_size`/`position`，导致 builder 的
-  `.inner_size()/.position()` 对 Float 窗口无效。改为读
+  `.inner_size()/.position()` 对 SubWindow 窗口无效。改为读
   `window_attrs.inner_size`/`position`，经 `el.app.scale()` 转 physical px，填入
   `WindowCreateParams.width/height/x/y`。
 - **下游**: `create_os_window` → ArkTS `createSubWindow` → `await win.resize(w,h)` +
   `await win.moveWindowTo(x,y)` 应用尺寸；`SubWindowPage.aboutToAppear` 用
   `getGlobalRect()` 读回（不覆盖为全屏）。
 - **铁律遵守**: tao 经 openharmony-ability 的 `create_os_window` 桥接（Rule #1），
-  改动仅在 OHOS Float 分支（Rule #2 cfg 隔离）。
+  改动仅在 OHOS SubWindow 分支（Rule #2 cfg 隔离）。
 
 ### 11.5 URL 传播
 
