@@ -1780,7 +1780,7 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 /// `Window::close`, which is implemented there: a SubWindow sub-window gets a
 /// fire-and-forget `destroyWindow` dispatched through the ArkTS bridge, while
 /// the UIAbility main window is system-managed (the bridge rejects window id
-/// 0 — the ability is terminated by the system, not in-app). The runtime's
+/// 0 -- the ability is terminated by the system, not in-app). The runtime's
 /// `on_window_close` OHOS branch additionally dispatches `destroy_window`
 /// (ArkTS `WindowManager.closeWindow`) as an idempotent backstop:
 /// - SubWindow sub-window: `win.destroyWindow()` (real destroy, removes from screen).
