@@ -396,7 +396,7 @@
   // ArkHelper → WindowManager → win.setWindowTouchable). Rust always returns Ok;
   // real proof is hilog `grep setWindowTouchable` + visual pass-through. Briefly
   // setting true lets the user observe the window stop consuming events; false
-  // restores. For full pass-through verification create a Float overlay window.
+  // restores. For full pass-through verification create a SubWindow overlay sub-window.
   async function manualIgnoreCursorEvents() {
     await wrapManual('setIgnoreCursorEvents', async () => {
       const win = getCurrentWindow();
@@ -415,7 +415,7 @@
     });
   }
 
-  // Full pass-through test on a Float overlay sub-window (manual_tests.md §28).
+  // Full pass-through test on a SubWindow overlay sub-window (manual_tests.md §28).
   // The 3s-toggle smoke above only exercises the TSFN bridge on the main window;
   // T0/T1 require an overlay ABOVE the main window so click/hover pass-through is
   // observable. setIgnoreCursorEvents passes label, so targeting the sub-window
@@ -424,7 +424,7 @@
   async function manualOverlayIgnoreCursor() {
     await wrapManual('overlayIgnoreCursor', async () => {
       const label = 'manual-ignore-cursor-overlay';
-      // Reuse if still open; otherwise create a fresh transparent Float overlay.
+      // Reuse if still open; otherwise create a fresh transparent SubWindow overlay.
       let win = await WebviewWindow.getByLabel(label);
       if (!win) {
         await invoke('create_transparent_window', { windowId: label });
@@ -433,7 +433,7 @@
       if (!win) throw new Error('overlay window not created');
       overlayIgnoreCursorWin = win;
       await win.setIgnoreCursorEvents(true);
-      manualResult = '✅ overlay 子窗口（"manual-ignore-cursor-overlay"，800×600 Float）已 setIgnoreCursorEvents(true)。\n' +
+      manualResult = '✅ overlay 子窗口（"manual-ignore-cursor-overlay"，800×600 SubWindow）已 setIgnoreCursorEvents(true)。\n' +
         '验证步骤（30 秒窗口）：\n' +
         '  T0 触摸/点击穿透：点击 overlay 深色卡片覆盖区域 → 点击应落到下层主窗口（主窗口按钮可点/有反应，overlay 不响应不获焦）\n' +
         '  T1 hover 穿透：鼠标悬停 overlay 覆盖的主窗口按钮 → hover 高亮应生效\n' +
@@ -1094,7 +1094,7 @@ Expected behavior:
 
   // ─── Window Decorations & Transparency Manual Tests (Phase 1+2+3) ───
   let decorationsState = $state('unknown');
-  // Tracks the label of the most-recently-created Float sub-window so the BG
+  // Tracks the label of the most-recently-created SubWindow sub-window so the BG
   // buttons (set_background_color) can target it instead of the main window.
   // Historical note: @tauri-apps/api Window.setBackgroundColor used to omit
   // `label` in the invoke payload (fixed in the fork, 3ff13dff9; upstreaming
@@ -1171,7 +1171,7 @@ Expected behavior:
         `(tauri-window-N keys) in module.json5 (entry_desktop): the spawn want carries a\n` +
         `unique tauri_window_id → onAcceptWant returns the "tauri-window-<id>" instance\n` +
         `key → AMS starts a new instance.\n\n` +
-        `If a new independent window appears (separate from the Float sub-windows) → PASS.\n` +
+        `If a new independent window appears (separate from the SubWindow sub-windows) → PASS.\n` +
         `If the request instead falls back to the main instance (bare-want "tauri-primary"\n` +
         `routing: only onNewWant, no new onCreate/window) → FAIL: per-window instance key\n` +
         `not applied (launchType not "specified", or the want lost tauri_window_id).\n` +
@@ -1227,7 +1227,7 @@ Expected behavior:
     });
   }
 
-  // Set the background color on the most-recently-created Float sub-window
+  // Set the background color on the most-recently-created SubWindow sub-window
   // (click "Create Borderless Window" or "Create Transparent+Borderless" first).
   //
   // Why not win.setBackgroundColor(): @tauri-apps/api Window.setBackgroundColor
@@ -1236,7 +1236,7 @@ Expected behavior:
   // the main window (windowId=0), whose background is masked by the XComponent
   // content layer. Fixed in the fork (3ff13dff9 passes `label`); upstreaming
   // pending. These buttons invoke the command directly with the sub-window's
-  // label so it targets the correct Float sub-window. See
+  // label so it targets the correct SubWindow sub-window. See
   // ohos-window-test-mapping.md row "window background color".
   async function manualSetBackgroundColor(color, label) {
     await wrapManual(`setBackgroundColor(${label})`, async () => {
@@ -1263,7 +1263,7 @@ Expected behavior:
 
   // ─── Vibrancy (Window Effects) Manual Tests (OHOS only) ───
   // NOTE: WebviewWindow.new defaults to OHOS UIAbility (singleton) which conflicts with the
-  // main window. Use create_transparent_window (Float sub-window) instead so the window
+  // main window. Use create_transparent_window (SubWindow sub-window) instead so the window
   // creates successfully and setEffects can apply backdropBlur.
   async function manualVibrancyEffect(effectName, effect, opts, expect) {
     await wrapManual(`vibrancy:${effectName}`, async () => {
@@ -1499,7 +1499,7 @@ Expected behavior:
     });
   }
 
-  // Decoration button group: acts on the most recently created Float sub-window (no-op on the main window)
+  // Decoration button group: acts on the most recently created SubWindow sub-window (no-op on the main window)
   async function manualSetClosable() {
     await wrapManual('setClosable', async () => {
       if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
@@ -1784,7 +1784,7 @@ Expected behavior:
     });
   }
 
-  // 8. Window title — set it on the main window directly (the main window's title bar is visible; setDecorations does not work on Float sub-windows)
+  // 8. Window title — set it on the main window directly (the main window's title bar is visible; set_decorations dispatches on SubWindow sub-windows — it is the UIAbility main window kind that errors, not the sub-window)
   async function manualSetTitle() {
     await wrapManual('setTitle', async () => {
       const win = getCurrentWindow();
@@ -2600,7 +2600,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     await wrapManual('newWindowAllow', async () => {
       await invoke('set_deny_new_window', { deny: false });
       // Explicitly reset create flag: a prior Create-button press sets it true,
-      // and Allow must open the in-page dialog (not a Float OS window).
+      // and Allow must open the in-page dialog (not a SubWindow OS window).
       await invoke('set_create_new_window', { create: false });
       window.open('https://example.com/manual-allow-test', '_blank');
       manualResult = 'Allow mode: dialog should appear with ✕ close button in title bar.\n' +
@@ -3754,7 +3754,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualCreateUIAbilityWindow}>Create UIAbility Instance Window</button>
         <button class="btn" onclick={manualCreateTransparentUIAbility}>Create Transparent UIAbility (主窗口透明)</button>
       </div>
-      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 装饰按钮 (Float 子窗口生效)</h5>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 装饰按钮 (SubWindow 子窗口生效)</h5>
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualSetClosable}>Toggle Closable</button>
         <button class="btn" onclick={manualSetMaximizable}>Toggle Maximizable</button>
