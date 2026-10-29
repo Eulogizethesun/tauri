@@ -7,6 +7,8 @@
 > **级别说明**: T0 = 冒烟必测（核心功能/主流程）；T1 = 重要回归（辅助功能/边界场景）
 >
 > **用途**: 本文档归档 Tauri OHOS 适配的所有手动测试用例，涵盖各模块的必测场景。新模块适配完成后将用例追加至对应章节。
+>
+> **旧名注记（2026-10-29，Round-16 F4）**: 本文件无 OHOSWindowKind 更名兜底注记，特此补一条——`OHOSWindowKind::Float` 已于 ec1a47233（#240）更名为 `OHOSWindowKind::SubWindow`（应用子窗口，经 `windowStage.createSubWindow`，非 OS 级 `WindowType.TYPE_FLOAT`）；活行与章节说明里的「Float 子窗口」「Float 子窗」「Float 窗口」「Float overlay」「float-window」等字样按现名阅读；现行 ArkTS 路由名 `FloatWindow`（openharmony-ability `SubWindowPage.ets` 的 `RouteName`）为活标识符，非改名残留；带日期的根因/修法/仲裁/验证记录块（如 §九/§十九/§二十八/§三十七 各 dated 段）按当时口径保留不动。
 
 ---
 
@@ -246,7 +248,7 @@
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| core | transparent | float-window/透明+无边框 | 创建透明无边框 Float 子窗口 | **T0** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明无边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 验证窗口是否可穿透看到桌面内容 4. 点击窗口内关闭链接关闭子窗口 | ① 新窗口弹出，无标题栏（`decorations: false`） ② 窗口背景透明，可穿透看到桌面内容（`transparent: true`） ③ 窗口内显示半透明黑色卡片，标题 "✨ Transparent + Borderless"，文字 `decorations: false + transparent: true` ④ 窗口底部状态栏显示 `isDecorated: false` ⑤ 点击关闭链接后窗口正常关闭 | Float 子窗口类型；`WindowMode.Float` + `transparent(true)` + `decorations(false)`；内部分配 `window_id = transparency_test_<timestamp>` |
+| core | transparent | float-window/透明+无边框 | 创建透明无边框 Float 子窗口 | **T0** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明无边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 验证窗口是否可穿透看到桌面内容 4. 点击窗口内关闭链接关闭子窗口 | ① 新窗口弹出，无标题栏（`decorations: false`） ② 窗口背景透明，可穿透看到桌面内容（`transparent: true`） ③ 窗口内显示半透明黑色卡片，标题 "✨ Transparent + Borderless"，文字 `decorations: false + transparent: true` ④ 窗口底部状态栏显示 `isDecorated: false` ⑤ 点击关闭链接后窗口正常关闭 | SubWindow 应用子窗口（`ohos_window_kind(OHOSWindowKind::SubWindow)`，经 `createSubWindow`）；builder 链 `transparent(true)` + `decorations(false)`（`create_transparent_borderless_window`，cmd.rs）；label（前端 windowId 参数）= `transparency_test_<timestamp>`（`'transparency_test_' + Date.now()`） |
 | core | transparent | float-window/仅透明有边框 | 创建透明有边框 Float 子窗口 | **T1** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明有边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 确认窗口有标题栏、背景透明效果可见 4. 点击窗口内关闭链接关闭子窗口 | ① 子窗口有标题栏（`decorations: true` 默认） ② 窗口内容区背景透明，可穿透看到桌面 ③ 窗口内显示 "🪟 Transparent Window" 卡片，底部状态栏显示 `isDecorated: true` ④ 点击关闭链接后窗口正常关闭 | 验证 `transparent: true` 单独使用（不加 `decorations: false`）时 OHOS 表现；标题栏由系统渲染不受 transparent 影响 |
 
 | 模块 | T0 | T1 | 合计 |
@@ -407,7 +409,7 @@
 > 1. `window.setEffects(Blur/Acrylic) + clearEffects` 不抛错（运行时 setEffects，AttributeUpdater 刷新 backdropBlur/backgroundColor；Mica/Tabbed 系列在 OHOS 上为 no-op 跳过）
 > 2. `create_transparent_window(effect=Blur)` build 时 effects 不抛错（WindowBuilder::effects，registerController inject）
 >
-> 以下为手动用例，通过 Tests 视图的手动按钮触发。vibrancy 窗口用 create_transparent_window（Float 子窗口，避开 UIAbility singleton 冲突）。
+> 以下为手动用例，通过 Tests 视图的手动按钮触发。vibrancy 窗口用 create_transparent_window（`OHOSWindowKind::SubWindow` 应用子窗口；旧注「避开 UIAbility singleton 冲突」为失效口径——tao 现无单例约束，唯一约束为首窗必须 UIAbility，见 doc/多窗口特性实现文档.md 勘误注记）。
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
