@@ -669,10 +669,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
               } else {
                 let should_create = deny_state.create.load(std::sync::atomic::Ordering::SeqCst);
                 if should_create {
-                  // Create mode: build a SEPARATE Float OS sub-window that loads
+                  // Create mode: build a SEPARATE SubWindow OS sub-window that loads
                   // the target URL. wry maps Create => false, so the bridge calls
                   // setWebController(null) (non-blocking cancel of ArkWeb's own
-                  // popup) while the Float window is the actual popup. build() is
+                  // popup) while the SubWindow window is the actual popup. build() is
                   // non-blocking on the UI thread (createOSWindow discards its
                   // returned Promise; webview create is runtime.spawn'd), so this
                   // ArkWeb onWindowNew callback returns synchronously — no deadlock.
@@ -683,7 +683,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     tauri::WebviewUrl::External(url.clone()),
                   )
                   .title(url.as_str())
-                  // Size + offset the Float sub-window so it appears as a distinct
+                  // Size + offset the SubWindow sub-window so it appears as a distinct
                   // floating popup, not a full-screen window covering the main
                   // window (createOSWindow defaults to the display size when no
                   // inner_size is set). Logical px; at DPR=2 this yields ~900x700
@@ -704,7 +704,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     }
                   }
                 } else {
-                  // Allow mode: do NOT build a Float window. Return Allow so the
+                  // Allow mode: do NOT build a SubWindow window. Return Allow so the
                   // bridge layer (DefaultWebview.ets:handleWindowNew) opens an in-page
                   // dialog (NewWindowDialog.ets) with the target URL, a ✕ close
                   // button, and an embedded Web component. wry maps Allow => true.

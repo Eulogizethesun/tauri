@@ -1781,11 +1781,14 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 /// fire-and-forget `destroyWindow` dispatched through the ArkTS bridge, while
 /// the UIAbility main window is system-managed (the bridge rejects window id
 /// 0 -- the ability is terminated by the system, not in-app). The runtime's
-/// `on_window_close` OHOS branch additionally dispatches `destroy_window`
-/// (ArkTS `WindowManager.closeWindow`) as an idempotent backstop:
-/// - SubWindow sub-window: `win.destroyWindow()` (real destroy, removes from screen).
-/// - UIAbility main window: `hideAbility()` (background — OHOS doesn't allow
-///   programmatic Ability kill; instance stays in recent tasks but invisible).
+/// `on_window_close` OHOS branch dispatches no second OS destroy: its only
+/// OS-level action is `inner.close()` -- the same tao close chain described
+/// above (tao close -> bridge destroy-window -> ArkTS `Window.destroyWindow()`),
+/// so each close is a single dispatch. Idempotency lives at both ends of that
+/// dispatch: the ArkTS destroy-window handler soft-looks the id up and treats
+/// an already-destroyed window as success, and the runtime's window-store
+/// remove guard makes a second `on_window_close` for the same id hit
+/// `removed == None` and return early.
 ///
 /// Returns the list of labels that were attempted to close (for UI feedback).
 #[command]
@@ -1804,11 +1807,11 @@ pub fn close_all_test_windows<R: tauri::Runtime>(
       log::info!("[close_all_test_windows] closing {}", label);
 
       // w.close() -> on_close_requested -> on_window_close. On OHOS, tao's
-      // Window::close already dispatches a bridge destroy_window for
-      // sub-windows, and the runtime on_window_close OHOS branch calls
-      // destroy_window again (ArkTS WindowManager.closeWindow) as an
-      // idempotent backstop to actually destroy the OS window. On other
-      // platforms, close() handles real destruction directly.
+      // Window::close dispatches the bridge destroy_window (fire-and-forget)
+      // for sub-windows, and the runtime on_window_close OHOS branch sends no
+      // second OS destroy -- its only OS-level action is inner.close(), the
+      // same tao close chain. On other platforms, close() handles real
+      // destruction directly.
       match w.close() {
         Ok(_) => closed.push(label.clone()),
         Err(e) => log::warn!("[close_all_test_windows] close {} failed: {:?}", label, e),

@@ -426,8 +426,9 @@ impl<T: UserEvent> Context<T> {
 
   /// OHOS: record a window's UIAbility-main status at creation time (issue
   /// Eulogizethesun/tauri#238). Called from `create_window` while the tao
-  /// window is in hand -- before any creation reply is sent, so both
-  /// dispatcher constructors read a populated entry.
+  /// window is in hand -- before any creation reply is sent, so the
+  /// user-thread dispatcher constructor (the registry's only reader) reads a
+  /// populated entry.
   #[cfg(target_env = "ohos")]
   fn ohos_record_main_window(&self, window_id: WindowId, is_ui_ability_main: bool) {
     self
@@ -2750,8 +2751,8 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
       // @ohos.window SDK d.ts, minimize() has dual semantics by caller type:
       // on a MAIN window it minimizes to the taskbar (not hide; restored from
       // the dock), while on sub-windows / floating windows it hides the
-      // window (restorable via showWindow(), @since 11; minimize itself is
-      // @since 12). So the main window
+      // window (restorable via showWindow(), @since 9; minimize itself is
+      // @since 11). So the main window
       // has no hide semantics at all (UIAbility-level hideAbility is out of
       // reach on PC/2in1 until the A1 entitlement) and fails at the
       // dispatcher -- the message handlers intentionally discard tao Results,
@@ -5807,7 +5808,9 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   // Issue Eulogizethesun/tauri#238: record the window's UIAbility-main status
   // while the tao window is in hand. This is the single write point covering
   // every creation path (main-thread variant and both CreateWindow message
-  // arms); the dispatcher constructors read the registry afterwards.
+  // arms); the user-thread dispatcher constructor reads the registry
+  // afterwards, while the main-thread variant captures the flag straight from
+  // the tao window in hand.
   #[cfg(target_env = "ohos")]
   {
     use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};

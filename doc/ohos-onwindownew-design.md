@@ -915,7 +915,7 @@ fire-and-forget。**全 create 路径无 `block_on`、无 `recv()`、无 await-r
 
 ### 11.4 tao 侧：SubWindow 窗口尺寸/位置生效
 
-- **文件**: `tao/src/platform_impl/ohos/mod.rs` `Window::new` SubWindow 分支（原 line ~1001）
+- **文件**: `tao/src/platform_impl/ohos/window.rs` `Window::new` SubWindow 分支（原 line ~1001；2026-10-29 勘误：文件归属更正为 window.rs——`Window::new` 实在 window.rs:801 起（kind 解析分支 :805-812），mod.rs 仅 `pub use window::{...}` re-export `OHOSWindowKind`（:26-28），零 `OHOSWindowKind::` 使用）
 - **修正**: 原代码用 `..WindowCreateParams::default()`（width=800/height=600/x=100/
   y=100），**忽略** `window_attrs.inner_size`/`position`，导致 builder 的
   `.inner_size()/.position()` 对 SubWindow 窗口无效。改为读
