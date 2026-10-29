@@ -812,11 +812,14 @@ pub fn create_transparent_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
   let status_script = if window_id.starts_with("test-") {
     ""
   } else {
@@ -914,11 +917,14 @@ pub fn create_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
   let status_script = if window_id.starts_with("test-") {
     ""
   } else {
@@ -1705,11 +1711,14 @@ pub fn create_transparent_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the sub-window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
   let status_script = if window_id.starts_with("test-") {
     ""
   } else {
@@ -1767,11 +1776,13 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 /// run (SubWindow sub-windows, UIAbility instances, isolated/UA/custom-ua/no-throttle
 /// windows, etc.).
 ///
-/// On OHOS, `WebviewWindow::close()` only removes the window from Rust's manager
-/// — the windowing backend's `Window::close` is a no-op on OHOS and does NOT call ArkTS
-/// `destroyWindow()`, so the system window stays visible on screen. To actually
-/// destroy the system window, we must explicitly call `destroy_window` (which
-/// dispatches to ArkTS `WindowManager.closeWindow`):
+/// On OHOS, `WebviewWindow::close()` reaches the windowing backend's
+/// `Window::close`, which is implemented there: a SubWindow sub-window gets a
+/// fire-and-forget `destroyWindow` dispatched through the ArkTS bridge, while
+/// the UIAbility main window is system-managed (the bridge rejects window id
+/// 0 — the ability is terminated by the system, not in-app). The runtime's
+/// `on_window_close` OHOS branch additionally dispatches `destroy_window`
+/// (ArkTS `WindowManager.closeWindow`) as an idempotent backstop:
 /// - SubWindow sub-window: `win.destroyWindow()` (real destroy, removes from screen).
 /// - UIAbility main window: `hideAbility()` (background — OHOS doesn't allow
 ///   programmatic Ability kill; instance stays in recent tasks but invisible).
@@ -1792,10 +1803,12 @@ pub fn close_all_test_windows<R: tauri::Runtime>(
     if let Some(w) = app.get_webview_window(label) {
       log::info!("[close_all_test_windows] closing {}", label);
 
-      // w.close() → on_close_requested → on_window_close. On OHOS, on_window_close
-      // calls destroy_window (NAPI→ArkHelper.closeWindow) to actually destroy the
-      // OS window (the windowing backend's close/destroy are no-ops on OHOS). On other platforms,
-      // close() handles real destruction directly.
+      // w.close() -> on_close_requested -> on_window_close. On OHOS, tao's
+      // Window::close already dispatches a bridge destroy_window for
+      // sub-windows, and the runtime on_window_close OHOS branch calls
+      // destroy_window again (ArkTS WindowManager.closeWindow) as an
+      // idempotent backstop to actually destroy the OS window. On other
+      // platforms, close() handles real destruction directly.
       match w.close() {
         Ok(_) => closed.push(label.clone()),
         Err(e) => log::warn!("[close_all_test_windows] close {} failed: {:?}", label, e),
