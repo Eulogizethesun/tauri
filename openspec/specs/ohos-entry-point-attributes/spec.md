@@ -17,7 +17,7 @@ The system SHALL provide `tauri::ohos::entry_point` (proc macro `ohos_entry_poin
 - **THEN** the sibling is recognized and stripped; a bare `#[entry_point]` spelling (generic name — a foreign crate may define one, and stripping it would silently drop that attribute) and an aliased import (`use tauri::ohos::entry_point as x`) are NOT recognized, degrading to two glue sets caught at build time (E0428) — disclosed boundary
 
 ### Requirement: Entry glue is platform-complementary gated
-Emitted entry glue SHALL be gated by target platform: the mobile half (iOS `start_app`, Android JNI binding) under `cfg(not(target_env = "ohos"))`, the OHOS half (NAPI module) under `cfg(target_env = "ohos")`, so any target compiles exactly one set (proc macros cannot see the target platform). Unrelated attributes on the function SHALL pass through unaffected.
+Emitted entry glue SHALL be gated by target platform: the mobile half with per-OS cfgs (the iOS `start_app` C symbol under `cfg(all(target_os = "ios", not(target_env = "ohos")))`, the Android JNI binding under `cfg(target_os = "android")` inside `_start_app`), the OHOS half (NAPI module) under `cfg(target_env = "ohos")`, so any target compiles exactly one set (proc macros cannot see the target platform). Unrelated attributes on the function SHALL pass through unaffected.
 
 #### Scenario: single-line any-form remains valid
 - **WHEN** a function uses only `#[cfg_attr(any(mobile, target_env = "ohos"), tauri::mobile_entry_point)]`
