@@ -2631,9 +2631,11 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   fn set_enabled(&self, enabled: bool) -> Result<()> {
     #[cfg(target_env = "ohos")]
     {
-      // #225: OHOS has no window enabled/disabled API (tao returns Err from
-      // the main-thread arm, which the message handler discards) -- fail at
-      // the dispatcher so the caller sees it.
+      // #225: OHOS has no window enabled/disabled API. tao has no
+      // `set_enabled`; the main-thread arm calls the void WindowExt stub
+      // (window/mod.rs:65), so pre-fix the message was dispatched and
+      // no-op'd there (nothing errored, nothing discarded) -- fail at the
+      // dispatcher so the caller sees it.
       let _ = enabled;
       return Err(ohos_unsupported("setEnabled"));
     }

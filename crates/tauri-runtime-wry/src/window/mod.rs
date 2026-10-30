@@ -27,7 +27,9 @@ pub trait WindowExt {
   ///
   /// - **Android / iOS**: Unsupported.
   /// - **OpenHarmony**: Unsupported, returns an error (#225 -- the dispatcher
-  ///   fails early instead of silently discarding the message).
+  ///   fails early instead of dispatching the message: pre-fix the OHOS arm
+  ///   received it and no-op'd (tao has no `set_enabled`; nothing errored
+  ///   and nothing was discarded)).
   fn set_enabled(&self, enabled: bool);
 
   /// Whether the window is enabled or disabled.

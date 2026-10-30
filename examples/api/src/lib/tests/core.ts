@@ -2105,14 +2105,22 @@ export const coreTests: TestCase[] = [
         // auto suite injects no real mouse interaction, so the reading is
         // untracked here), and tauri-runtime-wry maps it through BOTH arms
         // to Error::FailedToGetCursorPosition (event_loop_window_getter!
-        // macro arm lib.rs:3475-3479, direct main-thread arm :3829-3837);
+        // macro arm lib.rs:3481-3486, direct main-thread arm :3835-3843);
         // tauri-runtime's Display (crates/tauri-runtime/src/lib.rs:162)
         // renders it as "failed to get cursor position" (JS: "runtime
         // error: failed to get cursor position"). FailedToSendMessage
-        // lives only on the event-loop inner path (lib.rs:5061-5062) and
-        // is remapped by :3479 before reaching JS — it reaches JS only
-        // when the invoke channel itself is dead, which is a real defect
-        // and must FAIL, never be tolerated. Device evidence (2026-10-28
+        // has 17 production sites in tauri-runtime-wry's lib.rs, split
+        // across two paths. Outer path: send_user_message's proxy send
+        // (:361) -- the getter! macro (:305-311) calls send_user_message
+        // first, and its `?` (:307) propagates that Err straight out of
+        // cursor_position. Inner path: the event-loop CursorPosition
+        // handler (production :5068) carries its Err over the response
+        // channel and the receiver remaps it into
+        // FailedToGetCursorPosition (:3485) before reaching JS -- the
+        // remap covers only the inner production, never the outer one.
+        // It reaches JS only when the invoke channel itself is dead,
+        // which is a real defect and must FAIL, never be tolerated.
+        // Device evidence (2026-10-28
         // regression run): this case rejected deterministically in two
         // consecutive rounds with exactly "runtime error: failed to get
         // cursor position" (row65, 110/111ms) — so the previous
