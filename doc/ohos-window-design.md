@@ -1,6 +1,7 @@
 # OHOS 窗口能力支持现状与缺失功能设计
 
 > 创建时间: 2026-07-02
+> 最后更新: 2026-10-27(「装饰按钮可用性」节刷新为 #238 后契约、「窗口最大化」行对齐 test-mapping;set_visible 行与 A7 节按 #237 hide 契约收窄为主窗口口径——`minimize()` 按调用者类型双语义)
 > 核对基准: `tao/src/platform_impl/ohos/mod.rs`（1271 行）+ `openharmony-ability/crates/ability/src/window/mod.rs` + `native_ability/.../ArkHelper.ets` / `WindowManager.ets`
 > 约束: 遵守 CLAUDE.md 三铁律 —— ① 所有 ArkTS 调用经 `openharmony-ability`；② `cfg(target_env = "ohos")` 隔离，不影响 Win/mac/Linux；③ `OHOS_DEVICE_TYPE` 决定形态，桌面专属能力用 `cfg(all(target_env = "ohos", desktop))`。
 > 本文合并「现状核对」与「缺失功能设计」两部分，作为分组的开发依据。
@@ -28,12 +29,12 @@
 
 | 能力 | 状态 | 实现说明 |
 |------|------|---------|
-| 窗口 ID | ✅ | `WindowId::dummy()` 返回单例 ID（OHOS 当前为单窗口模型，ID 恒为 0） |
-| 窗口创建 | ✅ | `Window::new` 区分 UIAbility（复用主容器，window_id=0）与 Float（`create_os_window`，window_id>0） |
-| 窗口销毁 | ⚠️ | `MainEvent::WindowDestroy` → 补发 `CloseRequested` + `Destroyed`；无主动销毁 API |
+| 窗口 ID | ✅ | tao `id()` 返回携带真实 OHOS windowId 的 `WindowId`（i64 内值：主窗 0、子窗 >0，逐窗相异，供事件路由哈希）；`WindowId::dummy()` 仍在但仅为主窗值 `WindowId(0)`（tao `platform_impl/ohos/window.rs:34-36/:1505-1509`） |
+| 窗口创建 | ✅ | `Window::new` 区分 UIAbility（复用主容器，window_id=0）与 SubWindow（`create_os_window`，window_id>0） |
+| 窗口销毁 | ⚠️ | tao `Window::close()` 已实现（子窗→bridge `destroyWindow`，主窗 id=0 被 bridge 拒绝——系统管理）；子窗关闭经 ArkTS `notifyWindowClose`→`PENDING_WINDOW_CLOSES` 旁路（openharmony-ability `crates/ability/src/app.rs:1346`）→ tao 事件循环 drain 合成按真实 id 路由的 `CloseRequested`（`platform_impl/ohos/event_loop.rs:1005`）→ 下游走常规 close 链至 `Destroyed`（正确 label）；`MainEvent::WindowDestroy`（onWindowStageDestroy 触发）按自身 window_id 补发 `CloseRequested`+`Destroyed`（多 UIAbility D5/D13）；系统返回键/划任务/杀进程仍不派发 `Destroyed`（LoopDestroyed 兜底） |
 | 请求重绘 | ⚠️ | **`request_redraw` 为空实现**；重绘实际由 `MainEvent::WindowRedraw` 驱动 |
 | 配置获取 | ✅ | `config()` 透传 `OpenHarmonyApp::config()` |
-| 多窗口 | ⚠️ | Float 子窗口可创建（`OHOSWindowKind::Float` + `TypeFloat`），但 `supports_multiple_windows` 仍返回 false，`NewWindowResponse` 缺 `Create` 变体 |
+| 多窗口 | ⚠️ | 子窗口可创建（`OHOSWindowKind::SubWindow` + `createSubWindow`(应用子窗口)）；`supports_multiple_windows` 在 OHOS 上返回 `cfg!(desktop)`（desktop 形态 true，仅 mobile false，crates/tauri/src/app.rs:1190-1193），`NewWindowResponse::Create` 变体已存在（crates/tauri/src/webview/mod.rs:263；on_new_window 全链已通，见 test-mapping「多窗口」行） |
 
 ### 几何与位置
 
@@ -62,7 +63,7 @@
 
 | 能力 | 状态 | 实现说明 |
 |------|------|---------|
-| 窗口最大化 | ❌ | `set_maximized` 空实现，`is_maximized` 返回 false |
+| 窗口最大化 | ✅ | `set_maximized`→`win.maximize(FOLLOW_APP_IMMERSIVE_SETTING)`，`is_maximized` 读位；还原 `recover_window`→`win.recover()`，子窗口路径含位置保持（最大化前快照、还原后回移），详见 test-mapping「窗口最大化」行 |
 | 窗口最小化 | ❌ | `set_minimized` 空实现，`is_minimized` 返回 false |
 | 全屏模式 | ❌ | `set_fullscreen` warn，`fullscreen` 返回 None |
 | 窗口可见性 | ❌ | `set_visible` 空实现，`is_visible` 返回 false |
@@ -73,13 +74,15 @@
 
 ### 装饰按钮可用性
 
+> #238 后契约：装饰按钮 OS 管理、无逐钮控制 API——`set_closable/maximizable/minimizable` 在主窗口直接 Err，仅子窗口经装饰 flag（LocalStorage）控制 SubWindowPage 按钮显隐。
+
 | 能力 | 状态 | 实现说明 |
 |------|------|---------|
-| 窗口可关闭 | ❌ | `set_closable` warn |
-| 窗口可最大化 | ❌ | `set_maximizable` warn |
-| 窗口可最小化 | ❌ | `set_minimizable` warn |
-| 窗口可聚焦 | ❌ | `set_focusable` warn |
-| 窗口可调整大小 | ❌ | `set_resizable` warn |
+| 窗口可关闭 | ✅（#238 收紧） | `set_closable`→`set_window_decoration_flags`(bit0)→LocalStorage：子窗口控制 SubWindowPage 关闭按钮显隐；主窗口 setter 直接 Err，is_closable() 恒 true |
+| 窗口可最大化 | ✅（#238 收紧） | 同上 bit1：子窗口控制 maximize 按钮显隐（flag=false 时 WindowManager.maximizeWindow 拒绝）；主窗口 setter 直接 Err，is_maximizable() 恒 true |
+| 窗口可最小化 | ✅（#238 收紧） | 同上 bit2：子窗口控制 minimize 按钮显隐；主窗口 setter 直接 Err，is_minimizable() 恒 true |
+| 窗口可聚焦 | ✅ | `set_focusable`→`win.setWindowFocusable`（主窗口 id=0 系统管理 no-op）；生效但无视觉变化，判据见 test-mapping「窗口可聚焦」行 |
+| 窗口可调整大小 | ✅ | `set_resizable`→`set_window_decoration_flags`(bit3)：子窗口控制 resize 手柄显隐；主窗口 no-op（resizable 属窗口能力位非装饰按钮，保持可写） |
 
 ### 输入与光标
 
@@ -107,10 +110,10 @@
 
 | 状态 | 数量 | 占比 |
 |------|------|------|
-| ✅ 已支持 | 8 | 21% |
-| ⚠️ 部分支持 | 8 | 21% |
-| ❌ 未支持 | 21 | 55% |
-| ➖ 平台不适用 | 1 | 3% |
+| ✅ 已支持 | 9 | 23.7% |
+| ⚠️ 部分支持 | 8 | 21.1% |
+| ❌ 未支持 | 20 | 52.6% |
+| ➖ 平台不适用 | 1 | 2.6% |
 | 合计 | 38 | 100% |
 
 ---
@@ -120,7 +123,7 @@
 ## 设计原则
 
 1. **桥接层归一**：所有 OHOS `window.Window` 调用必须在 `openharmony-ability/crates/ability/src/window/mod.rs` 新增 Rust 封装 + `ArkHelper.ets` 新增 handler + `WindowManager.ets` 新增方法。tao 层只调 `openharmony-ability`，不直接 NAPI。
-2. **形态分流**：UIAbility 主窗口（window_id=0）受系统管理；Float 子窗口（window_id>0）经 `FloatPage` LocalStorage 驱动 ArkUI 重渲染；桌面专属能力用 `cfg(all(target_env="ohos", desktop))`。
+2. **形态分流**：UIAbility 主窗口（window_id=0）受系统管理；子窗口（window_id>0）经 `SubWindowPage` LocalStorage 驱动 ArkUI 重渲染；桌面专属能力用 `cfg(all(target_env="ohos", desktop))`。
 3. **错误语义对齐 tao**：能做返回 `Ok(())`；OHOS 无对应能力返回 `NotSupportedError`。
 4. **事件回灌**：状态变更通过既有 `MainEvent` 通道上报。
 
@@ -129,7 +132,7 @@
 | 组 | 含义 | 项数 | 优先级 |
 |----|------|------|--------|
 | A | OHOS `window.Window` 有直接等价 API，可立即实现 | 11 | P0 |
-| D | 装饰按钮可用性，依赖 FloatPage LocalStorage | 5 | P1 |
+| D | 装饰按钮可用性，依赖 SubWindowPage LocalStorage | 5 | P1 |
 | E | 输入/光标，OHOS 能力有限 | 6 | P1 |
 | C | 需底层传感器/系统级 API | 4 | P2 |
 | B | 平台不适用或属插件层 | 3 | ➖ |
@@ -142,29 +145,29 @@
 
 | 能力 | 状态 | 预期效果 | 手动按钮 |
 |------|------|---------|---------|
-| set_outer_position | ✅ 已修复 | tao→openharmony-ability→ArkTS moveWindowTo。曾因 napi-ohos bare-tuple bug（多参数被当成 1 个传）不生效，改用 `FnArgs { data: (...) }` 包裹后修复。rigorous 读回测试通过。**限制：主窗口(id=0)由系统管理，moveWindowTo 返回 1300002，静默 no-op；仅 Float 子窗口(id>0)可移动** | setOuterPosition(100,100) |
-| set_inner_size | ✅ 已修复 | 同上，resize_window 经 FnArgs 修复后 win.resize() 真实生效，innerSize 读回向目标靠拢。**限制：主窗口(id=0)由系统管理，resize 返回 1300002（window state abnormal），静默 no-op；仅 Float 子窗口(id>0)可 resize** | setInnerSize(600×400) |
-| drag_window | ❌ 平台限制 | OHOS 无 startWindowMove API；Float 子窗口拖拽由 FloatPage PanGesture 手柄处理 | — |
+| set_outer_position | ✅ 已修复 | tao→openharmony-ability→ArkTS moveWindowTo。曾因 napi-ohos bare-tuple bug（多参数被当成 1 个传）不生效，改用 `FnArgs { data: (...) }` 包裹后修复。rigorous 读回测试通过。**限制：主窗口(id=0)由系统管理，moveWindowTo 返回 1300002，静默 no-op；仅子窗口(id>0)可移动** | setOuterPosition(100,100) |
+| set_inner_size | ✅ 已修复 | 同上，resize_window 经 FnArgs 修复后 win.resize() 真实生效，innerSize 读回向目标靠拢。**限制：主窗口(id=0)由系统管理，resize 返回 1300002（window state abnormal），静默 no-op；仅子窗口(id>0)可 resize** | setInnerSize(600×400) |
+| drag_window | ❌ 平台限制 | OHOS 无 startWindowMove API；子窗口拖拽由 SubWindowPage PanGesture 手柄处理 | — |
 | drag_resize_window | ❌ 平台限制 | OHOS 无 startWindowResize/Direction；同上由手柄处理 | — |
 | set_maximized / is_maximized | ✅ | desktop：窗口最大化填满屏幕 / 还原 | Toggle Maximize |
 | set_minimized / is_minimized | ✅ | 窗口最小化到任务栏；unminimize 恢复 | Minimize (2s restore) |
-| set_visible / is_visible | ✅ | hide：主窗口 hideAbility 后台、子窗口 minimize；show 恢复 | Hide/Show (2s restore) |
+| set_visible / is_visible | ⚠️（show ✅ / hide Err，#237） | show：最小化窗先 restore 再 `showWindow()`（纯抬起，不 un-maximize）；hide：统一 Err（主窗无窗口级 hide 语义，待 A1 `hide_ability`） | 手动 Show 按钮 |
 | set_focus | ✅ | 子窗口 raiseToAppTop 置前；主窗口聚焦系统管理 | setFocus |
 | set_fullscreen / fullscreen | ✅ | 进入沉浸布局（隐藏状态栏/导航条）；退出还原。无独占全屏，映射 Borderless | Toggle Fullscreen |
-| set_always_on_top / is_always_on_top | ✅（API14+） | 真实调用 `setWindowTopmost`（跨应用常驻置顶，需 ohos.permission.WINDOW_TOPMOST，仅主窗口）；<API14 时 no-op 仅记标志。`is_always_on_top` 读值保留；Float 子窗口天然浮于主窗口 | Toggle AlwaysOnTop |
+| set_always_on_top / is_always_on_top | ✅（API14+） | 真实调用 `setWindowTopmost`（跨应用常驻置顶，需 ohos.permission.WINDOW_TOPMOST，仅主窗口）；<API14 时 no-op 仅记标志。`is_always_on_top` 读值保留；子窗口天然浮于主窗口 | Toggle AlwaysOnTop |
 | set_ignore_cursor_events | ✅ | ignore=true 时点击穿透（setWindowTouchable=false），可点到后面窗口 | Toggle IgnoreCursor (3s) |
 
 ### D 组 — 装饰按钮可用性 + focusable
 
 | 能力 | 状态 | 预期效果 | 手动按钮 |
 |------|------|---------|---------|
-| set_closable / is_closable | ✅ | 仅 Float 子窗口：控制 FloatPage 关闭按钮显隐。主窗口 no-op（装饰系统管理），但 isClosable() 状态翻转 | Toggle Closable |
-| set_maximizable / is_maximizable | ✅ | Float 子窗口：控制 maximize 按钮显隐。主窗口 no-op | （同上，在 Float 窗口测） |
-| set_minimizable / is_minimizable | ✅ | Float 子窗口：控制 minimize 按钮显隐。主窗口 no-op | （同上） |
-| set_resizable / is_resizable | ✅ | Float 子窗口：控制 resize 手柄显隐。主窗口 no-op | Toggle Resizable |
+| set_closable / is_closable | ✅（#238 收紧） | 仅子窗口：控制 SubWindowPage 关闭按钮显隐。主窗口 setter 直接 Err（装饰 OS 管理，无逐钮 API），isClosable() 恒 true | Toggle Closable |
+| set_maximizable / is_maximizable | ✅（#238 收紧） | 子窗口：控制 maximize 按钮显隐。主窗口 setter 直接 Err，isMaximizable() 恒 true | （同上，在子窗口测） |
+| set_minimizable / is_minimizable | ✅（#238 收紧） | 子窗口：控制 minimize 按钮显隐。主窗口 setter 直接 Err，isMinimizable() 恒 true | （同上） |
+| set_resizable / is_resizable | ✅ | 子窗口：控制 resize 手柄显隐。主窗口 no-op（resizable 属窗口能力位非装饰按钮，保持可写） | Toggle Resizable |
 | set_focusable | ✅ | setWindowFocusable(false) 后窗口不获取焦点；主/子窗口均有效 | setFocusable(false) (3s) |
 
-> D 组按钮在主窗口点击仅翻转 is*() 状态（无视觉变化）。要观察按钮显隐效果，先用「Create Borderless Window」创建 Float 子窗口，再在其上测试。
+> D 组按钮在主窗口点击直接 Err（#238：装饰按钮 OS 管理，无逐钮控制 API）；is*() 恒 true。要观察按钮显隐效果，先用「Create Borderless Window」创建子窗口，再在其上测试。
 
 ### E 组 — 输入/光标
 
@@ -183,25 +186,25 @@
 - tao: `Window::set_outer_position(&self, Position)`
 - OHOS: `window.Window.moveWindowTo(x, y)`
 - 形态: 通用
-- 改造: `openharmony-ability` 新增 `move_window_to(window_id, x, y)`；ArkTS handler 调 `win.moveWindowTo(x, y)`；tao 用 `scale_factor` 转 physical px 后调用。`FloatPage.ets:74` 已有先例。
+- 改造: `openharmony-ability` 新增 `move_window_to(window_id, x, y)`；ArkTS handler 调 `win.moveWindowTo(x, y)`；tao 用 `scale_factor` 转 physical px 后调用。`SubWindowPage.ets:74` 已有先例。
 
 ### A2 窗口大小调整 `set_inner_size`
 - tao: `Window::set_inner_size(&self, Size)`
 - OHOS: `window.Window.resize(width, height)`
 - 形态: 通用
-- 改造: `resize_window(window_id, w, h)`；`FloatPage.ets:239` 已有先例。
+- 改造: `resize_window(window_id, w, h)`；`SubWindowPage.ets:239` 已有先例。
 
 ### A3 拖拽窗口 `drag_window`
 - tao: `Window::drag_window(&self)`
 - OHOS: **无 `startWindowMove` 公开 API**（SDK 23 / HarmonyOS 6.1 实测 `window.Window` 不导出该方法）
 - 形态: desktop
-- 状态: ❌ 平台限制。Float 子窗口拖拽由 `FloatPage` PanGesture 手柄处理（UI 层），不通过编程式 API 暴露。tao 侧返回 `NotSupportedError`。
+- 状态: ❌ 平台限制。子窗口拖拽由 `SubWindowPage` PanGesture 手柄处理（UI 层），不通过编程式 API 暴露。tao 侧返回 `NotSupportedError`。
 
 ### A4 拖拽调整大小 `drag_resize_window`
 - tao: `Window::drag_resize_window(&self, ResizeDirection)`
 - OHOS: **无 `startWindowResize` / `window.Direction` 枚举**（SDK 23 实测不存在）
 - 形态: desktop
-- 状态: ❌ 平台限制。同 A3，由 `FloatPage` 手柄处理。tao 侧返回 `NotSupportedError`。
+- 状态: ❌ 平台限制。同 A3，由 `SubWindowPage` 手柄处理。tao 侧返回 `NotSupportedError`。
 
 ### A5 窗口最大化 `set_maximized` / `is_maximized`
 - OHOS: `window.Window.maximize()` / `restore()`
@@ -214,9 +217,9 @@
 - 改造: 同 A5 模式。`WindowManager.minimizeWindow` 已存在，复用。
 
 ### A7 窗口可见性 `set_visible` / `is_visible`
-- OHOS: `showWindow()` 存在；**`hideWindow()` 不存在**（SDK 23 实测）
+- OHOS: `showWindow()` 存在；**主窗无窗口级 hide**（`minimize()` 按调用者类型双语义：主窗=任务栏最小化≠hide，子窗/浮窗=hide 可经 showWindow() 恢复；SDK d.ts：`minimize` 为 @since 11、`showWindow` 为 @since 9；#237）
 - 形态: 通用
-- 改造: show → `win.showWindow()`；hide → 主窗口 `context.hideAbility()`，子窗口 `win.minimize()`（OHOS 无独立 hide，minimize 后 showWindow 可恢复）。tao 维护 `AtomicBool`。
+- 改造: show → `win.showWindow()`（最小化窗先 restore）；hide → 统一 Err（#237 契约，待 A1 `hide_ability` 真实现；旧「主窗口 hideAbility、子窗口 minimize」降级已删）。tao 维护 `AtomicBool`。
 
 ### A8 窗口聚焦 `set_focus`
 - OHOS: **`window.Window.focus()` 不存在**；子窗口用 `raiseToAppTop()`（since 14）
@@ -229,7 +232,7 @@
 - 改造: `set_fullscreen(window_id, bool)`；`Fullscreen::Exclusive` OHOS 无对应，统一映射 `Borderless(None)`。
 
 ### A10 窗口置顶 `set_always_on_top` / `is_always_on_top`
-- OHOS: Float 子窗口天然浮于主窗口；跨窗口 z-order 调整
+- OHOS: 子窗口天然浮于主窗口；跨窗口 z-order 调整
 - 形态: desktop
 - 改造: `set_window_z_level(window_id, top)`；`cfg(all(target_env="ohos", desktop))`，mobile 返回 `NotSupportedError`。
 
@@ -244,8 +247,8 @@
 
 `set_closable` / `set_maximizable` / `set_minimizable` / `set_focusable` / `set_resizable`。
 
-OHOS UIAbility 主窗口装饰按钮由系统提供，不可逐项禁用。仅 Float 子窗口可逐项控制。
-- `FloatPage.ets` 已用 `@LocalStorageProp` 响应 `decorations`，新增 `closable`/`maximizable`/`minimizable`/`resizable` 键，按钮 `if (closable)` 条件渲染。
+OHOS UIAbility 主窗口装饰按钮由系统提供，不可逐项禁用。仅子窗口可逐项控制。
+- `SubWindowPage.ets` 已用 `@LocalStorageProp` 响应 `decorations`，新增 `closable`/`maximizable`/`minimizable`/`resizable` 键，按钮 `if (closable)` 条件渲染。
 - `openharmony-ability`: `set_window_decoration_flags(window_id, flags)`，handler 写 LocalStorage。
 - tao: 五个 setter 调之；主窗口静默忽略。
 
@@ -297,12 +300,12 @@ OHOS 无 widget embed 公开 API → 平台限制。
 |------|------|
 | 窗口效果 (vibrancy) | OHOS 无窗口级背景模糊 |
 | 窗口图标 | OHOS 窗口无标题栏图标 |
-| 窗口标题 | UIAbility 标题为应用级；Float 窗口标题可经 FloatPage LocalStorage，低优先级 |
+| 窗口标题 | UIAbility 标题为应用级；子窗口标题可经 SubWindowPage LocalStorage，低优先级 |
 
 ---
 
 ## 用户注意力请求 `request_user_attention`
-OHOS 无直接等价；可用 `@ohos.notificationManager` 或 Float 窗口闪烁。P2，无明确 API 时保留空实现 + warn。
+OHOS 无直接等价；可用 `@ohos.notificationManager` 或子窗口闪烁。P2，无明确 API 时保留空实现 + warn。
 
 ---
 

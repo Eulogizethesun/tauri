@@ -18,7 +18,9 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
   let window_id = match window.window.dispatcher.ohos_window_id() {
     Ok(Some(id)) => id,
     Ok(None) => {
-      log::warn!("[vibrancy] ohos_window_id returned None — tao window_id not set; skipping effects");
+      log::warn!(
+        "[vibrancy] ohos_window_id returned None — tao window_id not set; skipping effects"
+      );
       return;
     }
     Err(e) => {
@@ -55,8 +57,17 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
     _ => window_vibrancy::apply_ohos_blur(window_id, blur_radius),
   };
   match result {
-    Ok(_) => log::info!("[vibrancy] applied effect {:?} to window_id {}", effect, window_id),
-    Err(e) => log::error!("[vibrancy] apply effect {:?} to window_id {} failed: {}", effect, window_id, e),
+    Ok(_) => log::info!(
+      "[vibrancy] applied effect {:?} to window_id {}",
+      effect,
+      window_id
+    ),
+    Err(e) => log::error!(
+      "[vibrancy] apply effect {:?} to window_id {} failed: {}",
+      effect,
+      window_id,
+      e
+    ),
   }
 }
 

@@ -161,7 +161,7 @@ pub fn command(options: Options) -> Result<()> {
 
 /// `#[tauri::mobile_entry_point]` generates an `openharmony_ability_mod`
 /// module registering this app's NAPI entry points (`init`, `render`, ...)
-/// — the ArkTS runtime's only way into the Rust library. Without it the app
+/// -- the ArkTS runtime's only way into the Rust library. Without it the app
 /// fails at runtime with an opaque module-load error, so fail the build
 /// early instead, mirroring the Android check for the
 /// `Java_app_tauri_plugin_PluginManager_handlePluginResponse` symbol.
@@ -169,7 +169,7 @@ pub fn command(options: Options) -> Result<()> {
 /// The registration symbols are Rust-mangled locals, so the static symbol
 /// table is searched for the module-name fragment instead of an exact
 /// symbol. A stripped library (release profile with `strip = true`, which
-/// the tauri workspace itself uses) has no symbol table left to inspect —
+/// the tauri workspace itself uses) has no symbol table left to inspect --
 /// in that case fall back to checking that the NAPI module registration
 /// export is present and log that the entry-point check was skipped.
 const REQUIRED_SYMBOL_FRAGMENT: &str = "openharmony_ability_mod";
@@ -189,7 +189,7 @@ fn validate_lib(path: &Path) -> Result<()> {
 
     if !has_entry_point {
       crate::error::bail!(
-        "Library from {} does not include the required OpenHarmony runtime symbols (missing `{REQUIRED_SYMBOL_FRAGMENT}`). This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        "Library from {} does not include the required OpenHarmony runtime symbols (missing `{REQUIRED_SYMBOL_FRAGMENT}`). This means you are likely missing the entry-point macro usage: either #[cfg_attr(mobile, tauri::mobile_entry_point)] or (OHOS, all device forms) #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] — see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
         path.display()
       );
     }
@@ -210,13 +210,13 @@ fn validate_lib(path: &Path) -> Result<()> {
 
     if !has_napi_module {
       crate::error::bail!(
-        "Library from {} does not export `napi_register_module_v1`; no NAPI module is registered at all. This means you are likely missing the tauri::mobile_entry_point macro usage, see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
+        "Library from {} does not export `napi_register_module_v1`; no NAPI module is registered at all. This means you are likely missing the entry-point macro usage: either #[cfg_attr(mobile, tauri::mobile_entry_point)] or (OHOS, all device forms) #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] — see the documentation for more information: https://v2.tauri.app/start/migrate/from-tauri-1",
         path.display()
       );
     }
 
     log::warn!(
-      "{} is stripped, skipping the mobile_entry_point symbol check",
+      "{} is stripped, skipping the entry-point symbol check",
       path.display()
     );
   }
@@ -239,8 +239,8 @@ fn hdc_forward_port(
       "HDC device list is empty, waiting a few seconds to see if there's any booting device..."
     );
 
-    let max = 5;
-    let mut count = 0;
+    let max = 5i32;
+    let mut count = 0i32;
     loop {
       std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -249,7 +249,7 @@ fn hdc_forward_port(
         break;
       }
 
-      count += 1;
+      count += 1i32;
       if count == max {
         break;
       }

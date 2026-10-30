@@ -308,26 +308,26 @@ mod tests {
 
   #[tokio::test]
   async fn runtime_spawn() {
-    let join = spawn(async { 5 });
-    assert_eq!(join.await.unwrap(), 5);
+    let join = spawn(async { 5i32 });
+    assert_eq!(join.await.unwrap(), 5i32);
   }
 
   #[test]
   fn runtime_block_on() {
-    assert_eq!(block_on(async { 0 }), 0);
+    assert_eq!(block_on(async { 0i32 }), 0i32);
   }
 
   #[tokio::test]
   async fn handle_spawn() {
     let handle = handle();
-    let join = handle.spawn(async { 5 });
-    assert_eq!(join.await.unwrap(), 5);
+    let join = handle.spawn(async { 5i32 });
+    assert_eq!(join.await.unwrap(), 5i32);
   }
 
   #[test]
   fn handle_block_on() {
     let handle = handle();
-    assert_eq!(handle.block_on(async { 0 }), 0);
+    assert_eq!(handle.block_on(async { 0i32 }), 0i32);
   }
 
   #[tokio::test]
@@ -336,7 +336,7 @@ mod tests {
     let join = handle.spawn(async {
       // Here we sleep 1 second to ensure this task to be uncompleted when abort() invoked.
       tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-      5
+      5i32
     });
     join.abort();
     if let crate::Error::JoinError(raw_error) = join.await.unwrap_err() {

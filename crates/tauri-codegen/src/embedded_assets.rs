@@ -29,45 +29,70 @@ type Asset = (AssetKey, (PathBuf, PathBuf));
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EmbeddedAssetsError {
+  /// Failed to read an asset from the filesystem.
   #[error("failed to read asset at {path} because {error}")]
   AssetRead {
+    /// The path of the asset that failed to be read.
     path: PathBuf,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
 
+  /// Failed to write an asset into the embedded byte buffer.
   #[error("failed to write asset from {path} to Vec<u8> because {error}")]
   AssetWrite {
+    /// The path of the asset that failed to be written.
     path: PathBuf,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
 
+  /// Failed to encode the asset content hash as hexadecimal.
   #[error("failed to create hex from bytes because {0}")]
   Hex(std::fmt::Error),
 
+  /// The path being included is not inside the configured prefix directory.
   #[error("invalid prefix {prefix} used while including path {path}")]
-  PrefixInvalid { prefix: PathBuf, path: PathBuf },
+  PrefixInvalid {
+    /// The prefix directory the asset was expected to be under.
+    prefix: PathBuf,
+    /// The path of the offending asset.
+    path: PathBuf,
+  },
 
+  /// The image file has an extension other than `ico` or `png`.
   #[error("invalid extension `{extension}` used for image {path}, must be `ico` or `png`")]
-  InvalidImageExtension { extension: PathBuf, path: PathBuf },
+  InvalidImageExtension {
+    /// The invalid extension that was found.
+    extension: PathBuf,
+    /// The path of the offending image.
+    path: PathBuf,
+  },
 
+  /// Failed to walk the assets directory.
   #[error("failed to walk directory {path} because {error}")]
   Walkdir {
+    /// The path of the directory that failed to be walked.
     path: PathBuf,
+    /// The underlying walkdir error.
     error: walkdir::Error,
   },
 
+  /// The `OUT_DIR` environment variable is not set, meaning there is no build script.
   #[error("OUT_DIR env var is not set, do you have a build script?")]
   OutDir,
 
+  /// Failed to parse a semantic version.
   #[error("version error: {0}")]
   Version(#[from] semver::Error),
 }
 
+/// A result type with the [`EmbeddedAssetsError`] error type.
 pub type EmbeddedAssetsResult<T> = Result<T, EmbeddedAssetsError>;
 
 /// Represent a directory of assets that are compressed and embedded.
 ///
-/// This is the compile time generation of [`tauri_utils::assets::Assets`] from a directory. Assets
+/// This is the compile time generation of `tauri_utils::assets::Assets` from a directory. Assets
 /// from the directory are added as compiler dependencies by dummy including the original,
 /// uncompressed assets.
 ///
@@ -80,6 +105,8 @@ pub struct EmbeddedAssets {
   csp_hashes: CspHashes,
 }
 
+/// The input paths given to the [`EmbeddedAssets`] generation, either a single
+/// directory or a list of directories.
 pub struct EmbeddedAssetsInput(Vec<PathBuf>);
 
 impl From<PathBuf> for EmbeddedAssetsInput {
@@ -248,9 +275,7 @@ impl AssetOptions {
 }
 
 impl EmbeddedAssets {
-  /// Compress a collection of files and directories, ready to be generated into [`Assets`].
-  ///
-  /// [`Assets`]: tauri_utils::assets::Assets
+  /// Compress a collection of files and directories, ready to be generated into `Assets`.
   pub fn new(
     input: impl Into<EmbeddedAssetsInput>,
     options: &AssetOptions,
@@ -294,9 +319,9 @@ impl EmbeddedAssets {
     // they have a good balance of runtime vs size for the respective profile goals.
     // see the "brotli" section of this comment https://github.com/tauri-apps/tauri/issues/3571#issuecomment-1054847558
     if cfg!(debug_assertions) {
-      settings.quality = 2
+      settings.quality = 2i32
     } else {
-      settings.quality = 9
+      settings.quality = 9i32
     }
 
     settings

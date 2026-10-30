@@ -212,7 +212,7 @@ fn run_command(options: Options, noise_level: NoiseLevel, dirs: Dirs) -> Result<
     false,
   )?;
 
-  let plugin_metadata = plugins::inject_plugins(&dirs.tauri, &config.project_dir())?;
+  let plugin_metadata = plugins::inject_plugins(dirs.tauri, &config.project_dir())?;
 
   run_dev(
     interface,
@@ -297,7 +297,7 @@ fn run_dev(
     .context("failed to build OpenHarmony app")?;
 
   let open = options.open;
-  // The watch callback's `options` param (MobileOptions) has no device form —
+  // The watch callback's `options` param (MobileOptions) has no device form --
   // capture it here so resource injection can target the active entry.
   let device_type = options.device_type.clone();
   interface.mobile_dev(

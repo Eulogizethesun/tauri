@@ -7,6 +7,8 @@
 > **级别说明**: T0 = 冒烟必测（核心功能/主流程）；T1 = 重要回归（辅助功能/边界场景）
 >
 > **用途**: 本文档归档 Tauri OHOS 适配的所有手动测试用例，涵盖各模块的必测场景。新模块适配完成后将用例追加至对应章节。
+>
+> **旧名注记（2026-10-29，Round-16 F4）**: 本文件无 OHOSWindowKind 更名兜底注记，特此补一条——`OHOSWindowKind::Float` 已于 ec1a47233（#240）更名为 `OHOSWindowKind::SubWindow`（应用子窗口，经 `windowStage.createSubWindow`，非 OS 级 `WindowType.TYPE_FLOAT`）；活行与章节说明里的「Float 子窗口」「Float 子窗」「Float 窗口」「Float overlay」「float-window」等字样按现名阅读；现行 ArkTS 路由名 `FloatWindow`（openharmony-ability `SubWindowPage.ets` 的 `RouteName`）为活标识符，非改名残留；带日期的根因/修法/仲裁/验证记录块（如 §九/§十九/§二十八/§三十七 各 dated 段）按当时口径保留不动。
 
 ---
 
@@ -246,7 +248,7 @@
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| core | transparent | float-window/透明+无边框 | 创建透明无边框 Float 子窗口 | **T0** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明无边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 验证窗口是否可穿透看到桌面内容 4. 点击窗口内关闭链接关闭子窗口 | ① 新窗口弹出，无标题栏（`decorations: false`） ② 窗口背景透明，可穿透看到桌面内容（`transparent: true`） ③ 窗口内显示半透明黑色卡片，标题 "✨ Transparent + Borderless"，文字 `decorations: false + transparent: true` ④ 窗口底部状态栏显示 `isDecorated: false` ⑤ 点击关闭链接后窗口正常关闭 | Float 子窗口类型；`WindowMode.Float` + `transparent(true)` + `decorations(false)`；内部分配 `window_id = transparency_test_<timestamp>` |
+| core | transparent | float-window/透明+无边框 | 创建透明无边框 Float 子窗口 | **T0** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明无边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 验证窗口是否可穿透看到桌面内容 4. 点击窗口内关闭链接关闭子窗口 | ① 新窗口弹出，无标题栏（`decorations: false`） ② 窗口背景透明，可穿透看到桌面内容（`transparent: true`） ③ 窗口内显示半透明黑色卡片，标题 "✨ Transparent + Borderless"，文字 `decorations: false + transparent: true` ④ 窗口底部状态栏显示 `isDecorated: false` ⑤ 点击关闭链接后窗口正常关闭 | SubWindow 应用子窗口（`ohos_window_kind(OHOSWindowKind::SubWindow)`，经 `createSubWindow`）；builder 链 `transparent(true)` + `decorations(false)`（`create_transparent_borderless_window`，cmd.rs）；label（前端 windowId 参数）= `transparency_test_<timestamp>`（`'transparency_test_' + Date.now()`） |
 | core | transparent | float-window/仅透明有边框 | 创建透明有边框 Float 子窗口 | **T1** | 应用已启动，进入 TransparencyTest 页面 | 1. 点击 "创建透明有边框窗口" 按钮 2. 观察新弹出的子窗口外观 3. 确认窗口有标题栏、背景透明效果可见 4. 点击窗口内关闭链接关闭子窗口 | ① 子窗口有标题栏（`decorations: true` 默认） ② 窗口内容区背景透明，可穿透看到桌面 ③ 窗口内显示 "🪟 Transparent Window" 卡片，底部状态栏显示 `isDecorated: true` ④ 点击关闭链接后窗口正常关闭 | 验证 `transparent: true` 单独使用（不加 `decorations: false`）时 OHOS 表现；标题栏由系统渲染不受 transparent 影响 |
 
 | 模块 | T0 | T1 | 合计 |
@@ -265,7 +267,7 @@
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | core | on_new_window | Allow/弹窗关闭 | Allow dialog 关闭按钮验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Allow dialog has close button (manual)" 2. 观察弹窗外观 3. 点击标题栏 ✕ 按钮 | ① 弹出非模态对话框，标题栏显示目标 URL ② 标题栏右上角有 ✕ 关闭按钮 ③ 点击 ✕ 对话框关闭（hilog `NewWindowDialog: Close button clicked`）④ 对话框内嵌 `Web` 组件**直接加载目标 URL**（`src: params.url`，非空白页） | `openNewWindowDialog` → `openCustomDialog`；Allow 分支先 `setWebController(null)` 取消 ArkWeb 自有弹窗（避免无宿主 controller 阻塞 UI 线程），再由独立 dialog 的 `Web` 加载 targetUrl。注：对话框内嵌 `Web` 占满 90%×80% 区域并消费点击，点外部区域不触发 autoCancel 关闭——须用标题栏 ✕ 关闭 |
 | core | on_new_window | Deny/无弹窗 | Deny 模式阻止弹窗验证 | **T1** | 应用已启动，进入 Tests 页面 | 1. 点击 "on_new_window: Deny prevents dialog (manual)" 2. 观察屏幕 | ① 不弹出任何对话框 ② 页面保持不变，无导航跳转 ③ hilog 可见 `DENY` 日志 | `setWebController(null)` 阻止新窗口 |
-| core | on_new_window | Create/真窗口 | Create real OS window 验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Create (real OS window)" 2. 观察 3. 用 FloatPage 标题栏 ✕ 关闭子窗口 4. 再次点击创建第二个，用系统 X / Ctrl+W 关闭 | ① 弹出独立 OS 子窗口（非页内对话框，Float 类型，挂载 FloatPage 自绘标题栏）② 窗口加载目标 URL ③ 关闭子窗口不影响主应用 ④ hilog 可见 `on_new_window: CREATE real OS window` + `response: Create` ⑤ **两种关闭方式均有** `CloseRequested → Destroyed`：✕ 按钮走 `FloatPage: Close button clicked`→`notifyWindowClose`；系统 X 走 `FloatPage: aboutToDisappear: system close detected`→`notifyWindowClose` ⑥ 关闭时 destroy-window bridge 返回成功（`receiver.await returned`），**无** `destroy_window failed: Unknown OS sub-window` 噪音日志（#2 幂等修复）⑦ 可重复点击创建多个独立子窗口 | `NewWindowResponse::Create` → `WebviewWindowBuilder::build()` → `createOSWindow` → Float 子窗口；OHOS 子窗口无系统装饰，`decorations` 控制的是 FloatPage 内自绘 ✕/最小化/最大化按钮渲染；每次点击创建新窗口（非"不弹对话框"） |
+| core | on_new_window | Create/真窗口 | Create real OS window 验证 | **T0** | 应用已启动，进入 Tests 页面 | 1. 点击 "Create (real OS window)" 2. 观察 3. 用 SubWindowPage 标题栏 ✕ 关闭子窗口 4. 再次点击创建第二个，用系统 X / Ctrl+W 关闭 | ① 弹出独立 OS 子窗口（非页内对话框，SubWindow 类型，挂载 SubWindowPage 自绘标题栏）② 窗口加载目标 URL ③ 关闭子窗口不影响主应用 ④ hilog 可见 `on_new_window: CREATE real OS window` + `response: Create` ⑤ **两种关闭方式均有** `CloseRequested → Destroyed`：✕ 按钮走 `SubWindowPage: Close button clicked`→`notifyWindowClose`；系统 X 走 `SubWindowPage: aboutToDisappear: system close detected`→`notifyWindowClose` ⑥ 关闭时 destroy-window bridge 返回成功（`receiver.await returned`），**无** `destroy_window failed: Unknown OS sub-window` 噪音日志（#2 幂等修复）⑦ 可重复点击创建多个独立子窗口 | `NewWindowResponse::Create` → `WebviewWindowBuilder::build()` → `createOSWindow` → Float 子窗口；OHOS 子窗口无系统装饰，`decorations` 控制的是 SubWindowPage 内自绘 ✕/最小化/最大化按钮渲染；每次点击创建新窗口（非"不弹对话框"） |
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -407,7 +409,7 @@
 > 1. `window.setEffects(Blur/Acrylic) + clearEffects` 不抛错（运行时 setEffects，AttributeUpdater 刷新 backdropBlur/backgroundColor；Mica/Tabbed 系列在 OHOS 上为 no-op 跳过）
 > 2. `create_transparent_window(effect=Blur)` build 时 effects 不抛错（WindowBuilder::effects，registerController inject）
 >
-> 以下为手动用例，通过 Tests 视图的手动按钮触发。vibrancy 窗口用 create_transparent_window（Float 子窗口，避开 UIAbility singleton 冲突）。
+> 以下为手动用例，通过 Tests 视图的手动按钮触发。vibrancy 窗口用 create_transparent_window（`OHOSWindowKind::SubWindow` 应用子窗口；旧注「避开 UIAbility singleton 冲突」为失效口径——tao 现无单例约束，唯一约束为首窗必须 UIAbility，见 doc/多窗口特性实现文档.md 勘误注记）。
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
@@ -754,7 +756,7 @@
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
 | core | decorations | 主窗开关 | Toggle Decorations — 主窗口装饰开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Decorations (main window)" 2. 观察标题栏显隐与 isDecorated 读数 3. 再点恢复 | ① isDecorated 读数翻转（before→after 显示在结果区）② 标题栏视觉随读数变化；若读数翻转但主窗无视觉变化，记录现象（OHOS 主窗为系统管理窗） | 主窗口 setDecorations；结果区显示 `isDecorated: X → Y` |
 | core | decorations | 无装饰子窗 | Create Borderless Window — 纯无边框子窗口 | **T1** | 应用已启动 | 1. 点击 "Create Borderless Window (decorations=false)" 2. 观察子窗口 3. Ctrl+W 关闭 | ① 弹出无标题栏/无拖拽区/无关闭按钮的子窗口 ② 仅深色内容区 + "🖼️ Borderless Window" 文字 ③ 该窗口成为 Set BG 按钮靶窗 | decorations=false（不透明变体）；透明+无边框变体见 §十 T0；无 ✕ 按钮须 Ctrl+W 关闭 |
-| core | decorations | 有装饰子窗 | Create Decorated Window — 带标题栏子窗口（装饰按钮靶窗） | **T0** | 应用已启动 | 1. 点击 "Create Decorated Window (title bar)" 2. 观察标题栏 + 三按钮 3.（可选）点标题栏 □ 最大化再 ❐ 还原 4. 点 ✕ 关闭 | ① FloatPage 自绘标题栏 + 最小化/最大化/关闭按钮 ② 标题显示 "🪟 Decorated Test Window"（setTitle API15+）③ □/❐ 最大化/还原正常且**还原位置不漂移** ④ ✕ 关闭走 CloseRequested→destroy ⑤ 该窗口成为 36.7 装饰按钮靶窗 | 子窗口最大化三连修复（2026-08-27）：`maximizeSupported:true` + recover `moveTo` 回原位 + isMaximized 跳过 startMoving；OHOS 子窗口无系统装饰，decorations 控制的是 FloatPage 自绘按钮渲染 |
+| core | decorations | 有装饰子窗 | Create Decorated Window — 带标题栏子窗口（装饰按钮靶窗） | **T0** | 应用已启动 | 1. 点击 "Create Decorated Window (title bar)" 2. 观察标题栏 + 三按钮 3.（可选）点标题栏 □ 最大化再 ❐ 还原 4. 点 ✕ 关闭 | ① SubWindowPage 自绘标题栏 + 最小化/最大化/关闭按钮 ② 标题显示 "🪟 Decorated Test Window"（setTitle API15+）③ □/❐ 最大化/还原正常且**还原位置不漂移** ④ ✕ 关闭走 CloseRequested→destroy ⑤ 该窗口成为 36.7 装饰按钮靶窗 | 子窗口最大化三连修复（2026-08-27）：`maximizeSupported:true` + recover `moveTo` 回原位 + isMaximized 跳过 startMoving；OHOS 子窗口无系统装饰，decorations 控制的是 SubWindowPage 自绘按钮渲染 |
 
 ### 36.4 Window Background Color
 
@@ -778,7 +780,7 @@
 | ohos | window-ops | 最大化 | Toggle Maximize — 主窗口最大化开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Maximize" 2. 再点还原 | ① 主窗口最大化铺满屏幕 ② isMaximized 读数翻转 ③ 还原后无底部白条 | 作用主窗口；子窗口最大化用其标题栏 □（36.3）；OHOS 用 FOLLOW_APP_IMMERSIVE_SETTING 避免 recover 白条 |
 | ohos | window-ops | 最小化 | Minimize (2s restore) — 最小化自动恢复 | **T1** | 应用已启动 | 1. 点击 "Minimize (2s restore)" 2. 等待 2 秒 | ① 主窗口最小化 ② 2 秒后 `unminimize()` 自动恢复前台 | 与 §二十一 minimize 用例互补（彼为任务栏点击恢复路径，此为 API 自动恢复路径）。系统标题栏最小化为**每窗 session 级对称**（2026-09-16 6.5 修正定性：只隐藏被点窗自身，焦点回落其他窗；此前"按 app 聚合"观察系套件残留窗叠加态特例） |
 | ohos | window-ops | 全屏 | Toggle Fullscreen — 沉浸全屏开关 | **T0** | 应用已启动 | 1. 点击 "Toggle Fullscreen" 2. 再点（或 Esc）还原 | ① 进入沉浸布局：隐藏系统标题栏/Dock/应用菜单栏 ② isFullscreen 读数翻转 ③ 还原完整 | `WindowManager.setFullscreen` 双路径（桌面 maximize(ENTER_IMMERSIVE)+隐藏标题栏/Dock；手机沉浸式）；2026-08-27 三处分裂统一修复（tao 镜像位/菜单栏 inline/菜单回调） |
-| ohos | window-ops | 可见性 | Hide/Show (2s restore) — 主窗口隐藏恢复 | **T0** | 应用已启动 | 1. 点击 "Hide/Show (2s restore)" 2. 等待 2 秒 | ① 主窗口隐藏（窗口最小化退后台）② 2 秒后自动恢复前台，不爆发新窗口 | 窗口级操作（tao `set_visible`）：hide → `minimize_window` 桥调用（主窗 = ArkTS `win.minimize()`；PC/2in1 不走 hideAbility——StartOptions 检查不过）；show → `restore_window`（API14+，minimize 的文档化逆操作）+ `show_window`（raise）。**不经** startAbility/onAcceptWant 实例路由（那是托盘/菜单 showMainAbility 恢复路径的机制）；hide/show 不对称问题三已修（restore 即 minimize 的逆） |
+| ohos | window-ops | 可见性 | Hide/Show (2s restore) — 主窗口 hide 契约拒绝 + minimize 验证 | **T0** | 应用已启动 | 1. 点击 "Hide/Show (2s restore)" 2. 观察拒绝断言与 isVisible 读数 3. 观察 minimize → 1.5s → unminimize | ① 主窗口 hide() 按契约**拒绝**（报错含 "not supported on OpenHarmony"；Eulogizethesun/tauri#241 TR-2：主窗 hide 不支持，**拒绝即正确**）② isVisible() 仍为 true（窗口不消失）③ minimize 后 1.5s `unminimize()` 恢复前台 | 2026-10-28 契约收窄（#241 TR-2）：主窗 hide 在 dispatcher 层拒绝（旧 blanket hide=minimize 已移除）；子窗口 hide 仍走 tao `set_visible`（kind-split，T28-4）。断言失败**无结果面板 FAIL 分类**——wrapManual 只把异常记为 `[ManualTest] Failed: showHide` console.error 行（并随 console log 落盘），由人工按 console 行 + isVisible 读数判定。平台门控（#241 F3）：非 OHOS 平台 hide() 合法 resolve，按钮在该平台自动改走 hide→show 往返分支，不触发拒绝断言 |
 | ohos | window-ops | 置顶 | Toggle AlwaysOnTop — 跨应用置顶 | **T1** | 应用已启动 | 1. 点击 "Toggle AlwaysOnTop (partial)" 2. 切到其他 app（如文件管理器）观察主窗口 | ① isAlwaysOnTop 读数翻转 ② 置顶期间主窗口跨应用常驻最前（不被其他 app 遮挡） | `setWindowTopmost` API14+（WINDOW_TOPMOST 权限）；按钮标注 (partial)——视觉遮挡判定为准 |
 
 ### 36.6 OHOS Window Ops — 多 UIAbility 实例（startAbility）
@@ -792,14 +794,14 @@
 
 ### 36.7 OHOS Window Ops — 装饰按钮（Float 子窗口生效）
 
-> 需先 Create Decorated Window（36.3）。closable 是唯一被 FloatPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable/resizable 写入 LocalStorage 但 FloatPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。
+> 需先 Create Decorated Window（36.3）。closable 是唯一被 SubWindowPage 消费的 flag（控制自绘 ✕ 显隐）；maximizable/minimizable 写入 LocalStorage 但 SubWindowPage 未消费——**无 UI 效果，判定以 is*() 读数翻转 + API 拦截层为准**（tao Rust + ArkTS 双层拦截，问题四修复：flag=false 时相应 API 被拦截）。**resizable 例外（2026-10-28 与 ohos-window-test-mapping.md #46 对齐，旧"写 LocalStorage/无 UI 效果"口径作废）**：运行期双腿——① decoration-flags bit3→LocalStorage（API 拦截层：set_inner_size 的 FLAG_RESIZABLE 门）② set-resize-by-drag deferred 腿→ArkTS 按 windowId===0 路由（主窗 setResizeByDragEnabled API14+ / 子窗 enableDrag API20+，失败仅 log::warn）——**用户可感面=边缘拖拽缩放开关**；创建期 resizable(false) 同样双腿播种（tao seed_creation_attrs）。
 
 | 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
 |---------|---------|---------|---------|---------|---------|---------|---------|------|
-| ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 FloatPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 FloatPage 消费的 flag |
-| ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | FloatPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
+| ohos | decoration-flags | 可关闭 | Toggle Closable — 关闭按钮显隐 | **T0** | 已 Create Decorated Window | 1. 点击 "Toggle Closable" 2. 观察子窗口自绘 ✕ 按钮 3. 再点恢复 | ① isClosable 读数翻转 ② false 时 SubWindowPage 自绘 ✕ 消失（无可点关闭按钮）③ 系统路径 API 层拦截生效 | 唯一被 SubWindowPage 消费的 flag |
+| ohos | decoration-flags | 可最大化 | Toggle Maximizable — 最大化 flag | **T1** | 同上 | 1. 点击 "Toggle Maximizable" | isMaximizable 读数翻转（state-only，无 UI 变化） | SubWindowPage 声明 @LocalStorageProp('maximizable') 但未消费（无最大化按钮） |
 | ohos | decoration-flags | 可最小化 | Toggle Minimizable — 最小化 flag | **T1** | 同上 | 1. 点击 "Toggle Minimizable" | isMinimizable 读数翻转（state-only） | 同上（无最小化按钮） |
-| ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag | **T1** | 同上 | 1. 点击 "Toggle Resizable" | isResizable 读数翻转（state-only） | 真正禁用子窗 resize 需走 enableDrag(false)；本 flag 层为 API 拦截语义 |
+| ohos | decoration-flags | 可调整大小 | Toggle Resizable — 缩放 flag（双腿） | **T1** | 同上 | 1. 点击 "Toggle Resizable" 2. resizable=false 时拖子窗口边缘 3. 再点恢复 | ① isResizable 读数翻转 ② **用户可感**：false 时子窗口边缘拖拽缩放失效（enableDrag(false)），恢复后重新可拖 ③ 程序化 setInnerSize 被拦截（FLAG_RESIZABLE 门，不变） | 双腿（tao set_resizable，2026-10-28 对齐 mapping #46）：bit3→LocalStorage（API 拦截层）+ set-resize-by-drag→子窗（id>0）走 enableDrag（API20+）；用户可感面=边缘拖拽开关；创建期有双腿种子。旧"state-only/需另走 enableDrag"口径作废 |
 | ohos | decoration-flags | 可聚焦 | setFocusable(false) — 拒绝键盘焦点（自验式） | **T0** | 已创建子窗口；**主窗口当前持有焦点**（先点主窗口空白处） | 1. 点击 "setFocusable(false) (3s)" 2. **3 秒内点击子窗口一次** 3. 等自动判定 | ① ✅ PASS：主窗口焦点保持（子窗拒绝焦点点击）② ❌ FAIL：3 秒内主窗焦点丢失（子窗仍抢走焦点） | setWindowFocusable **无视觉变化**（语义=不接受键盘焦点，2026-08-27 A/B 实测定案）；按钮自验（轮询主窗 isFocused 3s 后判定）；程序化 setFocus() 不能用于验证（raiseToAppTop 只抬 z-order 不转移焦点） |
 
 ### 36.8 OHOS Window Ops — 光标
@@ -817,7 +819,7 @@
 | ohos | window-misc | 关闭事件 | CloseRequested — 子窗口关闭事件 | **T0** | 应用已启动 | 1. 点击 "CloseRequested (close sub-window)" | manualResult 显示 `onCloseRequested fired ✓ → PASS`（自动建临时子窗 → 关闭 → 事件回投） | 按钮内部：create close-test-* 透明子窗 → 监听 → 300ms 后 close → 600ms 判定 |
 | ohos | window-misc | 光标锁定 | setCursorGrab — 光标锁定窗口 | **T0** | 应用已启动（API ≥ 22 设备） | 1. 点击 "setCursorGrab(true) 5s (Lock to window)" 2. 5 秒内移动鼠标尝试移出窗口 3.（可选）锁定期间点击其他窗口 4. 等 5 秒自动解锁 | ① 光标被限制在窗口内**无法移出**（窗口内仍可移动）② 点击其他窗口触发失焦自动解锁（光标立即恢复自由）③ 5 秒后自动解锁 | `OH_WindowManager_LockCursor/UnlockCursor` NDK C API 22+（LOCK_WINDOW_CURSOR normal 权限已声明）；dlopen 弱加载，<22 设备降级 NotSupported |
 | ohos | window-misc | 窗口事件 | Watch Window Events — 事件监听 | **T1** | 应用已启动 | 1. 点击 "Watch Window Events" 开启监听 2. 切后台再回来（推荐触发方式）3. 点击 "Stop Watch Window Events" | ① 事件数 > 0 ② Types 含 `Focus=...`（拖动窗口另产生 Moved） | 监听 Resized/Moved/FocusChanged；停止时显示 Total + Types 汇总 |
-| ohos | window-misc | set_bounds | set_bounds round-trip — webview 几何往返 | **T1** | 应用已启动 | 1. 点击 "set_bounds round-trip (webview)" | `set_bounds_test → set_ok=true` → ✓ PASS | webview 层 set position+size 往返（多 webview 场景 naturalLayout 标记） |
+| ohos | window-misc | set_bounds | set_bounds round-trip — webview 几何往返 | **T1** | 应用已启动 | 1. 点击 "set_bounds round-trip (webview)" | `set_bounds_test(label=manual-set-bounds-roundtrip-*) → set_ok=true` → ✓ PASS | webview 层 set position+size 往返；**D2 语义（ohos-webview-sizing）起改在专用显式 bounds 子 webview 上往返**——对主 webview set_bounds 会把自然布局翻转为显式尺寸（陈旧 cache 值 200×200 实证），主内容会被钉死 |
 | ohos | window-misc | 窗口标题 | Set Title — 主窗口标题设置 | **T0** | 应用已启动 | 1. 点击 "Set Title (main window)" 2. 查看主窗口标题栏（可再点循环） | 主窗口标题栏文字循环：🪟 Tauri OHOS 测试标题 → Hello 华为账号 → Tauri OpenHarmony | `setWindowTitle` API15+（标题栏+任务栏可见）；图标不可改（窗口层无运行时 API，module.json5 静态配置） |
 | ohos | window-misc | 最小尺寸 | Set Min Size — 最小尺寸限制 | **T1** | 应用已启动；**放在本组最后测，测完紧接 Reset** | 1. 点击 "Set Min Size 1600×1200 (main window)" 2. 拖拽窗口边缘尝试缩小 | ① 拖拽不能使窗口小于 1600×1200（logical）② 无冻结 | ⚠️ LogicalSize × scale(≈2.0) ≈ 3200×2400px > 屏 3120×2080，按钮自带"可能卡死"历史警告（sizeChange 风暴时期）；serializeOp 队列修复后预期安全；若仍冻结 force-stop 重启后点 Reset Min Size 清除。`setWindowLimits` API11+ |
 | ohos | window-misc | 尺寸上下限 | Set Min+Max — 四值同下修复验证 | **T1** | 应用已启动 | 1. 点击 "Set Min+Max (1600×1200 / 2400×1800 px)" 2.（可选）hilog 搜 WindowManager `setWindowLimits` | ① hilog 两次调用：setMinSize 后 `min=1600×1200 max=0×0`；setMaxSize 后 **min 保留** `min=1600×1200 max=2400×1800`（修复前第二次 min=0×0 丢失）② 拖拽缩不小于 min、放不大于 max | tao set_min/max_inner_size "四值同下"修复；PhysicalSize 直传 px 避免 scale 换算超屏 |
@@ -862,7 +864,78 @@
 
 ---
 
-## 三十八、手动用例统计汇总
+## 三十八、OHOS cursor_position 契约与 app 侧 fail-safe 纪律手动用例
+
+> **背景**: openspec change `ohos-cursor-passthrough`——修复 OHOS 上 `cursor_position` 的两条根因（喂入源单一：Float 子窗宿主 `FloatPage.ets` 无 onMouse，光标在子窗上时快照停在主窗陈旧值；坐标系错位：MainPage 喂 `event.x/y` 组件相对 vp 而消费方按屏幕全局坐标命中测试）并契约化未跟踪 fail-safe（从未喂入 → 类型化 Err 全链传播，JS `cursorPosition()` reject）。改动落 openharmony-ability（ArkTS 喂点 ×2 + `helper/cursor_feed.ets` + `app.rs` 契约）与 tao（`cursor_position_from_app` Err 传播）两仓 fork + tauri 仓测试；**消费方业务代码零改动**（命中测试已按全局坐标写，同步 fork commit 重打 HAR+HAP 即工作）。
+>
+> **契约纪要（交付说明同步项）**：
+> - **语义**：`cursor_position()` 返回**屏幕全局物理 px**（设备屏幕左上角为原点），对齐 tao 上游 `Window::cursor_position`（Windows 实现 `GetCursorPos`）；喂入源为 ArkUI `onMouse` 的 `displayX/displayY`（设备屏幕系 vp，读出 ×scale）。
+> - **未跟踪 Err 契约（R5，行为变化）**：进程从未收到任何鼠标喂入时，`cursor_position` 返回 `Err`（tao 层 `ExternalError::NotSupported`，runtime-wry 映射 `FailedToGetCursorPosition`，tauri 命令 Err，desktop 形态 JS `cursorPosition()` reject；四处公开 Rust API `AppHandle`/`Window`/`Webview`/`WebviewWindow::cursor_position` 同契约透传）。HEAD 上未喂返回 `Ok((0,0))` 垃圾值——与真值不可区分，此为被消除的盲区。
+> - **app 侧 fail-safe 纪律**：捕获 untracked/Err 或坐标不可信 → 一律 `set_ignore_cursor_events(true)`（默认穿透），命中测试匹配才置 touchable。Err **只表示未跟踪**，与穿透链 fire-and-forget 错误通道（reject 不反向通知 Rust）互不影响。
+> - **静止悬停无 Move 属正常（D4/R7）**：穿透生效期间本窗收不到任何鼠标事件（事件落下层窗——其 onMouse 正是喂入源）；光标静止悬停时 Move 不触发，快照值即「到达时」坐标，位置未变、命中判定不受影响。**禁止**以「超过 N 秒未喂」判 stale——悬停 30s 后的点击会被误杀，恰好复刻本 change 修复的故障。
+> - **多显示器已知限制（R4）**：`displayX` 参照系在多显示器 + API<20 下未定论；helper 已留 API≥20 优先 `globalDisplayX` 分支。本 change 验收面为单显 2in1 PC。
+> - **方向 B 备选记录（D6）**：按 `snapshot.interactive` 并集矩形收窗几何、整窗可命中——不进 runtime（圆形工具栏 bbox 四角死区挡下层 canvas 书写窗）；触发条件：①真机仲裁否定 `displayX` 全局语义（R1 fallback）；②工具栏退化为纯矩形侧栏（死区问题消失，可作 app 侧优化自行采纳，runtime 无需配合）。
+
+> **自动化测试位**：
+> - **权威验证位（冷启动未喂 → reject）**：openharmony-ability 设备 UT `cursor_position_with_untracked_feed_returns_untracked_error`（纯函数 `cursor_position_with`，套件无冷启动面故归 UT）+ `cursor_position_with_tracked_feed_multiplies_scale_by_scale`（tracked 分支）+ `cursor_position_with_scale_one_identity_and_fed_zero_is_legal`（守卫矩阵负面位）。
+> - **套件用例**：`@tauri-apps/api/window.cursorPosition`（core.ts，try/catch 双分支容忍性合约——resolve 断言有限数且在 monitor 域内，catch 仅容忍接受不判败）。
+> - **注入式真值用例**：`ohos-adapter.window.cursor-position-freshness`（ohos-adapter.ts，manual 类，segments 0-5 归档于用例体）。
+
+> **注入式验证配方（鼠标模式 uinput，真机 2in1 `3QC0124C11000038` 实测定论）**：
+> - **第 0 步定论（2026-10-19 session 实证）**：`uinput -M -m X Y` 每次调用新建虚拟鼠标、指针从 (0,0) 起步 → **`-m X Y` = 绝对屏幕物理坐标**（`hidumper -s MultimodalInput -a '-c'` 的 lastPhysicalX/Y 读回与注入值逐一相符）；复合动作（move+down+up）必须留在**单次调用**内（`uinput -M -m X Y -d 0 -i 300 -u 0`）以保持同一虚拟鼠标；读回行还有 **windowId 列 = 指针所在窗口**，可与 WMS dump 的 WinId 对照做命中窗口地面真值。负 delta 被 >=0 校验拒绝（绝对语义下无关）。**触摸注入模板（`uinput -T`）废除**——ArkUI onMouse 是鼠标指针语义，触摸注入是否合成 onMouse 未证。降级物理鼠标 manual 协议仅由「`-M` 不可用/语法不符」触发，**「onMouse 无痕」不是降级条件**（红灯阶段无喂入插桩，痕判据不可用）。
+> - **读数回收**：探针/用例的 `console.log` 走 hilog `ARKWEB-CONSOLE` 通道（实测可捕获 INFO 级）：宿主并行 `hdc shell hilog | grep --line-buffered "\[probe\]" > probe-readings.log`。**注意** shell 重定向文件须用绝对路径（宿主 cwd 跨调用重置曾致驱动 watching 错位超时）；外部 truncate 捕获文件会产生稀疏洞，重启捕获更稳。
+> - **时序协调**：以 **hilog 标记同步**（`[probe] PHASE0 begin` / `[probe] PHASE2 float-ready` / `[probe] PHASE3 done`），禁用固定偏移——探针是套件 row 1，以报告行/versionInfo 为 T0 会晚 ~26s 致注入全落空。驱动脚本 `cursor-exercise-driver.sh`（workspace 根，不入库）：tail -F 读数文件 → 等标记 → 注入；主窗 rect 转储必须在 **PHASE0 标记之后**（app 重启间窗位 y 漂移 281/343 实测，禁止复用上进程 dump）。
+> - **保真度仲裁步（分级）**：红灯级 = ①几何地面真值（WMS rect 确认注入点 ∈ 目标窗 rect；MultimodalInput 读回 windowId 交叉验证命中窗口）+ ②响应增量（两个相距 ≥100px 的注入点读数随注入变化）；痕门控级（3.3 完成后）= 同刺激复跑 hilog 出现 `cursor_feed` 喂入痕 ⇒ 归因闭合。**禁止无痕时把读数异常归因喂入链。**
+> - **喂入痕捕获两要点（helper 痕判据的 grep 卫生）**：①**锚定写法** `grep -a "/cursor_feed:"`——`cursor_feed_skip` 含 `cursor_feed` 子串，裸 `grep cursor_feed` 会把 skip 行混入喂入痕计数（喂入行形如 `…/cursor_feed: feed globalDisplayX=(…,…)`——`…` 段为 hilog 时间戳/域渲染（随设备与日志方案而变，DOMAIN=0x1999 的渲染形态勿照抄整串字面量），锚定判据只有 `/cursor_feed:`）；②hilog 须带 **DEBUG 级**（`hdc shell hilog -b D` 或长驻流 `hdc shell "hilog -b D -Q pidoff"`）——helper 痕走 `hilog.debug`，默认 INFO 级缓冲下痕被丢弃，会呈**假性无痕**（灯下黑：真实喂入正常而 grep 落空）。
+> - **地面真值双源**：`hidumper -s WindowManagerService -a '-a'`（窗 rect；Float 子窗 rect 为**屏幕绝对坐标**——[0,0,1140,760] 实测经读回 windowId=子窗 WinId 证实）+ outerPosition 就绪守卫（探针窗实测 outerPosition 恒 (0,0)，与 WMS 一致——创建期 x/y 位置参数被丢弃，`set_position` 已降级 smoke 家族）。
+
+> **HEAD 红灯记录（2026-10-19，红灯阶段判据存档）**：
+> - **UT 编译红（1.1）**：`cargo check -p openharmony-ability --lib --target aarch64-unknown-linux-ohos --tests` → 5×E0425（`cursor_position_with` ×4 + `CursorUntracked` ×1）——纯函数在 HEAD 不存在（设计内红）；行为红并证：HEAD `cursor_position()` 未喂返回 `Ok((0,0))`（探针 P0.0 冷启动读数 0.0,0.0，即被 D3 契约消除的哨兵垃圾值）。
+> - **e2e 读数-注入对照（1.2，驱动 v3，套件 head 39f31aff4 + 8 uncommitted 含探针）**：
+>
+> | 段 | 注入（读回证lastPhysical/windowId） | 读数 | 判定 |
+> |---|---|---|---|
+> | 段0 A | (1750,800) → winId 616=api0 主窗 | (1235.0,449.0) | 读数 = 注入 − (515,351) 组件系——**根因二红**（全局偏差 √(515²+351²)≈623px ≫ 40px） |
+> | 段0 B | (1950,800)（+200,0 vs A） | (1435.0,449.0) | **+200px 精确响应增量 = 刺激已达证**（仲裁②过） |
+> | 段0 A-repeat | (1750,800) | (1235.0,449.0) | 锚点可重复性 |
+> | 冷启动 | 无注入 | (0.0,0.0) | HEAD 未喂 `Ok((0,0))` 哨兵（被消除的盲区） |
+> | 段1 center | (570,380) → winId 618=探针 float 窗 | (1235.0,449.0) 不动 | **根因一红**：光标在子窗上快照停主窗陈旧值 |
+> | SEG-control | (2000,1000) → winId 616=主窗 | (1485.0,649.0) = (2000−515, 1000−351) | **主窗喂入活性对照**（float 点不动非「注入失灵」） |
+> | 段3 quarter | (285,190) → winId 618 | (1485.0,649.0) 不动 | 第二已知点同样不跟随——**freshness 红** |
+> | 段2 press | (570,380)+down+up → winId 618 | (1485.0,649.0) 不动 | HEAD 子窗 Press 无喂入——**红** |
+>
+> - **段 0 几何守卫（残余 finding #1 实测）**：主窗 api0 = [515,281,2090,1394]（本次实测，pid 30535；前 session [515,343,2090,1394]——**y 跨重启漂移，守卫须每次注入前实测量取**）→ 原点模长 ≈587px（前值 619px）≫ 40px，红灯判别式有效。组件系原点 y=351 恒定（窗顶 + 70px≈35vp 标题栏，y=281 时 +70 / y=343 时 +8，内容区原点两次一致）。
+> - **判别弱化明示（1.2 段 1 判别断言）**：探针 float 窗 WMS rect [0,0,1140,760] → 原点模长 0 ≤ 80px；创建期参数（x:400,y:400）已尝试且 hidumper 复核仍 (0,0)（`set_position` 降级家族）→ **「窗内相对假设 vs 全局假设」判别在本窗位上弱化**，不静默视为判别通过；全局系判别由段 0（主窗原点 587px）与 SEG-control 对照承载，green 复跑相若需复立判别应先以可靠手段拉开窗位并 hidumper 复核。
+
+> **green 复跑记录（2026-10-19 21:55，HAP = 实现后 + 探针 45s 超时版，驱动 v3 标记同步）**：
+> - **链路**：ability HAR 21:34（含 helper/cursor_feed.ets）→ HAP 重打安装 → `run-tests.sh` 自动启动套件，watcher 于 Step 3 安装窗口臂动捕获+驱动（捕获先于 aa start ~8s，PHASE0 标记 0.9s 内命中——v1 的 Step-4 触发晚 <1s 漏标记、驱动 90s 超时空转的竞态已修）。
+> - **读数-注入对照（探针读数 ARKWEB-CONSOLE 通道全程捕获）**：
+>
+> | 段 | 注入（读回 winId 地面真值） | 读数 | 判定 |
+> |---|---|---|---|
+> | 冷启动 | 无注入 | P0.0/P0.1 **REJECT** `failed to get cursor position` | **untracked fail-safe 契约真机实证**（HEAD 哨兵 `Ok((0,0))` 已消除；tao NotSupported → runtime `FailedToGetCursorPosition` → JS reject 全链贯通） |
+> | 段0 A | (1750,800) → winId 658 主窗 | (1750.0,800.0) | **读数=注入点零偏差**（≪±40px）——根因二修复 |
+> | 段0 B | (1950,800) | (1950.0,800.0) | +200px 精确响应增量保持 |
+> | 段0 A-repeat | (1750,800) | (1750.0,800.0) | 锚点可重复 |
+> | 段1 center | (1330,1140) → winId 660 float | (1330.0,1140.0)（P2.3 起） | **光标在子窗上读数跟随注入**——根因一修复（R2 归因闭合：痕+读数双证） |
+> | SEG-control | (2000,1000) → winId 658 主窗 | (2000.0,1000.0) | 主窗喂入活性对照 |
+> | 段3 quarter | (1045,950) → winId 660 | (1045.0,950.0) | 第二已知点跟随，判别复立 |
+> | 段2 press | (1330,1140)+down+up 单调用 | (1330.0,1140.0)，P25.x 期间保持稳定 | Press 喂入 + Release 后稳定 |
+> | PHASE2.5 穿透 | (1330,1140) ignore=true → **读回 winId 658 主窗** | P25.0-4 = (1330.0,1140.0) | **穿透端到端实证**：ignore=true 下注入落主窗（WMS windowId 658），主窗喂全局坐标、读数继续跟随——消费方命中测试模式在穿透开启时工作 |
+>
+> - **判别断言（本轮完整成立，不再弱化）**：float rect [760,760,1140,760] 原点模长 ≈1075px ≫ 80px（本轮创建期位置未被丢弃——窗位落位随布局非确定，红灯轮 [0,0,…] 与本轮 [760,760,…] 两次实测不同）；窗内相对假设读数应为 (570,380)，实际 (1330,1140)，与窗内假设之差 = 原点模长 1075px ≥ 1075−80 → **读数跟随物理注入点而非窗内偏移**。
+> - **R1 仲裁（闭合，无需修正）**：喂入痕 `feed globalDisplayX=(注入px/1.9)`（23/23 行）× 读出 ×scale → 读数=注入点**零偏差**——`globalDisplayX` 为**屏幕全局 vp**、设备 scale=1.9 实证（(2000,1000)→痕 (1052.63,526.32)→读数 (2000,1000) 逐一反推自洽），D1「vp 直喂 + 读出乘 scale」语义正确，**「读出侧删乘法」px 修正分支不触发**，「窗口系参照」分支不触发（不移窗段无需回补）。
+> - **R2 仲裁（闭合）**：hilog `cursor_feed: feed` 痕 23 行（0 行 skip）——段 0（主窗）/段 1/3/2（float 窗 winId 660 上的读数跟随）→ FloatPage onMouse 冒泡喂入实证 + 共用 helper 真实路径覆盖（3.2/3.3 生效）。
+> - **段 5（API20+ 字段来源）**：23/23 痕采用字段 = `globalDisplayX`（API 23 设备）✓。
+> - **瞬态注记**：11 行 `feed globalDisplayX=(0,0)` —— 每次注入调用新建虚拟鼠标自 (0,0) 起步，创建瞬态 Move 事件为**真实事件**（指针确曾瞬时在屏原点）被如实喂入；读数窗口（800ms 间隔）内恒被后续目标值覆盖，套件 4.1 用例（probe 之后读 (1045,950)）未受扰。命中测试侧由 ±40px 容差吸收，与撕裂读注记同类（真实事件喂入的固有瞬态，非缺陷）。
+> - **套件结果（同轮）**：308✅/1❌/7⏭——唯一 ❌ `RunEvent::WindowEvent::Destroyed fires` 为 **window-destroy 家族既有 flaky（#291 型）**：21:08 首轮（本 change 产品变更部署前、同探针 HAP）同 row 同错误已 ❌（先于实现存在=非回归），今晨 11:20 前序 change 验证轮 308✅/0❌ 通过——flaky 定性成立；无探针基线（Run B）终判。
+
+| 一级场景 | 二级场景 | 三级场景 | 用例名称 | 用例级别 | 预置条件 | 测试步骤 | 预期结果 | 备注 |
+|---------|---------|---------|---------|---------|---------|---------|------|------|
+| ohos | cursor-passthrough | freshness/全局系 | cursor-position-freshness 注入式真值（段 0-3 真机段）✅ | **T0** | 应用已启动（desktop 形态，含 1.2 探针或等效读数出口）；宿主驱动 `cursor-exercise-driver.sh` + hilog 捕获已就绪；uinput -M 可用 | 1. 启动 hilog `[probe]` 捕获 2. 重启 app 触发套件（探针为 row 1）3. 驱动按 hilog 标记注入：段 0 主窗两点(≥100px)+A-repeat → 段 1 float center → SEG-control 主窗独占点 → 段 3 float 1/4 点 → 段 2 float center press(down+up 单调用) 4. 每注入点以 MultimodalInput 读回证 lastPhysicalX/Y + windowId 5. 拉取读数对照 | **green 复跑相（3.3 后）**：①float 点读数 ≈ 注入点全局坐标(±40px) ②段 0 读数 ≈ 注入点(±40px) ③press 点读数 ≈ 按下点且 Release 后稳定 ④hilog 出现 helper `cursor_feed` 喂入痕(段 0/1/2/3 均有=3.2/3.3 真实路径覆盖) ⑤判别断言复立(需窗位原点模长 >80px,弱化须明示) | **HEAD 红灯 2026-10-19 记录见上表**（读数停主窗陈旧值/组件系值，float 点不跟随）。**green 复跑 2026-10-19 21:55 全部预期断言达成，见上节「green 复跑记录」**（R1 闭合=globalDisplayX 全局 vp×scale 语义正确；R2 闭合=cursor_feed 痕 23 行；判别断言本轮窗位 1075px 完整成立；穿透端到端 winId 658 实证）。R1 仲裁归因按 helper 实际采用字段（API 23 设备 `globalDisplayX`）；若判 px → 读出侧删乘法单点修正后复跑；若判窗口系 → 回补「hidumper 确认窗位真变」移窗段或触发 D6-B 裁定。R2 仲裁：float 点读数更新 + `cursor_feed` 痕 = FloatPage onMouse 冒泡实证；无痕且读数不动 → 修注入/查 R2（DefaultXComponent fallback 位） |
+| ohos | cursor-passthrough | fail-safe | cursorPosition reject → 保持穿透纪律 ✅ | **T1** | 应用已启动；能观察穿透链状态（hilog `setWindowTouchable`） | 1. （冷启动态）调 `cursorPosition()` → reject 2. 演示纪律：catch → `setIgnoreCursorEvents(true)`（默认穿透）3. 任意窗口 Move/Press 后再调 `cursorPosition()` → resolve 全局坐标 4. 验证 Err 只表示未跟踪：穿透链 fire-and-forget 错误与 cursor_position resolve 互不影响 | ①冷启动 reject（权威验证位=设备 UT，套件无冷启动面，catch 为容忍分支不判败）②喂入后 resolve 有限数且在 monitor 域内(+40px) ③fail-safe 纪律演示：命中测试匹配才置 touchable | 段 4（有限数值守卫）**非真机执行段**：`displayX` 声明必填、NaN/undefined 来源不可达（D2），实现期以 debug 变体合成 event 直调 `feedCursorFromMouse` 观察跳过+无痕，或代码走查级。段 5（API20+ 字段来源）：hilog.debug(tag `cursor_feed`) 显示实际采用字段，API 23 设备应为 `globalDisplayX` |
+
+## 三十九、手动用例统计汇总
 
 | 模块 | T0 | T1 | 合计 |
 |------|-----|-----|------|
@@ -921,6 +994,7 @@
 | Key Repeat Detection（key-synthesis 长按/点按） | 2 | 2 | **4** |
 | OHOS — 窗口能力手动按钮（§三十六，ohos-window-test-buttons A 区合并） | 20 | 21 | **41** |
 | OHOS 多 UIAbility 窗口（§三十七，multi-uiability-windows 系统级场景） | 3 | 3 | **6** |
-| **合计** | **121** | **108** | **229** |
+| OHOS — cursor_position 契约与 fail-safe（§三十八，cursor-passthrough 注入式） | 1 | 1 | **2** |
+| **合计** | **122** | **109** | **231** |
 
 > **统计口径（2026-08-27 起）**: 已由自动测试覆盖并验证的用例不保留在本文档（从 §三十 移除 os 七项 + clipboard 三项，断言收紧进 `ohos-gap.ts`）。2026-08-27 逐行实核：此前合计含 4 个幽灵 T0（声称 96/78/174，实际 92/77/173），已按逐节表格行修正为 92/79/171（含本日新增 continuation T1 一例）。同日 Phase 3c 二次实核又发现分项表 6 处与表格行不符（Opener 少计 1 T0、Monitor 多计 1 T0、webPageSnapshot 幽灵行、emit/Channel 多计 1 T1、Accessibility 错记 1 T0 为 T1），已全部修正。2026-08-28 复验期间移除 §二十七 save-state（无法触发的定性用例，1 T1）；同日补 §三十四 screenshot canvas-snapshot（Take Snapshot 接线 bug 修复，1 T0）→ 92 T0 / 79 T1 / 171；key-synthesis 新增 2 T0 + 2 T1。以逐行 grep 实数为准（`grep -cE "\*\*T0\*\*"` / `"\*\*T1\*\*"` 校验行数，勿用 -o 计出现次数）。2026-08-29 移除 §九 Resumed T1（接续目标端白屏修复后由自动测试覆盖，判据 hilog `onWindowStageRestore` 双路径），合计 94 T0 / 81 T1 / 175。2026-08-31 移除 §十八 热键缩放 T1（主窗口默认 opt-in 不响应、flag=true 路径由 §二十七 覆盖，避免误判为缺陷），合计 94 T0 / 80 T1 / 174。2026-09-01 三次实核：分项表 4 处与表格行不符（Monitor 少计 1 T1、biometric 多计 1 T1、haptics/nfc 各多计 1 T0），已按表格行修正——分项行求和现与合计一致（94 T0 / 80 T1 / 174）。2026-09-09 新增 §三十五 Stronghold（1 T0 + 2 T1，快照 scrypt debug ~107s/次归手动档），原 §三十五 统计汇总顺延为 §三十六，合计 95 T0 / 82 T1 / 177；同日三例真机验证通过（HAD-W32 release HAP，release 下快照读写 ~1-2s）。2026-09-15 新增 5 例：§四 Dialog.open (directory)（#99，T0）、§九 预关闭探针（#103，T0）+ danger-mode exit（#100，T0）/ restart（#101，T0）、§二十一 隐私模式（#115，T1），合计 98 T0 / 81 T1 / 179。2026-09-15 新增 §三十六（ohos-window-test-buttons.md A 区"有手动按钮的窗口能力"整体合并入本文件，41 例 = 20 T0 + 21 T1，grep 实核；已由既有章节覆盖的 6 组按钮以交叉引用表列出不计例：透明+无边框→§十、vibrancy→§十九、setFocus→§十八、on_new_window Allow→§十一、IgnoreCursor→§二十八、window-state→§二十一），原统计汇总顺延为 §三十七，合计 115 T0 / 103 T1 / 218（grep 行数实核一致）。合并时剔除源文档两条过时结论（"Run All 触发事件风暴勿跑"已随 serializeOp 修复过时；多 UIAbility 两按钮 "deferred" 已随 multi-uiability-windows Phase 1-5 落地可用）。2026-09-16 新增 §三十七（multi-uiability-windows 系统级场景 6 例 = 3 T0 + 3 T1：每窗最小化/任务卡片切换/IME 差分/tray 恢复目标/二次拉起守护/Float 级联语义；§36.6 两按钮为创建入口不重复计例），原统计汇总顺延为 §三十八，合计 118 T0 / 106 T1 / 224（grep 行数实核一致）。同日修正 §36.5 最小化备注（"按 app 聚合"误读按 6.5 每窗对称定性更正）与 §36.6 实例窗加载页（hello.html，OQ5 定案，非 MainPage）。2026-09-28 新增 1 例：§九 应用层退出确认 Exit Confirm（#103 之上的应用 UX，T1）；移除 1 例：§九 预关闭探针开启态 T0（裸拦截测试由 Exit Confirm 按钮用例取代，关键判据/权限信息已并入该行备注），合计 97 T0 / 82 T1 / 179。2026-09-28 rebase 并轨：上游 2026-09-15/09-28 五例（#99/#100/#101/#103/#115）与本文 §三十五（1 T0/2 T1）、§三十六（20 T0/21 T1）、§三十七（3 T0/3 T1）分谱系并轨，合计 121 T0 / 108 T1 / 229（上游表格行 98/81 为陈旧值，已按逐行 grep 实数修正；首版并轨算式漏计本文 §三十五 Stronghold 3 例，本行已订正）。

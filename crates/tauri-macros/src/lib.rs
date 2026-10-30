@@ -36,8 +36,43 @@ pub fn command(attributes: TokenStream, item: TokenStream) -> TokenStream {
   command::wrapper(attributes, item)
 }
 
+/// Marks the mobile entry point of the application, generating the
+/// platform bootstrap glue around the given function.
 #[proc_macro_attribute]
 pub fn mobile_entry_point(attributes: TokenStream, item: TokenStream) -> TokenStream {
+  mobile::entry_point(attributes, item)
+}
+
+/// OHOS-only alias of [`mobile_entry_point`] -- expands to the exact same
+/// entry-point glue (issue Eulogizethesun/tauri#242).
+///
+/// The OHOS entry contract is the NAPI module the Ability framework loads,
+/// not a mobile `main()` -- on the 2in1 (desktop) device form `cfg(mobile)`
+/// is false, so a lone `#[cfg_attr(mobile, tauri::mobile_entry_point)]`
+/// would silently produce no entry. This alias lets applications write the
+/// two-line form so the name in the source names the actual platform model:
+///
+/// ```rust,ignore
+/// #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
+/// pub fn run() {
+///   tauri::Builder::default().run(tauri::generate_context!()).unwrap();
+/// }
+/// ```
+///
+/// When both attributes are written, the outer expander strips the sibling
+/// from the passthrough function, so exactly one expander emits the glue
+/// items (`stop_unwind`/`_start_app`/`openharmony`) regardless of the
+/// writing order. The attributes must be written as full paths: an aliased
+/// import (`use tauri::ohos::entry_point as x;`) defeats the stripping and
+/// the build fails with E0428.
+///
+/// # Stability
+/// The output of this macro is managed internally by Tauri,
+/// and should not be accessed directly on normal applications.
+/// It may have breaking changes in the future.
+#[proc_macro_attribute]
+pub fn ohos_entry_point(attributes: TokenStream, item: TokenStream) -> TokenStream {
   mobile::entry_point(attributes, item)
 }
 

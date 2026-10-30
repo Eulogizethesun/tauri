@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Binary entry point of the Tauri CLI.
+
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn main() {
   println!("The Tauri CLI is not supported on this platform");

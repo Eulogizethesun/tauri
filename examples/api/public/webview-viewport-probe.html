@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webview viewport probe</title>
+  <style>
+    body {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 8px;
+      background: #fff;
+      color: #222;
+      margin: 0;
+    }
+    #status { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div id="status">webview-viewport-probe: script pending</div>
+  <!-- External script: CSP default-src 'self' has no 'unsafe-inline' (same
+       constraint as iframe-ipc-child.html), so the probe logic lives in
+       webview-viewport-probe.js instead of an inline <script>. -->
+  <script src="webview-viewport-probe.js"></script>
+</body>
+</html>

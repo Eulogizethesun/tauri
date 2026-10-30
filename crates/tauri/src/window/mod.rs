@@ -620,6 +620,13 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   }
 
   /// Sets the window icon.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
+  ///   not consume a window icon during window creation (committer #168);
+  ///   there is no runtime `set_window_icon` on OHOS either, so the icon has
+  ///   no effect for the lifetime of the window.
   pub fn icon(mut self, icon: Image<'a>) -> crate::Result<Self> {
     self.window_builder = self.window_builder.icon(icon.into())?;
     Ok(self)
@@ -932,6 +939,14 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   }
 
   /// Whether the window should be immediately visible upon creation.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
+  ///   not consume a `visible: false` attribute during window creation
+  ///   (committer #168); windows are created visible. Toggle visibility with
+  ///   `Window::set_visible` after
+  ///   creation instead.
   #[must_use]
   pub fn visible(mut self, visible: bool) -> Self {
     self.window_builder = self.window_builder.visible(visible);
@@ -943,6 +958,10 @@ impl<'a, R: Runtime, M: Manager<R>> WindowBuilder<'a, R, M> {
   /// ## Platform-specific
   ///
   /// - **macOS**: Only supported on macOS 10.14+.
+  /// - **OpenHarmony:** Ignored at creation time -- the platform backend does
+  ///   not consume a preferred theme during window creation (committer #168);
+  ///   the window follows the system theme. `Window::set_theme` runtime
+  ///   requests are unaffected.
   #[must_use]
   pub fn theme(mut self, theme: Option<Theme>) -> Self {
     self.window_builder = self.window_builder.theme(theme);
@@ -1004,10 +1023,18 @@ impl<R: Runtime, M: Manager<R>> WindowBuilder<'_, R, M> {
 impl<R: Runtime, M: Manager<R>> WindowBuilder<'_, R, M> {
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: Main window that reuses the existing UIAbility container. Only one can exist (singleton).
-  /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
+  /// - `UIAbility`: a window backed by its own UIAbility instance. The FIRST
+  ///   window of the process must be this kind (it bootstraps the
+  ///   EntryAbility container; a SubWindow has nothing to attach to);
+  ///   subsequent windows may opt in explicitly and take the
+  ///   spawned-instance path.
+  /// - `SubWindow`: Application sub-window created via `windowStage.createSubWindow`,
+  ///   living inside this application's window tree (not the OS-wide floating
+  ///   window type `WindowType.TYPE_FLOAT`).
   ///
-  /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
+  /// Default when not specified: the first window of the process is
+  /// `UIAbility`, any later window is `SubWindow`. Use `SubWindow` for
+  /// sub-windows.
   pub fn ohos_window_kind(mut self, kind: OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
@@ -1669,6 +1696,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available -- the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_maximizable`] /
+  ///   the creation seed.
   pub fn is_maximizable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_maximizable().map_err(Into::into)
   }
@@ -1678,6 +1710,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available -- the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_minimizable`] /
+  ///   the creation seed.
   pub fn is_minimizable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_minimizable().map_err(Into::into)
   }
@@ -1687,6 +1724,11 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** on a UIAbility main window this reads as always
+  ///   available -- the three decoration buttons are OS-managed and carry no
+  ///   per-window state (disclosed reading, issue Eulogizethesun/tauri#238).
+  ///   Sub-windows read the flag last written by [`Self::set_closable`] /
+  ///   the creation seed.
   pub fn is_closable(&self) -> crate::Result<bool> {
     self.window.dispatcher.is_closable().map_err(Into::into)
   }
@@ -1910,11 +1952,27 @@ impl<R: Runtime> Window<R> {
   }
 
   /// Hide this window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** kind-split (issue Eulogizethesun/tauri#237, refined
+  ///   by #241 to match the tao T28-4 contract). On a main window there is no
+  ///   hide semantics: per the SDK d.ts `minimize()` has dual semantics by
+  ///   caller type (main window = taskbar minimize, restored from the dock),
+  ///   and UIAbility-level `hideAbility` is out of reach on PC/2in1 -- the
+  ///   window is left untouched. Sub-windows / floating windows hide for
+  ///   real (the SDK `minimize()` IS the hide primitive there, restored via
+  ///   [`Self::show`]).
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window -- `NotSupported` ("hiding the main window
+  ///   is not supported on OpenHarmony").
   pub fn hide(&self) -> crate::Result<()> {
     self.window.dispatcher.hide().map_err(Into::into)
   }
 
-  /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
+  /// Closes this window. It emits `WindowEvent::CloseRequested` first like a user-initiated close request so you can intercept it.
   ///
   /// ## Platform-specific
   ///
@@ -1923,7 +1981,7 @@ impl<R: Runtime> Window<R> {
   ///   requests through the Web `onWindowExit` event, which the framework
   ///   only registers for script-opened new-window dialogs (`window.open`
   ///   targets). This API (and the JS `getCurrentWindow().close()`) does emit
-  ///   [`crate::RunEvent::CloseRequested`] and honors `prevent_close`.
+  ///   `WindowEvent::CloseRequested` and honors `prevent_close`.
   pub fn close(&self) -> crate::Result<()> {
     self.window.dispatcher.close().map_err(Into::into)
   }
@@ -1933,7 +1991,7 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** like on desktop, `destroy` skips
-  ///   [`crate::RunEvent::CloseRequested`] and tears the window down
+  ///   `WindowEvent::CloseRequested` and tears the window down
   ///   directly. For the main window only the Rust-side lifecycle runs — the
   ///   OS-level ability window is system-managed and an in-app destroy is
   ///   rejected by the bridge (only sub-windows are destroyed OS-level).
@@ -2105,6 +2163,16 @@ impl<R: Runtime> Window<R> {
   ///
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed (`@ohos.window` has no API for these operation-level
+  ///   flags), so calling this on the main window returns an error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind) support
+  ///   the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
     self
       .window
@@ -2118,6 +2186,14 @@ impl<R: Runtime> Window<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed, so calling this on the main window returns an error
+  ///   (issue Eulogizethesun/tauri#238). Sub-windows support the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self
       .window
@@ -2133,6 +2209,14 @@ impl<R: Runtime> Window<R> {
   /// - **Linux:** "GTK+ will do its best to convince the window manager not to show a close button.
   ///   Depending on the system, this function may not have any effect when called on a window that is already visible"
   /// - **iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed, so calling this on the main window returns an error
+  ///   (issue Eulogizethesun/tauri#238). Sub-windows support the flag.
+  ///
+  /// # Errors
+  ///
+  /// - **OpenHarmony:** main window -- `NotSupported` ("setting window buttons
+  ///   on the main window is not supported on OpenHarmony").
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self
       .window
@@ -2221,6 +2305,10 @@ tauri::Builder::default()
   ///
   /// - **Windows**: If using decorations or shadows, you may want to try this workaround <https://github.com/tauri-apps/tao/issues/72#issuecomment-975607891>
   /// - **Linux**: Unsupported
+  /// - **OpenHarmony:** only `Effect::Blur` and `Effect::Acrylic` are applied;
+  ///   `Mica`/`Tabbed` variants are skipped with an info log, and macOS-specific
+  ///   effects fall back to a basic blur approximation. Requires the window to
+  ///   be `transparent` (see `crates/tauri/src/vibrancy/ohos.rs`).
   pub fn set_effects<E: Into<Option<WindowEffectsConfig>>>(&self, effects: E) -> crate::Result<()> {
     let effects = effects.into();
     let window = self.clone();

@@ -3,7 +3,7 @@
 
   let { onMessage } = $props()
 
-  // Test: Create a transparent borderless Float window
+  // Test: Create a transparent borderless SubWindow sub-window
   async function testCreateTransparentWindow() {
     try {
       await invoke('create_transparent_borderless_window', {
@@ -15,7 +15,7 @@
     }
   }
 
-  // Test: Create a transparent Float window with default decorations (bordered)
+  // Test: Create a transparent SubWindow sub-window with default decorations (bordered)
   async function testCreateTransparentBorderedWindow() {
     try {
       await invoke('create_transparent_window', {
@@ -32,7 +32,7 @@
       id: 'create-transparent',
       icon: '🪟',
       title: '创建透明无边框窗口',
-      desc: '创建 Float 子窗口 (transparent: true + decorations: false)，验证窗口背景透明可见桌面内容',
+      desc: '创建 SubWindow 子窗口 (transparent: true + decorations: false)，验证窗口背景透明可见桌面内容',
       fn: testCreateTransparentWindow,
       category: 'manual'
     },
@@ -40,7 +40,7 @@
       id: 'create-transparent-bordered',
       icon: '🪟',
       title: '创建透明有边框窗口',
-      desc: '创建 Float 子窗口 (transparent: true，保留默认 decorations)，验证透明效果在有标题栏时的表现',
+      desc: '创建 SubWindow 子窗口 (transparent: true，保留默认 decorations)，验证透明效果在有标题栏时的表现',
       fn: testCreateTransparentBorderedWindow,
       category: 'manual'
     }
@@ -49,8 +49,8 @@
 
 <div class="transparency-test">
   <p class="desc">
-    WebView 容器透明背景测试。使用 <code>transparent: true</code> 创建 Float 子窗口验证穿透效果。
-    <br><strong>⚠️ OHOS 平台限制：</strong>主窗口 Web 引擎渲染表面不支持透明，仅 Float 子窗口可完整穿透到桌面。
+    WebView 容器透明背景测试。使用 <code>transparent: true</code> 创建 SubWindow 子窗口验证穿透效果。
+    <br><strong>⚠️ OHOS 平台限制：</strong>主窗口 Web 引擎渲染表面不支持透明，仅 SubWindow 子窗口可完整穿透到桌面。
   </p>
 
   <div class="cards">

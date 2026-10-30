@@ -71,6 +71,11 @@ fn main() {
         "get_tracked_menu_events",
         "get_tracked_run_events",
         "clear_tracked_events",
+        // Webview viewport probe pair (openspec ohos-webview-sizing): invoked
+        // from child/sub-window probe pages (capability window "test-*") and
+        // polled from the main window.
+        "track_webview_viewport_probe",
+        "get_tracked_webview_viewport_probes",
         "emit_test_event",
         "setup_app_listener",
         "test_async_spawn",
@@ -106,6 +111,17 @@ fn main() {
         // simply don't exist and the capability entries are inert.
         "fault_injection_set_rule",
         "fault_injection_clear",
+        // #192/#188/#219 committer-issue cases: main-thread url() sync read,
+        // incognito create + per-store cookie probe, tracked set-title ack.
+        "get_webview_url",
+        "navigate_webview_hash",
+        "create_incognito_webview",
+        "incognito_cookie_set",
+        "incognito_cookie_isolation",
+        "set_title_on",
+        // #219 fix-variant M3: tracked-reject probe (unknown-window set-title
+        // through the real ArkTS tracked op chain).
+        "tracked_reject_probe",
       ])),
   )
   .expect("failed to run tauri-build");
@@ -173,8 +189,7 @@ fn link_llvm_profile_runtime() {
   // src-tauri (examples/api/src-tauri → examples/api → tauri).
   // It contains libprofiler_builtins.a extracted from Rust's .rlib.
   let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
-  let profiler_rt_dir = std::path::Path::new(&manifest_dir)
-    .join("../../../profiler-rt");
+  let profiler_rt_dir = std::path::Path::new(&manifest_dir).join("../../../profiler-rt");
   if !profiler_rt_dir.join("libprofiler_builtins.a").exists() {
     println!(
       "cargo:warning=[cov-dump] libprofiler_builtins.a not found in {}",

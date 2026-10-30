@@ -103,6 +103,8 @@ pub use tao::window::{Window, WindowBuilder as TaoWindowBuilder, WindowId as Tao
 pub use wry;
 pub use wry::webview_version;
 
+#[cfg(target_env = "ohos")]
+use wry::WebViewExtOhos;
 #[cfg(windows)]
 use wry::WebViewExtWindows;
 #[cfg(target_os = "android")]
@@ -110,8 +112,6 @@ use wry::{
   prelude::{dispatch, find_class},
   WebViewBuilderExtAndroid, WebViewExtAndroid,
 };
-#[cfg(target_env = "ohos")]
-use wry::WebViewExtOhos;
 #[cfg(not(any(
   target_os = "windows",
   target_os = "macos",
@@ -224,6 +224,7 @@ use std::{
   thread::{current as current_thread, ThreadId},
 };
 
+/// The identifier of a webview within the runtime.
 pub type WebviewId = u32;
 type IpcHandler = dyn Fn(Request<String>) + 'static;
 
@@ -246,28 +247,40 @@ mod window;
 pub use webview::Webview;
 use window::WindowExt as _;
 
+/// A web context shared between webviews, holding the underlying wry context
+/// and bookkeeping about which webviews reference it.
 #[derive(Debug)]
 pub struct WebContext {
+  /// The underlying wry web context.
   pub inner: WryWebContext,
+  /// The labels of the webviews referencing this context.
   pub referenced_by_webviews: HashSet<String>,
   // on Linux the custom protocols are associated with the context
   // and you cannot register a URI scheme more than once
+  /// Custom protocols registered on this web context.
   pub registered_custom_protocols: HashSet<String>,
 }
 
+/// The store of web contexts keyed by their data directory.
 pub type WebContextStore = Arc<Mutex<HashMap<Option<PathBuf>, WebContext>>>;
 // window
+/// The handler type for window events.
 pub type WindowEventHandler = Box<dyn Fn(&WindowEvent) + Send>;
+/// The listener map for window events.
 pub type WindowEventListeners = Arc<Mutex<HashMap<WindowEventId, WindowEventHandler>>>;
+/// The handler type for webview events.
 pub type WebviewEventHandler = Box<dyn Fn(&WebviewEvent) + Send>;
+/// The listener map for webview events.
 pub type WebviewEventListeners = Arc<Mutex<HashMap<WebviewEventId, WebviewEventHandler>>>;
 
+/// The mapping from tao window ids to runtime window ids, shared across threads.
 #[derive(Debug, Clone, Default)]
 pub struct WindowIdStore(Arc<Mutex<HashMap<TaoWindowId, WindowId>>>);
 
 impl WindowIdStore {
+  /// Associates a tao window id with the runtime window id.
   pub fn insert(&self, w: TaoWindowId, id: WindowId) {
-    // On OHOS, WindowId carries the real OHOS window id (0=main, >0=Float
+    // On OHOS, WindowId carries the real OHOS window id (0=main, >0=SubWindow
     // sub-window), so keys are distinct per window. or_insert only guards
     // against an accidental double-insert of the same window.
     #[cfg(target_env = "ohos")]
@@ -280,12 +293,15 @@ impl WindowIdStore {
     }
   }
 
+  /// Returns the runtime window id associated with the given tao window id.
   pub fn get(&self, w: &TaoWindowId) -> Option<WindowId> {
     self.0.lock().unwrap().get(w).copied()
   }
 }
 
 #[macro_export]
+/// Sends the given user message to the main thread and waits for the
+/// response channel.
 macro_rules! getter {
   ($self: ident, $rx: expr, $message: expr) => {{
     $crate::send_user_message(&$self.context, $message)?;
@@ -346,10 +362,14 @@ pub(crate) fn send_user_message<T: UserEvent>(
   }
 }
 
+/// The runtime context shared between dispatchers, holding the window id
+/// map, the event loop proxy and the plugin registry.
 #[derive(Clone)]
 pub struct Context<T: UserEvent> {
+  /// The mapping from tao window ids to runtime window ids.
   pub window_id_map: WindowIdStore,
   main_thread_id: ThreadId,
+  /// Event loop proxy used to send messages to the main thread from any thread.
   pub proxy: TaoEventLoopProxy<Message<T>>,
   main_thread: DispatcherMainThreadContext<T>,
   plugins: Arc<Mutex<Vec<Box<dyn Plugin<T> + Send>>>>,
@@ -358,9 +378,25 @@ pub struct Context<T: UserEvent> {
   next_window_event_id: Arc<AtomicU32>,
   next_webview_event_id: Arc<AtomicU32>,
   webview_runtime_installed: bool,
+  /// OHOS: window id -> is_ui_ability_main, written by the event-loop side
+  /// while the tao window is in hand (single write point inside
+  /// `create_window`). The only reader is the user-thread
+  /// `Context::create_window` constructor (via `ohos_is_ui_ability_main`):
+  /// its tao window is created asynchronously on the event loop, and the OHOS
+  /// reply-channel ordering (`sender.send(Ok)` after the handler ran)
+  /// guarantees the entry exists once `recv()` returns. The event-loop-side
+  /// constructor does not go through the map -- it captures the UIAbility-main
+  /// flag straight from the tao window in hand. Entries are removed
+  /// when the window leaves the store (`on_window_close_ohos`), so the map
+  /// holds at most one entry per live window -- repeated create/destroy of a
+  /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
+  #[cfg(target_env = "ohos")]
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 }
 
 impl<T: UserEvent> Context<T> {
+  /// Runs the closure with access to the main thread context when called
+  /// from the main thread, or `None` from any other thread.
   pub fn run_threaded<R, F>(&self, f: F) -> R
   where
     F: FnOnce(Option<&DispatcherMainThreadContext<T>>) -> R,
@@ -386,6 +422,34 @@ impl<T: UserEvent> Context<T> {
 
   fn next_webview_event_id(&self) -> u32 {
     self.next_webview_event_id.fetch_add(1, Ordering::Relaxed)
+  }
+
+  /// OHOS: record a window's UIAbility-main status at creation time (issue
+  /// Eulogizethesun/tauri#238). Called from `create_window` while the tao
+  /// window is in hand -- before any creation reply is sent, so the
+  /// user-thread dispatcher constructor (the registry's only reader) reads a
+  /// populated entry.
+  #[cfg(target_env = "ohos")]
+  fn ohos_record_main_window(&self, window_id: WindowId, is_ui_ability_main: bool) {
+    self
+      .ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(window_id, is_ui_ability_main);
+  }
+
+  /// OHOS: read a window's recorded UIAbility-main status. Unknown ids read
+  /// as sub-windows (proceed with the dispatch; tao's own main-window gate
+  /// stays the backstop for that degenerate case).
+  #[cfg(target_env = "ohos")]
+  fn ohos_is_ui_ability_main(&self, window_id: WindowId) -> bool {
+    self
+      .ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .get(&window_id)
+      .copied()
+      .unwrap_or(false)
   }
 }
 
@@ -422,7 +486,7 @@ impl<T: UserEvent> Context<T> {
 
     // OHOS: wait for the creation outcome so a failed window creation
     // propagates as an Err to `WebviewWindowBuilder::build` (e.g. tao
-    // rejecting an explicit Float kind for the first window) instead of
+    // rejecting an explicit SubWindow kind for the first window) instead of
     // resolving Ok and registering a label-only zombie window in the
     // manager. Main-thread callers are handled inline by
     // `send_user_message` (the reply is already queued when it returns);
@@ -440,6 +504,11 @@ impl<T: UserEvent> Context<T> {
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.clone(),
+      // The creation reply ordering guarantees the registry entry was written
+      // by the event-loop side before `recv()` returned (issue
+      // Eulogizethesun/tauri#238).
+      #[cfg(target_env = "ohos")]
+      is_ui_ability_main: self.ohos_is_ui_ability_main(window_id),
     };
 
     let detached_webview = webview_id.map(|id| {
@@ -521,6 +590,7 @@ impl ActiveTraceSpanStore {
 }
 
 #[cfg(feature = "tracing")]
+/// An entered tracing span kept alive while a window is being drawn.
 #[derive(Debug)]
 pub enum ActiveTracingSpan {
   WindowDraw {
@@ -529,6 +599,7 @@ pub enum ActiveTracingSpan {
   },
 }
 
+/// The store of windows created by this runtime, keyed by window id.
 #[derive(Debug)]
 pub struct WindowsStore(pub RefCell<BTreeMap<WindowId, WindowWrapper>>);
 
@@ -547,12 +618,17 @@ unsafe impl Sync for WindowsStore {}
 #[derive(Debug)]
 pub struct ExitState(pub AtomicBool);
 
+/// The state owned by the main thread and accessed from dispatchers.
 #[derive(Debug, Clone)]
 pub struct DispatcherMainThreadContext<T: UserEvent> {
+  /// The tao event loop window target used to create windows.
   pub window_target: EventLoopWindowTarget<Message<T>>,
+  /// The shared web context store backing all webviews.
   pub web_context: WebContextStore,
   // changing this to an Rc will cause frequent app crashes.
+  /// The windows created by this runtime, shared with the event loop.
   pub windows: Arc<WindowsStore>,
+  /// Guards against duplicate `ExitRequested` run events.
   pub exit_state: Arc<ExitState>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
@@ -576,6 +652,7 @@ impl<T: UserEvent> fmt::Debug for Context<T> {
   }
 }
 
+/// Wrapper converting the runtime [`DeviceEventFilter`] into the tao one.
 pub struct DeviceEventFilterWrapper(pub TaoDeviceEventFilter);
 
 impl From<DeviceEventFilter> for DeviceEventFilterWrapper {
@@ -588,6 +665,8 @@ impl From<DeviceEventFilter> for DeviceEventFilterWrapper {
   }
 }
 
+/// Wrapper converting a runtime [`Rect`](tauri_runtime::dpi::Rect) into the
+/// wry one.
 pub struct RectWrapper(pub wry::Rect);
 impl From<tauri_runtime::dpi::Rect> for RectWrapper {
   fn from(value: tauri_runtime::dpi::Rect) -> Self {
@@ -610,6 +689,7 @@ impl TryFrom<Icon<'_>> for TaoIcon {
   }
 }
 
+/// Wrapper holding an optional runtime window event converted from tao.
 pub struct WindowEventWrapper(pub Option<WindowEvent>);
 
 impl WindowEventWrapper {
@@ -630,36 +710,37 @@ impl WindowEventWrapper {
         scale_factor: *scale_factor,
         new_inner_size: PhysicalSizeWrapper(**new_inner_size).into(),
       },
-      TaoWindowEvent::Focused(focused) => {
-        #[cfg(not(windows))]
-        return Self(Some(WindowEvent::Focused(*focused)));
+      #[cfg(windows)]
+      TaoWindowEvent::Focused(focused) if window.has_children.load(Ordering::Relaxed) => {
         // on multiwebview mode, if there's no focused webview, it means we're receiving a direct window focus change
         // (without receiving a webview focus, such as when clicking the taskbar app icon or using Alt + Tab)
         // in this case we must send the focus change event here
-        #[cfg(windows)]
-        if window.has_children.load(Ordering::Relaxed) {
-          const FOCUSED_WEBVIEW_MARKER: &str = "__tauriWindow?";
-          let mut focused_webview = window.focused_webview.lock().unwrap();
-          // when we focus a webview and the window was previously focused, we get a blur event here
-          // so on blur we should only send events if the current focus is owned by the window
-          if !*focused
-            && focused_webview
-              .as_deref()
-              .is_some_and(|w| w != FOCUSED_WEBVIEW_MARKER)
-          {
-            return Self(None);
-          }
-
-          // reset focused_webview on blur, or set to a dummy value on focus
-          // (to prevent double focus event when we click a webview after focusing a window)
-          *focused_webview = (*focused).then(|| FOCUSED_WEBVIEW_MARKER.to_string());
-
-          return Self(Some(WindowEvent::Focused(*focused)));
-        } else {
-          // when not on multiwebview mode, we handle focus change events on the webview (add_GotFocus and add_LostFocus)
+        const FOCUSED_WEBVIEW_MARKER: &str = "__tauriWindow?";
+        let mut focused_webview = window.focused_webview.lock().unwrap();
+        // when we focus a webview and the window was previously focused, we get a blur event here
+        // so on blur we should only send events if the current focus is owned by the window
+        if !*focused
+          && focused_webview
+            .as_deref()
+            .is_some_and(|w| w != FOCUSED_WEBVIEW_MARKER)
+        {
           return Self(None);
         }
+
+        // reset focused_webview on blur, or set to a dummy value on focus
+        // (to prevent double focus event when we click a webview after focusing a window)
+        *focused_webview = (*focused).then(|| FOCUSED_WEBVIEW_MARKER.to_string());
+
+        return Self(Some(WindowEvent::Focused(*focused)));
       }
+      #[cfg(not(windows))]
+      TaoWindowEvent::Focused(focused) => {
+        return Self(Some(WindowEvent::Focused(*focused)));
+      }
+      // when not on multiwebview mode, we handle focus change events on the webview
+      // (add_GotFocus and add_LostFocus)
+      #[cfg(windows)]
+      TaoWindowEvent::Focused(_) => return Self(None),
       TaoWindowEvent::ThemeChanged(theme) => WindowEvent::ThemeChanged(map_theme(theme)),
       _ => return Self(None),
     };
@@ -687,6 +768,7 @@ impl WindowEventWrapper {
   }
 }
 
+/// Maps a tao theme to the runtime theme, defaulting to light.
 pub fn map_theme(theme: &TaoTheme) -> Theme {
   match theme {
     TaoTheme::Light => Theme::Light,
@@ -705,6 +787,7 @@ fn tao_activation_policy(activation_policy: ActivationPolicy) -> TaoActivationPo
   }
 }
 
+/// Wrapper around a tao monitor handle that converts into a runtime `Monitor`.
 pub struct MonitorHandleWrapper(pub MonitorHandle);
 
 impl From<MonitorHandleWrapper> for Monitor {
@@ -719,6 +802,7 @@ impl From<MonitorHandleWrapper> for Monitor {
   }
 }
 
+/// Wrapper converting a tao physical position into the runtime one.
 pub struct PhysicalPositionWrapper<T>(pub TaoPhysicalPosition<T>);
 
 impl<T> From<PhysicalPositionWrapper<T>> for PhysicalPosition<T> {
@@ -750,6 +834,7 @@ impl<T> From<LogicalPosition<T>> for LogicalPositionWrapper<T> {
   }
 }
 
+/// Wrapper converting a tao physical size into the runtime one.
 pub struct PhysicalSizeWrapper<T>(pub TaoPhysicalSize<T>);
 
 impl<T> From<PhysicalSizeWrapper<T>> for PhysicalSize<T> {
@@ -781,6 +866,7 @@ impl<T> From<LogicalSize<T>> for LogicalSizeWrapper<T> {
   }
 }
 
+/// Wrapper converting a runtime `Size` into the tao one.
 pub struct SizeWrapper(pub TaoSize);
 
 impl From<Size> for SizeWrapper {
@@ -792,6 +878,7 @@ impl From<Size> for SizeWrapper {
   }
 }
 
+/// Wrapper converting a runtime `Position` into the tao one.
 pub struct PositionWrapper(pub TaoPosition);
 
 impl From<Position> for PositionWrapper {
@@ -803,6 +890,7 @@ impl From<Position> for PositionWrapper {
   }
 }
 
+/// Wrapper converting a runtime `UserAttentionType` into the tao one.
 #[derive(Debug, Clone)]
 pub struct UserAttentionTypeWrapper(pub TaoUserAttentionType);
 
@@ -816,6 +904,7 @@ impl From<UserAttentionType> for UserAttentionTypeWrapper {
   }
 }
 
+/// Wrapper converting a runtime `CursorIcon` into the tao one.
 #[derive(Debug)]
 pub struct CursorIconWrapper(pub TaoCursorIcon);
 
@@ -864,6 +953,7 @@ impl From<CursorIcon> for CursorIconWrapper {
   }
 }
 
+/// Wrapper converting a runtime progress state into the tao one.
 pub struct ProgressStateWrapper(pub TaoProgressState);
 
 impl From<ProgressBarStatus> for ProgressStateWrapper {
@@ -879,6 +969,7 @@ impl From<ProgressBarStatus> for ProgressStateWrapper {
   }
 }
 
+/// Wrapper converting a runtime `ProgressBarState` into the tao one.
 pub struct ProgressBarStateWrapper(pub TaoProgressBarState);
 
 impl From<ProgressBarState> for ProgressBarStateWrapper {
@@ -893,6 +984,7 @@ impl From<ProgressBarState> for ProgressBarStateWrapper {
   }
 }
 
+/// Builder that wraps a tao window builder and accumulates runtime options before creating the window.
 #[derive(Clone, Default)]
 pub struct WindowBuilderWrapper {
   inner: TaoWindowBuilder,
@@ -1134,7 +1226,7 @@ impl WindowBuilder for WindowBuilderWrapper {
   fn prevent_overflow(mut self) -> Self {
     self
       .prevent_overflow
-      .replace(PhysicalSize::new(0, 0).into());
+      .replace(PhysicalSize::new(0i32, 0i32).into());
     self
   }
 
@@ -1434,7 +1526,7 @@ impl WindowBuilder for WindowBuilderWrapper {
     use tao::platform::ohos::WindowBuilderExtOpenHarmony;
     let tao_kind = match kind {
       tauri_runtime::OHOSWindowKind::UIAbility => tao::platform::ohos::OHOSWindowKind::UIAbility,
-      tauri_runtime::OHOSWindowKind::Float => tao::platform::ohos::OHOSWindowKind::Float,
+      tauri_runtime::OHOSWindowKind::SubWindow => tao::platform::ohos::OHOSWindowKind::SubWindow,
     };
     self.inner = self.inner.with_window_kind(tao_kind);
     self
@@ -1489,9 +1581,11 @@ pub struct GtkBox(pub gtk::Box);
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for GtkBox {}
 
+/// Wrapper making a `raw_window_handle::RawWindowHandle` safe to send across threads.
 pub struct SendRawWindowHandle(pub raw_window_handle::RawWindowHandle);
 unsafe impl Send for SendRawWindowHandle {}
 
+/// Messages targeting the application itself rather than a window or webview.
 pub enum ApplicationMessage {
   #[cfg(target_os = "macos")]
   Show,
@@ -1503,28 +1597,50 @@ pub enum ApplicationMessage {
   RemoveDataStore([u8; 16], Box<dyn FnOnce(Result<()>) + Send + 'static>),
 }
 
+/// Messages that can be sent to a window.
 pub enum WindowMessage {
+  /// Registers an event listener on the window.
   AddEventListener(WindowEventId, Box<dyn Fn(&WindowEvent) + Send>),
   // Getters
+  /// Requests the window scale factor.
   ScaleFactor(Sender<f64>),
+  /// Requests the position of the window's client area.
   InnerPosition(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the position of the window's outer frame.
   OuterPosition(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the size of the window's client area.
   InnerSize(Sender<PhysicalSize<u32>>),
+  /// Requests the size of the window's outer frame.
   OuterSize(Sender<PhysicalSize<u32>>),
+  /// Requests whether the window is fullscreen.
   IsFullscreen(Sender<bool>),
+  /// Requests whether the window is minimized.
   IsMinimized(Sender<bool>),
+  /// Requests whether the window is maximized.
   IsMaximized(Sender<bool>),
+  /// Requests whether the window has keyboard focus.
   IsFocused(Sender<bool>),
+  /// Requests whether the window has decorations.
   IsDecorated(Sender<bool>),
+  /// Requests whether the window is resizable.
   IsResizable(Sender<bool>),
+  /// Requests whether the window can be maximized.
   IsMaximizable(Sender<bool>),
+  /// Requests whether the window can be minimized.
   IsMinimizable(Sender<bool>),
+  /// Requests whether the window's close button is enabled.
   IsClosable(Sender<bool>),
+  /// Requests whether the window is visible.
   IsVisible(Sender<bool>),
+  /// Requests the window title.
   Title(Sender<String>),
+  /// Requests the monitor the window is currently on.
   CurrentMonitor(Sender<Option<MonitorHandle>>),
+  /// Requests the primary monitor.
   PrimaryMonitor(Sender<Option<MonitorHandle>>),
+  /// Requests the monitor containing the given point.
   MonitorFromPoint(Sender<Option<MonitorHandle>>, (f64, f64)),
+  /// Requests all monitors available to the window.
   AvailableMonitors(Sender<Vec<MonitorHandle>>),
   #[cfg(all(
     any(
@@ -1552,68 +1668,123 @@ pub enum WindowMessage {
   ActivityName(Sender<String>),
   #[cfg(target_os = "ios")]
   SceneIdentifier(Sender<String>),
+  /// Requests the raw window handle of the window.
   RawWindowHandle(Sender<std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError>>),
+  /// Requests the current theme of the window.
   Theme(Sender<Theme>),
+  /// Requests whether the window accepts input.
   IsEnabled(Sender<bool>),
+  /// Requests whether the window is always on top.
   IsAlwaysOnTop(Sender<bool>),
   // Setters
+  /// Centers the window on its monitor.
   Center,
+  /// Requests the user's attention for the window.
   RequestUserAttention(Option<UserAttentionTypeWrapper>),
+  /// Enables or disables input on the window.
   SetEnabled(bool),
+  /// Sets whether the window is resizable.
   SetResizable(bool),
+  /// Sets whether the window can be maximized.
   SetMaximizable(bool),
+  /// Sets whether the window can be minimized.
   SetMinimizable(bool),
+  /// Sets whether the window can be closed.
   SetClosable(bool),
+  /// Sets the window title.
   SetTitle(String),
+  /// Maximizes the window.
   Maximize,
+  /// Restores a maximized window.
   Unmaximize,
+  /// Minimizes the window.
   Minimize,
+  /// Restores a minimized window.
   Unminimize,
+  /// Shows the window.
   Show,
+  /// Hides the window.
   Hide,
+  /// Closes the window without destroying the webviews it hosts.
   Close,
+  /// Destroys the window.
   Destroy,
+  /// Sets whether the window has decorations.
   SetDecorations(bool),
+  /// Sets whether the window has a drop shadow.
   SetShadow(bool),
+  /// Sets whether the window is always at the bottom of the z-order.
   SetAlwaysOnBottom(bool),
+  /// Sets whether the window is always on top.
   SetAlwaysOnTop(bool),
+  /// Sets whether the window is visible on all workspaces.
   SetVisibleOnAllWorkspaces(bool),
+  /// Sets whether the window content is protected from screen capture.
   SetContentProtected(bool),
+  /// Sets the window size.
   SetSize(Size),
+  /// Sets the minimum window size.
   SetMinSize(Option<Size>),
+  /// Sets the maximum window size.
   SetMaxSize(Option<Size>),
+  /// Sets the window size constraints.
   SetSizeConstraints(WindowSizeConstraints),
+  /// Sets the window position.
   SetPosition(Position),
+  /// Sets whether the window is fullscreen.
   SetFullscreen(bool),
   #[cfg(target_os = "macos")]
   SetSimpleFullscreen(bool),
+  /// Focuses the window.
   SetFocus,
+  /// Sets whether the window can be focused.
   SetFocusable(bool),
+  /// Sets the window icon.
   SetIcon(TaoWindowIcon),
+  /// Sets whether the window is hidden from the taskbar.
   SetSkipTaskbar(bool),
+  /// Sets whether the cursor is confined to the window.
   SetCursorGrab(bool),
+  /// Sets whether the cursor is visible over the window.
   SetCursorVisible(bool),
+  /// Sets the cursor icon over the window.
   SetCursorIcon(CursorIcon),
+  /// Sets the cursor position.
   SetCursorPosition(Position),
+  /// Sets whether the window ignores cursor events.
   SetIgnoreCursorEvents(bool),
+  /// Sets the badge count shown for the window.
   SetBadgeCount(Option<i64>, Option<String>),
+  /// Sets the badge label shown for the window.
   SetBadgeLabel(Option<String>),
+  /// Sets the overlay icon shown on the taskbar icon.
   SetOverlayIcon(Option<TaoIcon>),
+  /// Sets the progress bar state shown on the taskbar icon.
   SetProgressBar(ProgressBarState),
+  /// Sets the title bar style of the window.
   SetTitleBarStyle(tauri_utils::TitleBarStyle),
+  /// Sets the traffic light position of the window.
   SetTrafficLightPosition(Position),
+  /// Sets the window theme.
   SetTheme(Option<Theme>),
+  /// Sets the window background color.
   SetBackgroundColor(Option<Color>),
+  /// Starts dragging the window.
   DragWindow,
+  /// Starts resizing the window in the given direction.
   ResizeDragWindow(tauri_runtime::ResizeDirection),
+  /// Requests a redraw of the window.
   RequestRedraw,
   #[cfg(target_env = "ohos")]
   OhosWindowId(Sender<Option<i64>>),
 }
 
+/// A window event synthesized by the runtime rather than received from tao.
 #[derive(Debug, Clone)]
 pub enum SynthesizedWindowEvent {
+  /// The window gained or lost focus.
   Focused(bool),
+  /// A drag and drop operation happened over the window.
   DragDrop(DragDropEvent),
 }
 
@@ -1627,12 +1798,16 @@ impl From<SynthesizedWindowEvent> for WindowEventWrapper {
   }
 }
 
+/// Messages that can be sent to a webview.
 pub enum WebviewMessage {
+  /// Registers an event listener on the webview.
   AddEventListener(WebviewEventId, Box<dyn Fn(&WebviewEvent) + Send>),
+  /// Evaluates JavaScript in the webview.
   #[cfg(not(all(feature = "tracing", not(target_os = "android"))))]
   EvaluateScript(String),
   #[cfg(all(feature = "tracing", not(target_os = "android")))]
   EvaluateScript(String, Sender<()>, tracing::Span),
+  /// Evaluates JavaScript in the webview and invokes the callback with the result.
   #[cfg(not(all(feature = "tracing", not(target_os = "android"))))]
   EvaluateScriptWithCallback(String, Box<dyn Fn(String) + Send + 'static>),
   #[cfg(all(feature = "tracing", not(target_os = "android")))]
@@ -1642,26 +1817,47 @@ pub enum WebviewMessage {
     Sender<()>,
     tracing::Span,
   ),
+  /// Requests the cookies stored for the given URL.
   CookiesForUrl(Url, Sender<Result<Vec<tauri_runtime::Cookie<'static>>>>),
+  /// Requests all cookies of the webview profile.
   Cookies(Sender<Result<Vec<tauri_runtime::Cookie<'static>>>>),
+  /// Stores a cookie in the webview profile.
   SetCookie(tauri_runtime::Cookie<'static>),
+  /// Deletes a cookie from the webview profile.
   DeleteCookie(tauri_runtime::Cookie<'static>),
+  /// Delivers a webview event to the listeners.
   WebviewEvent(WebviewEvent),
+  /// Delivers a synthesized window event to the webview listeners.
   SynthesizedWindowEvent(SynthesizedWindowEvent),
+  /// Navigates the webview to the given URL.
   Navigate(Url),
+  /// Reloads the webview.
   Reload,
+  /// Opens the print dialog for the webview.
   Print,
+  /// Closes the webview page while keeping its window.
   Close,
+  /// Shows the webview.
   Show,
+  /// Hides the webview.
   Hide,
+  /// Sets the webview position.
   SetPosition(Position),
+  /// Sets the webview size.
   SetSize(Size),
+  /// Sets the webview bounds.
   SetBounds(tauri_runtime::dpi::Rect),
+  /// Focuses the webview.
   SetFocus,
+  /// Moves the webview to another window.
   Reparent(WindowId, Sender<Result<()>>),
+  /// Sets whether the webview resizes together with its window.
   SetAutoResize(bool),
+  /// Sets the zoom level of the webview.
   SetZoom(f64),
+  /// Sets the webview background color.
   SetBackgroundColor(Option<Color>),
+  /// Clears all browsing data of the webview profile.
   ClearAllBrowsingData,
   #[cfg(target_env = "ohos")]
   CreatePdf(
@@ -1670,59 +1866,85 @@ pub enum WebviewMessage {
     Box<dyn Fn(bool) + Send + 'static>,
   ),
   // Getters
+  /// Requests the current URL of the webview.
   Url(Sender<Result<String>>),
+  /// Requests the current bounds of the webview.
   Bounds(Sender<Result<tauri_runtime::dpi::Rect>>),
+  /// Requests the current position of the webview.
   Position(Sender<Result<PhysicalPosition<i32>>>),
+  /// Requests the current size of the webview.
   Size(Sender<Result<PhysicalSize<u32>>>),
+  /// Runs a closure with the platform webview handle.
   WithWebview(Box<dyn FnOnce(Webview) + Send>),
   // Devtools
+  /// Opens the webview devtools.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   OpenDevTools,
+  /// Closes the webview devtools.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   CloseDevTools,
+  /// Requests whether the webview devtools are open.
   #[cfg(any(debug_assertions, feature = "devtools"))]
   IsDevToolsOpen(Sender<bool>),
 }
 
+/// Messages targeting the event loop itself.
 pub enum EventLoopWindowTargetMessage {
+  /// Requests the current cursor position.
   CursorPosition(Sender<Result<PhysicalPosition<f64>>>),
+  /// Sets the theme of the event loop.
   SetTheme(Option<Theme>),
+  /// Sets the filter applied to device events.
   SetDeviceEventFilter(DeviceEventFilter),
 }
 
+/// Closure that builds a window and returns the runtime window id.
 pub type CreateWindowClosure<T> =
   Box<dyn FnOnce(&EventLoopWindowTarget<Message<T>>) -> Result<WindowWrapper> + Send>;
 
+/// Closure that builds a webview and returns the runtime webview id.
 pub type CreateWebviewClosure =
   Box<dyn FnOnce(&Window, CreateWebviewOptions) -> Result<WebviewWrapper> + Send>;
 
+/// Options used when creating a webview through the event loop.
 pub struct CreateWebviewOptions {
+  /// The label of the webview that should receive focus.
   pub focused_webview: Arc<Mutex<Option<String>>>,
 }
 
+/// Messages processed by the tao event loop.
 pub enum Message<T: 'static> {
+  /// Runs a closure on the main thread.
   Task(Box<dyn FnOnce() + Send>),
   #[cfg(target_os = "macos")]
   SetActivationPolicy(ActivationPolicy),
   #[cfg(target_os = "macos")]
   SetDockVisibility(bool),
+  /// Requests the event loop to exit with the given code.
   RequestExit(i32),
+  /// A message targeting the application itself.
   Application(ApplicationMessage),
+  /// A message targeting a window.
   Window(WindowId, WindowMessage),
+  /// A message targeting a webview inside a window.
   Webview(WindowId, WebviewId, WebviewMessage),
+  /// A message targeting the event loop itself.
   EventLoopWindowTarget(EventLoopWindowTargetMessage),
+  /// Creates a webview inside the given window.
   CreateWebview(WindowId, CreateWebviewClosure),
+  /// Creates a window from the given closure.
   CreateWindow(
     WindowId,
     CreateWindowClosure<T>,
-    #[cfg(target_env = "ohos")]
-    Sender<Result<()>>,
+    #[cfg(target_env = "ohos")] Sender<Result<()>>,
   ),
+  /// Creates a window whose raw handle is used without being wrapped.
   CreateRawWindow(
     WindowId,
     Box<dyn FnOnce() -> (String, TaoWindowBuilder) + Send>,
     Sender<Result<Weak<Window>>>,
   ),
+  /// A user event forwarded to the event loop.
   UserEvent(T),
 }
 
@@ -2163,6 +2385,12 @@ impl<T: UserEvent> WebviewDispatch<T> for WryWebviewDispatcher<T> {
 pub struct WryWindowDispatcher<T: UserEvent> {
   window_id: WindowId,
   context: Context<T>,
+  /// OHOS: captured at dispatcher construction (issue
+  /// Eulogizethesun/tauri#238) -- true for UIAbility-container windows whose
+  /// decoration buttons are OS-managed, gating main-window-only operations
+  /// with an Err at this layer.
+  #[cfg(target_env = "ohos")]
+  is_ui_ability_main: bool,
 }
 
 // SAFETY: this is safe since the `Context` usage is guarded on `send_user_message`.
@@ -2401,6 +2629,17 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_enabled(&self, enabled: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // #225: OHOS has no window enabled/disabled API. tao has no
+      // `set_enabled`; the main-thread arm calls the void WindowExt stub
+      // (window/mod.rs:65), so pre-fix the message was dispatched and
+      // no-op'd there (nothing errored, nothing discarded) -- fail at the
+      // dispatcher so the caller sees it.
+      let _ = enabled;
+      return Err(ohos_unsupported("setEnabled"));
+    }
+    #[cfg(not(target_env = "ohos"))]
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetEnabled(enabled)),
@@ -2408,6 +2647,23 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_maximizable(&self, maximizable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238: the UIAbility main window's three
+      // decoration buttons are OS-managed (@ohos.window has no API for these
+      // operation-level flags: per-button visibility via
+      // setWindowTitleButtonVisible (API 14+) and style injection via
+      // setDecorButtonStyle exist, but neither disables the operations) --
+      // fail at the dispatcher so the caller sees the Err
+      // (the message handlers discard tao Results; tao only log::errors).
+      // Sub-windows dispatch normally: the flags drive their buttons.
+      if self.is_ui_ability_main {
+        let _ = maximizable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetMaximizable(maximizable)),
@@ -2415,6 +2671,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_minimizable(&self, minimizable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238 -- see set_maximizable.
+      if self.is_ui_ability_main {
+        let _ = minimizable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetMinimizable(minimizable)),
@@ -2422,6 +2688,16 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn set_closable(&self, closable: bool) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#238 -- see set_maximizable.
+      if self.is_ui_ability_main {
+        let _ = closable;
+        return Err(ohos_unsupported(
+          "setting window buttons on the main window",
+        ));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::SetClosable(closable)),
@@ -2471,6 +2747,27 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 
   fn hide(&self) -> Result<()> {
+    #[cfg(target_env = "ohos")]
+    {
+      // Issue Eulogizethesun/tauri#237 (+ #241 kind-split): per the
+      // @ohos.window SDK d.ts, minimize() has dual semantics by caller type:
+      // on a MAIN window it minimizes to the taskbar (not hide; restored from
+      // the dock), while on sub-windows / floating windows it hides the
+      // window (restorable via showWindow(), @since 9; minimize itself is
+      // @since 11). So the main window
+      // has no hide semantics at all (UIAbility-level hideAbility is out of
+      // reach on PC/2in1 until the A1 entitlement) and fails at the
+      // dispatcher -- the message handlers intentionally discard tao Results,
+      // so this is the only layer the caller sees (same pattern as setEnabled
+      // #225). Sub-windows fall through to tao, whose `set_visible(false)` is
+      // THE hide primitive for them (tao T28-4 restores the kind-split); the
+      // former blanket Err regressed every sub-window hide (issue
+      // Eulogizethesun/tauri#241, aligned with the driver-generated
+      // float.hide+show+center contract).
+      if self.is_ui_ability_main {
+        return Err(ohos_unsupported("hiding the main window"));
+      }
+    }
     send_user_message(
       &self.context,
       Message::Window(self.window_id, WindowMessage::Hide),
@@ -2762,7 +3059,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
     #[cfg(target_env = "ohos")]
     {
       // OHOS startMoving must be called from inside a touch-down callback
-      // (FloatPage title bar) — it cannot work from a command context.
+      // (SubWindowPage title bar) -- it cannot work from a command context.
       // tao's drag_window is a documented no-op returning Ok.
       return Err(ohos_unsupported("startDragging"));
     }
@@ -2896,6 +3193,7 @@ impl<T: UserEvent> WindowDispatch<T> for WryWindowDispatcher<T> {
   }
 }
 
+/// A webview handle held by the main thread context.
 #[derive(Clone)]
 pub struct WebviewWrapper {
   label: String,
@@ -2945,6 +3243,7 @@ impl Drop for WebviewWrapper {
   }
 }
 
+/// A window and its webviews held by the main thread context.
 pub struct WindowWrapper {
   label: String,
   inner: Option<Arc<Window>>,
@@ -2963,6 +3262,7 @@ pub struct WindowWrapper {
 }
 
 impl WindowWrapper {
+  /// Returns the label of the window.
   pub fn label(&self) -> &str {
     &self.label
   }
@@ -2977,6 +3277,7 @@ impl fmt::Debug for WindowWrapper {
   }
 }
 
+/// Event loop proxy that sends user events through the runtime message channel.
 #[derive(Debug, Clone)]
 pub struct EventProxy<T: UserEvent>(TaoEventLoopProxy<Message<T>>);
 
@@ -2993,12 +3294,17 @@ impl<T: UserEvent> EventLoopProxy<T> for EventProxy<T> {
   }
 }
 
+/// Factory that builds a runtime plugin from the runtime context.
 pub trait PluginBuilder<T: UserEvent> {
+  /// The plugin type produced by this builder.
   type Plugin: Plugin<T>;
+  /// Builds the plugin with the given runtime context.
   fn build(self, context: Context<T>) -> Self::Plugin;
 }
 
+/// Extension hook that observes runtime events on the main thread.
 pub trait Plugin<T: UserEvent> {
+  /// Called for each runtime event; returns `true` when the event was handled.
   fn on_event(
     &mut self,
     event: &Event<Message<T>>,
@@ -3071,6 +3377,7 @@ impl<T: UserEvent> WryHandle<T> {
     Ok(())
   }
 
+  /// Registers a runtime plugin.
   pub fn plugin<P: PluginBuilder<T> + 'static>(&mut self, plugin: P)
   where
     <P as PluginBuilder<T>>::Plugin: Send,
@@ -3309,6 +3616,8 @@ impl<T: UserEvent> Wry<T> {
       next_window_event_id: Default::default(),
       next_webview_event_id: Default::default(),
       webview_runtime_installed: wry::webview_version().is_ok(),
+      #[cfg(target_env = "ohos")]
+      ohos_main_window_registry: Default::default(),
     };
 
     Ok(Self {
@@ -3393,6 +3702,19 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
     let dispatcher = WryWindowDispatcher {
       window_id,
       context: self.context.clone(),
+      // The tao window is in hand on this (event-loop) path: capture the
+      // UIAbility-main flag straight from it rather than via the registry
+      // (issue Eulogizethesun/tauri#238). The registry read stays for the
+      // user-thread constructor, whose tao window is created asynchronously.
+      #[cfg(target_env = "ohos")]
+      is_ui_ability_main: window
+        .inner
+        .as_ref()
+        .map(|w| {
+          use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};
+          w.window_kind() == OHOSWindowKind::UIAbility
+        })
+        .unwrap_or(false),
     };
 
     self
@@ -3666,6 +3988,12 @@ where
   let active_tracing_spans = runtime.context.main_thread.active_tracing_spans.clone();
   let proxy = runtime.event_loop.create_proxy();
 
+  // OHOS: the close path drops the window's UIAbility-main registry entry
+  // (issue Eulogizethesun/tauri#241); thread the shared map through the
+  // iteration context.
+  #[cfg(target_env = "ohos")]
+  let ohos_main_window_registry = runtime.context.ohos_main_window_registry.clone();
+
   move |event, event_loop, control_flow| {
     for p in plugins.lock().unwrap().iter_mut() {
       let prevent_default = p.on_event(
@@ -3678,6 +4006,8 @@ where
           window_id_map: window_id_map.clone(),
           windows: windows.clone(),
           exit_state: exit_state.clone(),
+          #[cfg(target_env = "ohos")]
+          ohos_main_window_registry: ohos_main_window_registry.clone(),
           #[cfg(feature = "tracing")]
           active_tracing_spans: active_tracing_spans.clone(),
         },
@@ -3696,6 +4026,8 @@ where
         window_id_map: window_id_map.clone(),
         windows: windows.clone(),
         exit_state: exit_state.clone(),
+        #[cfg(target_env = "ohos")]
+        ohos_main_window_registry: ohos_main_window_registry.clone(),
         #[cfg(feature = "tracing")]
         active_tracing_spans: active_tracing_spans.clone(),
       },
@@ -3703,11 +4035,21 @@ where
   }
 }
 
+/// Context passed to the plugins on each event loop iteration.
 pub struct EventLoopIterationContext<'a, T: UserEvent> {
+  /// The user callback invoked with each runtime event.
   pub callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
+  /// The mapping from tao window ids to runtime window ids.
   pub window_id_map: WindowIdStore,
+  /// The windows created by this runtime.
   pub windows: Arc<WindowsStore>,
+  /// Guards against duplicate `ExitRequested` run events.
   pub exit_state: Arc<ExitState>,
+  /// OHOS: window id -> is_ui_ability_main registry, threaded to the close
+  /// path so a window's entry is dropped when it leaves the store (issue
+  /// Eulogizethesun/tauri#241).
+  #[cfg(target_env = "ohos")]
+  pub ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
 }
@@ -3987,7 +4329,11 @@ fn handle_user_message<T: UserEvent>(
             let _ = window.set_skip_taskbar(skip);
           }
           WindowMessage::SetCursorGrab(grab) => {
-            let _ = window.set_cursor_grab(grab);
+            // #178: the failure used to be silently discarded (`let _ =`);
+            // log-only change, the discarded Result semantics are unchanged.
+            if let Err(e) = window.set_cursor_grab(grab) {
+              log::warn!("failed to set cursor grab: {e}");
+            }
           }
           WindowMessage::SetCursorVisible(visible) => {
             window.set_cursor_visible(visible);
@@ -4276,48 +4622,113 @@ fn handle_user_message<T: UserEvent>(
               log::error!("failed to set webview size: {e}");
             }
           }
-          WebviewMessage::SetSize(size) => match webview.bounds() {
-            Ok(mut bounds) => {
-              bounds.size = size;
-
+          WebviewMessage::SetSize(size) => {
+            // Only the size component is being set. Back-filling the position
+            // from `webview.bounds()` would read wry's bounds cache, which for
+            // a natural-layout (bounds-less) webview holds the upstream
+            // `WebViewAttributes` default 200x200 placeholder -- never live
+            // geometry -- so the call would write a placeholder position into
+            // the render layer and flip the webview away from container
+            // layout (issue Eulogizethesun/tauri#241). On OHOS the unset
+            // component is sent as the cross-repo sentinel instead
+            // (`ohos_unspecified_position`, skipped by the ArkTS render
+            // layer), leaving the live position untouched. Other platforms
+            // keep the previous behavior: there `bounds()` returns real
+            // geometry, so preserving it is correct.
+            #[cfg(target_env = "ohos")]
+            {
               let scale_factor = window.scale_factor();
-              let size = size.to_logical::<f32>(scale_factor);
+              let logical_size = size.to_logical::<f32>(scale_factor);
 
               if let Some(b) = &mut *webview.bounds.lock().unwrap() {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                b.width_rate = size.width / window_size.width;
-                b.height_rate = size.height / window_size.height;
+                b.width_rate = logical_size.width / window_size.width;
+                b.height_rate = logical_size.height / window_size.height;
               }
 
-              if let Err(e) = webview.set_bounds(bounds) {
+              if let Err(e) = webview.set_bounds(wry::Rect {
+                position: ohos_unspecified_position(),
+                size,
+              }) {
                 log::error!("failed to set webview size: {e}");
               }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
-            }
-          },
-          WebviewMessage::SetPosition(position) => match webview.bounds() {
-            Ok(mut bounds) => {
-              bounds.position = position;
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(mut bounds) => {
+                bounds.size = size;
 
+                let scale_factor = window.scale_factor();
+                let size = size.to_logical::<f32>(scale_factor);
+
+                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                  let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                  b.width_rate = size.width / window_size.width;
+                  b.height_rate = size.height / window_size.height;
+                }
+
+                if let Err(e) = webview.set_bounds(bounds) {
+                  log::error!("failed to set webview size: {e}");
+                }
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
+            }
+          }
+          WebviewMessage::SetPosition(position) => {
+            // Only the position component is being set. Back-filling the size
+            // from `webview.bounds()` would read wry's bounds cache, which for
+            // a natural-layout (bounds-less) webview holds the
+            // `WebViewAttributes` default (200x200) -- the call would shrink
+            // the webview to 200x200 and flip it away from container layout
+            // (issue Eulogizethesun/tauri#241). On OHOS the unset component is
+            // sent as the cross-repo sentinel instead
+            // (`ohos_unspecified_size`, skipped by the ArkTS render layer),
+            // leaving the live size untouched. Other platforms keep the
+            // previous behavior: there `bounds()` returns real geometry, so
+            // preserving it is correct.
+            #[cfg(target_env = "ohos")]
+            {
               let scale_factor = window.scale_factor();
-              let position = position.to_logical::<f32>(scale_factor);
+              let logical_position = position.to_logical::<f32>(scale_factor);
 
               if let Some(b) = &mut *webview.bounds.lock().unwrap() {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                b.x_rate = position.x / window_size.width;
-                b.y_rate = position.y / window_size.height;
+                b.x_rate = logical_position.x / window_size.width;
+                b.y_rate = logical_position.y / window_size.height;
               }
 
-              if let Err(e) = webview.set_bounds(bounds) {
+              if let Err(e) = webview.set_bounds(wry::Rect {
+                position,
+                size: ohos_unspecified_size(),
+              }) {
                 log::error!("failed to set webview position: {e}");
               }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(mut bounds) => {
+                bounds.position = position;
+
+                let scale_factor = window.scale_factor();
+                let position = position.to_logical::<f32>(scale_factor);
+
+                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                  let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                  b.x_rate = position.x / window_size.width;
+                  b.y_rate = position.y / window_size.height;
+                }
+
+                if let Err(e) = webview.set_bounds(bounds) {
+                  log::error!("failed to set webview position: {e}");
+                }
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
             }
-          },
+          }
           WebviewMessage::SetZoom(scale_factor) => {
             if let Err(e) = webview.zoom(scale_factor) {
               log::error!("failed to set webview zoom: {e}");
@@ -4426,27 +4837,60 @@ fn handle_user_message<T: UserEvent>(
               log::error!("failed to focus webview: {e}");
             }
           }
-          WebviewMessage::SetAutoResize(auto_resize) => match webview.bounds() {
-            Ok(bounds) => {
-              let scale_factor = window.scale_factor();
-              let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-              *webview.bounds.lock().unwrap() = if auto_resize {
-                let size = bounds.size.to_logical::<f32>(scale_factor);
-                let position = bounds.position.to_logical::<f32>(scale_factor);
-                Some(WebviewBounds {
-                  x_rate: position.x / window_size.width,
-                  y_rate: position.y / window_size.height,
-                  width_rate: size.width / window_size.width,
-                  height_rate: size.height / window_size.height,
-                })
-              } else {
-                None
-              };
+          WebviewMessage::SetAutoResize(auto_resize) => {
+            #[cfg(target_env = "ohos")]
+            {
+              // Disabling always clears the runtime rates. Enabling does NOT
+              // source the base rect from `webview.bounds()`: that cache holds
+              // the `WebViewAttributes` default (200x200) for a natural-layout
+              // webview and sentinel components after a partial
+              // set_size/set_position, so rates derived from it would pin or
+              // shrink the webview on the next window resize (issue
+              // Eulogizethesun/tauri#241). A webview already armed keeps its
+              // live rates (maintained by the SetBounds/SetSize/SetPosition
+              // handlers); a natural-layout webview needs none -- it follows
+              // the window through container layout -- and the auto-resize
+              // base for a webview armed after creation is read from the
+              // actual layout by the ArkTS render layer (cross-repo contract,
+              // openharmony-ability WebviewPlugin.ets).
+              //
+              // KNOWN LIMITATION (issue Eulogizethesun/tauri#241): a disable
+              // followed by an enable permanently de-arms an explicit-bounds
+              // webview on OHOS. The disable clears the rate cache below, the
+              // enable leg stays a no-op (deliberately, see above), and the
+              // Resized handler only re-fires while the cache is `Some`, so
+              // the webview stops following window resizes for good. Desktop
+              // re-arms (its enable leg re-derives the rates from the live
+              // bounds). Re-arming would need a rate re-derivation from the
+              // live layout or an ArkTS-side re-derive; both are out of scope
+              // for this fix wave and are disclosed rather than fixed here.
+              if !auto_resize {
+                *webview.bounds.lock().unwrap() = None;
+              }
             }
-            Err(e) => {
-              log::error!("failed to get webview bounds: {e}");
+            #[cfg(not(target_env = "ohos"))]
+            match webview.bounds() {
+              Ok(bounds) => {
+                let scale_factor = window.scale_factor();
+                let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                *webview.bounds.lock().unwrap() = if auto_resize {
+                  let size = bounds.size.to_logical::<f32>(scale_factor);
+                  let position = bounds.position.to_logical::<f32>(scale_factor);
+                  Some(WebviewBounds {
+                    x_rate: position.x / window_size.width,
+                    y_rate: position.y / window_size.height,
+                    width_rate: size.width / window_size.width,
+                    height_rate: size.height / window_size.height,
+                  })
+                } else {
+                  None
+                };
+              }
+              Err(e) => {
+                log::error!("failed to get webview bounds: {e}");
+              }
             }
-          },
+          }
           WebviewMessage::WithWebview(_f) => {
             #[cfg(all(
               any(
@@ -4542,7 +4986,7 @@ fn handle_user_message<T: UserEvent>(
     }
     #[cfg(target_env = "ohos")]
     // OHOS: reply with the creation outcome so `Context::create_window` can
-    // propagate a failure (e.g. tao rejecting an explicit Float kind for the
+    // propagate a failure (e.g. tao rejecting an explicit SubWindow kind for the
     // first window) instead of resolving `build()` with a label-only zombie
     // window — same reply-channel shape as `CreateRawWindow` below.
     Message::CreateWindow(window_id, handler, sender) => match handler(event_loop) {
@@ -4645,6 +5089,8 @@ fn handle_event_loop<T: UserEvent>(
     window_id_map,
     windows,
     exit_state,
+    #[cfg(target_env = "ohos")]
+    ohos_main_window_registry,
     #[cfg(feature = "tracing")]
     active_tracing_spans,
   } = context;
@@ -4859,7 +5305,13 @@ fn handle_event_loop<T: UserEvent>(
             // return value is intentionally ignored.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_close_requested_ohos(callback, window_id, windows, exit_state);
+              let _ = on_close_requested_ohos(
+                callback,
+                window_id,
+                windows,
+                exit_state,
+                ohos_main_window_registry.clone(),
+              );
             }
           }
           TaoWindowEvent::Destroyed => {
@@ -4886,7 +5338,13 @@ fn handle_event_loop<T: UserEvent>(
             // any Destroyed event that arrives without a prior close.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_window_close_ohos(callback, window_id, windows, exit_state);
+              let _ = on_window_close_ohos(
+                callback,
+                window_id,
+                windows,
+                exit_state,
+                ohos_main_window_registry.clone(),
+              );
             }
           }
           TaoWindowEvent::Resized(size) => {
@@ -4897,6 +5355,13 @@ fn handle_event_loop<T: UserEvent>(
               .map(|w| (w.inner.clone(), w.webviews.clone()))
             {
               let size = size.to_logical::<f32>(window.scale_factor());
+              // This leg only re-fires for webviews that still hold a rate
+              // cache. On OHOS a SetAutoResize(false) then (true) cycle never
+              // re-arms an explicit-bounds webview: the disable clears the
+              // cache and the enable leg deliberately does not re-derive it
+              // (see the SetAutoResize handler), so this loop skips it for
+              // good. Irreversible de-arm, not a transient drop (issue
+              // Eulogizethesun/tauri#241).
               for webview in webviews {
                 if let Some(b) = &*webview.bounds.lock().unwrap() {
                   if let Err(e) = webview.set_bounds(wry::Rect {
@@ -4949,7 +5414,13 @@ fn handle_event_loop<T: UserEvent>(
         on_close_requested(callback, id, windows);
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_close_requested_ohos(callback, id, windows, exit_state);
+          let _ = on_close_requested_ohos(
+            callback,
+            id,
+            windows,
+            exit_state,
+            ohos_main_window_registry.clone(),
+          );
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
@@ -4959,7 +5430,13 @@ fn handle_event_loop<T: UserEvent>(
         // to avoid recursion.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_window_close_ohos(callback, id, windows, exit_state);
+          let _ = on_window_close_ohos(
+            callback,
+            id,
+            windows,
+            exit_state,
+            ohos_main_window_registry.clone(),
+          );
         }
       }
       Message::UserEvent(t) => callback(RunEvent::UserEvent(t)),
@@ -5055,6 +5532,7 @@ fn on_close_requested_ohos<'a, T: UserEvent>(
   window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 ) -> bool {
   let (tx, rx) = channel();
   let windows_ref = windows.0.borrow();
@@ -5078,7 +5556,13 @@ fn on_close_requested_ohos<'a, T: UserEvent>(
     if let Ok(true) = rx.try_recv() {
       // User prevented close, do not call on_window_close
     } else {
-      return on_window_close_ohos(callback, window_id, windows, exit_state);
+      return on_window_close_ohos(
+        callback,
+        window_id,
+        windows,
+        exit_state,
+        ohos_main_window_registry,
+      );
     }
   }
   false
@@ -5094,6 +5578,7 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
+  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
 ) -> bool {
   // Remove window entry from WindowsStore (idempotent)
   let removed = windows.0.borrow_mut().remove(&window_id);
@@ -5101,14 +5586,23 @@ fn on_window_close_ohos<'a, T: UserEvent>(
   // never applies inside this OHOS-only function; the OHOS path only reads
   // `inner` and moves `label`.
   if let Some(window_wrapper) = removed {
-    // Destroy the OS window through tao (OHOS): Float windows call
-    // destroyWindow; the main (UIAbility) window is system-managed — the
+    // Drop the window's UIAbility-main record together with the store entry
+    // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
+    // live window count across repeated create/destroy cycles of the same
+    // label. Idempotent: the close paths can run more than once per window.
+    ohos_main_window_registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .remove(&window_id);
+
+    // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
+    // kind) call destroyWindow; the main (UIAbility) window is system-managed -- the
     // bridge's destroy-window handler rejects window id 0, so for it this is
     // a rejected fire-and-forget and the OS window remains until the system
-    // closes it. Without this call the OS Float window stays on
+    // closes it. Without this call the OS sub-window stays on
     // screen → ghost windows that diverge from Rust's records.
     //
-    // Recursion safety: close → ArkTS destroyWindow → FloatPage
+    // Recursion safety: close -> ArkTS destroyWindow -> SubWindowPage
     // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
     // The second on_window_close call hits `removed == None` (this block already
     // removed it) and returns early — the idempotent remove breaks the cycle.
@@ -5236,7 +5730,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
         .inner
         .window
         .inner_size
-        .unwrap_or_else(|| TaoPhysicalSize::new(800, 600).into());
+        .unwrap_or_else(|| TaoPhysicalSize::new(800i32, 600i32).into());
       // Only mutated by the non-OHOS `prevent_overflow` block below.
       #[cfg_attr(target_env = "ohos", allow(unused_mut))]
       let mut inner_size = window_builder
@@ -5302,7 +5796,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     // The label is set here (once) for both the with_config and programmatic
     // paths. Window kind is resolved in tao's `Window::new`: an explicit
     // builder choice wins; otherwise the first window defaults to UIAbility
-    // and later ones to Float (see FIRST_WINDOW_CREATED in tao's ohos window
+    // and later ones to SubWindow (see FIRST_WINDOW_CREATED in tao's ohos window
     // backend).
     window_builder.inner = window_builder.inner.with_label(&label);
   }
@@ -5312,6 +5806,18 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     .build(event_loop)
     .inspect_err(|e| log::error!("Error creating window: {e:?}"))
     .map_err(|_| Error::CreateWindow)?;
+
+  // Issue Eulogizethesun/tauri#238: record the window's UIAbility-main status
+  // while the tao window is in hand. This is the single write point covering
+  // every creation path (main-thread variant and both CreateWindow message
+  // arms); the user-thread dispatcher constructor reads the registry
+  // afterwards, while the main-thread variant captures the flag straight from
+  // the tao window in hand.
+  #[cfg(target_env = "ohos")]
+  {
+    use tao::platform::ohos::{OHOSWindowKind, WindowExtOpenHarmony};
+    context.ohos_record_main_window(window_id, window.window_kind() == OHOSWindowKind::UIAbility);
+  }
 
   #[cfg(feature = "tracing")]
   {
@@ -5434,6 +5940,40 @@ struct WebviewBounds {
   y_rate: f32,
   width_rate: f32,
   height_rate: f32,
+}
+
+// --- OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) -----------
+
+/// OHOS wire sentinel for "this bounds component is not set by this call".
+///
+/// `i32::MIN` rather than `-1`: real multi-monitor window/webview coordinates
+/// are routinely negative, so `-1` could collide with a genuine position.
+///
+/// The sentinel is sent as a LOGICAL value on purpose: wry's OHOS
+/// `set_bounds` converts physical input to ArkUI vp by dividing it by the
+/// live display ratio (physical / vp, wry's `to_logical`), but passes logical
+/// input through unchanged -- so the
+/// exact value reaches the ArkTS render layer (`WebviewPlugin.ets`) whatever
+/// the vp is. The ArkTS side skips any component equal to the sentinel and
+/// applies only the components the call actually sets; the unspecified ones
+/// keep the webview's live geometry (for a natural-layout webview that is
+/// container-driven layout, not the cached default). This is the cross-repo
+/// wire contract with openharmony-ability (issue Eulogizethesun/tauri#241).
+#[cfg(target_env = "ohos")]
+const OHOS_BOUNDS_UNSET: f64 = i32::MIN as f64;
+
+/// OHOS: the position sent when a bounds update must not touch the live
+/// position (every component equals [`OHOS_BOUNDS_UNSET`]).
+#[cfg(target_env = "ohos")]
+fn ohos_unspecified_position() -> Position {
+  Position::Logical(LogicalPosition::new(OHOS_BOUNDS_UNSET, OHOS_BOUNDS_UNSET))
+}
+
+/// OHOS: the size sent when a bounds update must not touch the live size
+/// (every component equals [`OHOS_BOUNDS_UNSET`]).
+#[cfg(target_env = "ohos")]
+fn ohos_unspecified_size() -> Size {
+  Size::Logical(LogicalSize::new(OHOS_BOUNDS_UNSET, OHOS_BOUNDS_UNSET))
 }
 
 fn create_webview<T: UserEvent>(
@@ -5719,7 +6259,7 @@ You may have it installed on another user account, but it is not available for t
     #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
     {
       webview_builder = webview_builder.with_bounds(wry::Rect {
-        position: LogicalPosition::new(0, 0).into(),
+        position: LogicalPosition::new(0i32, 0i32).into(),
         size: window.inner_size().into(),
       });
       Some(WebviewBounds {
@@ -5734,10 +6274,12 @@ You may have it installed on another user account, but it is not available for t
       None
     }
     // On OHOS, a webview created without explicit bounds must stay bounds-less:
-    // wry marks it natural-layout in WebViewStyle (no width/height → ArkTS
-    // "100%"), so it follows window resizes. Passing full-window pixel bounds
-    // here would make it explicit-size and desync its page layout on resize
-    // (BuilderNode.update does not notify ArkWeb to relayout).
+    // wry marks it natural-layout in WebViewStyle (no width/height -> the ArkTS
+    // render layer renders the wrapper at "100%"), so it follows window resizes
+    // through container layout. Explicit bounds are consumed by the ArkTS render
+    // layer as the rendered geometry (create-time style.width/height drive the
+    // wrapper Stack; a runtime set_bounds applies the full geometry and flips a
+    // natural webview to explicit sizing -- openspec ohos-webview-sizing).
     #[cfg(target_env = "ohos")]
     None
   };
@@ -6213,30 +6755,36 @@ mod with_config_tests {
 
   #[test]
   fn with_config_explicit_position_and_center() {
-    let mut cfg = WindowConfig::default();
-    cfg.label = "main".into();
-    cfg.x = Some(10.0);
-    cfg.y = Some(20.0);
+    let cfg = WindowConfig {
+      label: "main".into(),
+      x: Some(10.0f64),
+      y: Some(20.0f64),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&cfg);
     assert!(!wb.center);
     assert!(wb.inner.window.position.is_some());
 
-    let mut centered = WindowConfig::default();
-    centered.center = true;
+    let centered = WindowConfig {
+      center: true,
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&centered);
     assert!(wb.center);
   }
 
   #[test]
   fn with_config_size_constraints_and_background() {
-    let mut cfg = WindowConfig::default();
-    cfg.width = 800.0;
-    cfg.height = 600.0;
-    cfg.min_width = Some(200.0);
-    cfg.min_height = Some(100.0);
-    cfg.max_width = Some(1000.0);
-    cfg.max_height = Some(900.0);
-    cfg.background_color = Some(Color(1, 2, 3, 4));
+    let cfg = WindowConfig {
+      width: 800.0,
+      height: 600.0,
+      min_width: Some(200.0f64),
+      min_height: Some(100.0f64),
+      max_width: Some(1000.0f64),
+      max_height: Some(900.0f64),
+      background_color: Some(Color(1, 2, 3, 4)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&cfg);
     // Mobile targets ignore the config size (see `with_config`).
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -6250,21 +6798,27 @@ mod with_config_tests {
 
   #[test]
   fn with_config_prevent_overflow_variants() {
-    let mut margin = WindowConfig::default();
-    margin.prevent_overflow = Some(PreventOverflowConfig::Margin(PreventOverflowMargin {
-      width: 12,
-      height: 34,
-    }));
+    let margin = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Margin(PreventOverflowMargin {
+        width: 12,
+        height: 34,
+      })),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&margin);
     assert!(wb.prevent_overflow.is_some());
 
-    let mut disabled = WindowConfig::default();
-    disabled.prevent_overflow = Some(PreventOverflowConfig::Enable(false));
+    let disabled = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Enable(false)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&disabled);
     assert!(wb.prevent_overflow.is_none());
 
-    let mut enabled = WindowConfig::default();
-    enabled.prevent_overflow = Some(PreventOverflowConfig::Enable(true));
+    let enabled = WindowConfig {
+      prevent_overflow: Some(PreventOverflowConfig::Enable(true)),
+      ..Default::default()
+    };
     let wb = WindowBuilderWrapper::with_config(&enabled);
     assert!(wb.prevent_overflow.is_some());
   }
@@ -6276,15 +6830,24 @@ mod with_config_tests {
     let cfg = WindowConfig::default();
     let wb = WindowBuilderWrapper::with_config(&cfg);
     let dbg = format!("{wb:?}");
-    assert!(dbg.contains("WindowBuilderWrapper"), "struct name missing: {dbg}");
+    assert!(
+      dbg.contains("WindowBuilderWrapper"),
+      "struct name missing: {dbg}"
+    );
     assert!(dbg.contains("center"), "center field missing: {dbg}");
-    assert!(dbg.contains("prevent_overflow"), "prevent_overflow field missing: {dbg}");
+    assert!(
+      dbg.contains("prevent_overflow"),
+      "prevent_overflow field missing: {dbg}"
+    );
     assert!(!dbg.trim().is_empty());
 
     let centered = WindowConfig::default();
     let wb2 = WindowBuilderWrapper::with_config(&centered);
     let dbg2 = format!("{wb2:?}");
-    assert!(dbg2.contains("center"), "second format run missing center: {dbg2}");
+    assert!(
+      dbg2.contains("center"),
+      "second format run missing center: {dbg2}"
+    );
   }
 }
 
@@ -6299,42 +6862,77 @@ mod mapping_tests {
 
   #[test]
   fn cursor_icon_wrapper_maps_all_variants() {
-    let cases: Vec<(CursorIcon, fn(TaoCursorIcon) -> bool)> = vec![
+    type CursorCase = (CursorIcon, fn(TaoCursorIcon) -> bool);
+    let cases: Vec<CursorCase> = vec![
       (CursorIcon::Default, |i| matches!(i, TaoCursorIcon::Default)),
-      (CursorIcon::Crosshair, |i| matches!(i, TaoCursorIcon::Crosshair)),
+      (CursorIcon::Crosshair, |i| {
+        matches!(i, TaoCursorIcon::Crosshair)
+      }),
       (CursorIcon::Hand, |i| matches!(i, TaoCursorIcon::Hand)),
       (CursorIcon::Arrow, |i| matches!(i, TaoCursorIcon::Arrow)),
       (CursorIcon::Move, |i| matches!(i, TaoCursorIcon::Move)),
       (CursorIcon::Text, |i| matches!(i, TaoCursorIcon::Text)),
       (CursorIcon::Wait, |i| matches!(i, TaoCursorIcon::Wait)),
       (CursorIcon::Help, |i| matches!(i, TaoCursorIcon::Help)),
-      (CursorIcon::Progress, |i| matches!(i, TaoCursorIcon::Progress)),
-      (CursorIcon::NotAllowed, |i| matches!(i, TaoCursorIcon::NotAllowed)),
-      (CursorIcon::ContextMenu, |i| matches!(i, TaoCursorIcon::ContextMenu)),
+      (CursorIcon::Progress, |i| {
+        matches!(i, TaoCursorIcon::Progress)
+      }),
+      (CursorIcon::NotAllowed, |i| {
+        matches!(i, TaoCursorIcon::NotAllowed)
+      }),
+      (CursorIcon::ContextMenu, |i| {
+        matches!(i, TaoCursorIcon::ContextMenu)
+      }),
       (CursorIcon::Cell, |i| matches!(i, TaoCursorIcon::Cell)),
-      (CursorIcon::VerticalText, |i| matches!(i, TaoCursorIcon::VerticalText)),
+      (CursorIcon::VerticalText, |i| {
+        matches!(i, TaoCursorIcon::VerticalText)
+      }),
       (CursorIcon::Alias, |i| matches!(i, TaoCursorIcon::Alias)),
       (CursorIcon::Copy, |i| matches!(i, TaoCursorIcon::Copy)),
       (CursorIcon::NoDrop, |i| matches!(i, TaoCursorIcon::NoDrop)),
       (CursorIcon::Grab, |i| matches!(i, TaoCursorIcon::Grab)),
-      (CursorIcon::Grabbing, |i| matches!(i, TaoCursorIcon::Grabbing)),
-      (CursorIcon::AllScroll, |i| matches!(i, TaoCursorIcon::AllScroll)),
+      (CursorIcon::Grabbing, |i| {
+        matches!(i, TaoCursorIcon::Grabbing)
+      }),
+      (CursorIcon::AllScroll, |i| {
+        matches!(i, TaoCursorIcon::AllScroll)
+      }),
       (CursorIcon::ZoomIn, |i| matches!(i, TaoCursorIcon::ZoomIn)),
       (CursorIcon::ZoomOut, |i| matches!(i, TaoCursorIcon::ZoomOut)),
       (CursorIcon::EResize, |i| matches!(i, TaoCursorIcon::EResize)),
       (CursorIcon::NResize, |i| matches!(i, TaoCursorIcon::NResize)),
-      (CursorIcon::NeResize, |i| matches!(i, TaoCursorIcon::NeResize)),
-      (CursorIcon::NwResize, |i| matches!(i, TaoCursorIcon::NwResize)),
+      (CursorIcon::NeResize, |i| {
+        matches!(i, TaoCursorIcon::NeResize)
+      }),
+      (CursorIcon::NwResize, |i| {
+        matches!(i, TaoCursorIcon::NwResize)
+      }),
       (CursorIcon::SResize, |i| matches!(i, TaoCursorIcon::SResize)),
-      (CursorIcon::SeResize, |i| matches!(i, TaoCursorIcon::SeResize)),
-      (CursorIcon::SwResize, |i| matches!(i, TaoCursorIcon::SwResize)),
+      (CursorIcon::SeResize, |i| {
+        matches!(i, TaoCursorIcon::SeResize)
+      }),
+      (CursorIcon::SwResize, |i| {
+        matches!(i, TaoCursorIcon::SwResize)
+      }),
       (CursorIcon::WResize, |i| matches!(i, TaoCursorIcon::WResize)),
-      (CursorIcon::EwResize, |i| matches!(i, TaoCursorIcon::EwResize)),
-      (CursorIcon::NsResize, |i| matches!(i, TaoCursorIcon::NsResize)),
-      (CursorIcon::NeswResize, |i| matches!(i, TaoCursorIcon::NeswResize)),
-      (CursorIcon::NwseResize, |i| matches!(i, TaoCursorIcon::NwseResize)),
-      (CursorIcon::ColResize, |i| matches!(i, TaoCursorIcon::ColResize)),
-      (CursorIcon::RowResize, |i| matches!(i, TaoCursorIcon::RowResize)),
+      (CursorIcon::EwResize, |i| {
+        matches!(i, TaoCursorIcon::EwResize)
+      }),
+      (CursorIcon::NsResize, |i| {
+        matches!(i, TaoCursorIcon::NsResize)
+      }),
+      (CursorIcon::NeswResize, |i| {
+        matches!(i, TaoCursorIcon::NeswResize)
+      }),
+      (CursorIcon::NwseResize, |i| {
+        matches!(i, TaoCursorIcon::NwseResize)
+      }),
+      (CursorIcon::ColResize, |i| {
+        matches!(i, TaoCursorIcon::ColResize)
+      }),
+      (CursorIcon::RowResize, |i| {
+        matches!(i, TaoCursorIcon::RowResize)
+      }),
     ];
     for (icon, check) in cases {
       let mapped = CursorIconWrapper::from(icon).0;
@@ -6350,16 +6948,30 @@ mod mapping_tests {
 
   #[test]
   fn progress_state_wrapper_maps_all_statuses() {
-    let cases: Vec<(ProgressBarStatus, fn(TaoProgressState) -> bool)> = vec![
-      (ProgressBarStatus::None, |s| matches!(s, TaoProgressState::None)),
-      (ProgressBarStatus::Normal, |s| matches!(s, TaoProgressState::Normal)),
-      (ProgressBarStatus::Indeterminate, |s| matches!(s, TaoProgressState::Indeterminate)),
-      (ProgressBarStatus::Paused, |s| matches!(s, TaoProgressState::Paused)),
-      (ProgressBarStatus::Error, |s| matches!(s, TaoProgressState::Error)),
+    type ProgressCase = (ProgressBarStatus, fn(TaoProgressState) -> bool);
+    let cases: Vec<ProgressCase> = vec![
+      (ProgressBarStatus::None, |s| {
+        matches!(s, TaoProgressState::None)
+      }),
+      (ProgressBarStatus::Normal, |s| {
+        matches!(s, TaoProgressState::Normal)
+      }),
+      (ProgressBarStatus::Indeterminate, |s| {
+        matches!(s, TaoProgressState::Indeterminate)
+      }),
+      (ProgressBarStatus::Paused, |s| {
+        matches!(s, TaoProgressState::Paused)
+      }),
+      (ProgressBarStatus::Error, |s| {
+        matches!(s, TaoProgressState::Error)
+      }),
     ];
     for (status, check) in cases {
       let mapped = ProgressStateWrapper::from(status).0;
-      assert!(check(mapped), "ProgressState mapping mismatch for {status:?}");
+      assert!(
+        check(mapped),
+        "ProgressState mapping mismatch for {status:?}"
+      );
     }
   }
 
@@ -6403,12 +7015,13 @@ mod mapping_tests {
 
   #[test]
   fn size_and_position_wrappers_map_logical_and_physical() {
-    let logical_size = SizeWrapper::from(Size::Logical(LogicalSize::new(640.0, 480.0)));
+    let logical_size = SizeWrapper::from(Size::Logical(LogicalSize::new(640.0f64, 480.0f64)));
     assert!(matches!(logical_size.0, TaoSize::Logical(_)));
     let physical_size = SizeWrapper::from(Size::Physical(PhysicalSize::new(800u32, 600u32)));
     assert!(matches!(physical_size.0, TaoSize::Physical(_)));
 
-    let logical_pos = PositionWrapper::from(Position::Logical(LogicalPosition::new(1.0, 2.0)));
+    let logical_pos =
+      PositionWrapper::from(Position::Logical(LogicalPosition::new(1.0f64, 2.0f64)));
     assert!(matches!(logical_pos.0, TaoPosition::Logical(_)));
     let physical_pos = PositionWrapper::from(Position::Physical(PhysicalPosition::new(3i32, 4i32)));
     assert!(matches!(physical_pos.0, TaoPosition::Physical(_)));
@@ -6431,7 +7044,7 @@ mod mapping_tests {
     let pos = PhysicalPosition::new(10i32, 20i32);
     let wrapped: PhysicalPositionWrapper<i32> = PhysicalPositionWrapper::from(pos);
     let back: PhysicalPosition<i32> = wrapped.into();
-    assert_eq!((back.x, back.y), (10, 20));
+    assert_eq!((back.x, back.y), (10i32, 20i32));
 
     let size = PhysicalSize::new(640u32, 480u32);
     let wrapped: PhysicalSizeWrapper<u32> = PhysicalSizeWrapper::from(size);
@@ -6457,7 +7070,7 @@ mod mapping_tests {
 
     let drop_event = DragDropEvent::Enter {
       paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
-      position: PhysicalPosition::new(5.0, 6.0),
+      position: PhysicalPosition::new(5.0f64, 6.0f64),
     };
     let dd = WindowEventWrapper::from(SynthesizedWindowEvent::DragDrop(drop_event));
     assert!(matches!(dd.0, Some(WindowEvent::DragDrop(_))));

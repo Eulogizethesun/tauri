@@ -201,8 +201,8 @@ fn adb_forward_port(
       "ADB device list is empty, waiting a few seconds to see if there's any booting device..."
     );
 
-    let max = 5;
-    let mut count = 0;
+    let max = 5i32;
+    let mut count = 0i32;
     loop {
       std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -211,7 +211,7 @@ fn adb_forward_port(
         break;
       }
 
-      count += 1;
+      count += 1i32;
       if count == max {
         break;
       }

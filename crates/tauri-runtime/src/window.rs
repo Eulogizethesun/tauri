@@ -126,35 +126,57 @@ pub enum CursorIcon {
 
   /// Cursor showing that something cannot be done.
   NotAllowed,
+  /// A context menu cursor.
   ContextMenu,
+  /// A cell cursor.
   Cell,
+  /// A vertical text cursor.
   VerticalText,
+  /// An alias (shortcut) cursor.
   Alias,
+  /// A copy cursor.
   Copy,
+  /// A no-drop cursor.
   NoDrop,
   /// Indicates something can be grabbed.
   Grab,
   /// Indicates something is grabbed.
   Grabbing,
+  /// An all-scroll cursor.
   AllScroll,
+  /// A zoom-in cursor.
   ZoomIn,
+  /// A zoom-out cursor.
   ZoomOut,
 
   /// Indicate that some edge is to be moved. For example, the 'SeResize' cursor
   /// is used when the movement starts from the south-east corner of the box.
   EResize,
+  /// A north resize cursor.
   NResize,
+  /// A north-east resize cursor.
   NeResize,
+  /// A north-west resize cursor.
   NwResize,
+  /// A south resize cursor.
   SResize,
+  /// A south-east resize cursor.
   SeResize,
+  /// A south-west resize cursor.
   SwResize,
+  /// A west resize cursor.
   WResize,
+  /// An east-west resize cursor.
   EwResize,
+  /// A north-south resize cursor.
   NsResize,
+  /// A north-east to south-west resize cursor.
   NeswResize,
+  /// A north-west to south-east resize cursor.
   NwseResize,
+  /// A column resize cursor.
   ColResize,
+  /// A row resize cursor.
   RowResize,
 }
 
@@ -475,6 +497,7 @@ pub trait WindowBuilder: WindowBuilderBase {
   /// Whether the icon was set or not.
   fn has_icon(&self) -> bool;
 
+  /// Returns the theme forced on the window builder, if any.
   fn get_theme(&self) -> Option<Theme>;
 
   /// Sets custom name for Windows' window class. **Windows only**.
@@ -500,8 +523,12 @@ pub trait WindowBuilder: WindowBuilderBase {
 
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: Main window (reuses existing UIAbility container). Only one can exist.
-  /// - `Float`: Sub-window (creates new OS-level floating window).
+  /// - `UIAbility`: a window backed by its own UIAbility instance. The FIRST
+  ///   window of the process must be this kind (it bootstraps the
+  ///   EntryAbility container; a SubWindow has nothing to attach to);
+  ///   subsequent windows may opt in explicitly and take the
+  ///   spawned-instance path.
+  /// - `SubWindow`: Sub-window of an existing UIAbility container.
   #[cfg(target_env = "ohos")]
   fn ohos_window_kind(self, kind: OHOSWindowKind) -> Self;
 }
@@ -510,10 +537,18 @@ pub trait WindowBuilder: WindowBuilderBase {
 #[cfg(target_env = "ohos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OHOSWindowKind {
-  /// Main window — reuses the existing UIAbility container. Only one can exist per application.
+  /// A window backed by its own UIAbility instance. The FIRST window of
+  /// the process must be this kind (it bootstraps the EntryAbility
+  /// container; a SubWindow has nothing to attach to); subsequent
+  /// windows may opt in explicitly and take the spawned-instance path.
   UIAbility,
-  /// Sub-window — creates a new OS-level floating window (TYPE_FLOAT).
-  Float,
+  /// Sub-window -- created via `windowStage.createSubWindow`, lives inside an
+  /// existing UIAbility container and is destroyed with it. This is an
+  /// application sub-window, NOT the OS-wide floating window type
+  /// (`WindowType.TYPE_FLOAT`, whose windows float above all apps); the
+  /// former `Float` variant name wrongly suggested that type (issue
+  /// Eulogizethesun/tauri#240).
+  SubWindow,
 }
 
 /// A window that has yet to be built.
@@ -528,12 +563,14 @@ pub struct PendingWindow<T: UserEvent, R: Runtime<T>> {
   pub webview: Option<PendingWebview<T, R>>,
 }
 
+/// Returns whether the given window label is valid.
 pub fn is_label_valid(label: &str) -> bool {
   label
     .chars()
     .all(|c| char::is_alphanumeric(c) || c == '-' || c == '/' || c == ':' || c == '_')
 }
 
+/// Panics when the given window label is not valid.
 pub fn assert_label_is_valid(label: &str) {
   assert!(
     is_label_valid(label),
@@ -601,7 +638,9 @@ pub struct DetachedWindow<T: UserEvent, R: Runtime<T>> {
 /// A detached webview associated with a window.
 #[derive(Debug)]
 pub struct DetachedWindowWebview<T: UserEvent, R: Runtime<T>> {
+  /// The detached webview attached to this window.
   pub webview: DetachedWebview<T, R>,
+  /// Whether custom protocols are treated as secure HTTPS contexts.
   pub use_https_scheme: bool,
 }
 
@@ -643,6 +682,7 @@ impl<T: UserEvent, R: Runtime<T>> PartialEq for DetachedWindow<T, R> {
 /// A raw window type that contains fields to access
 /// the HWND on Windows, gtk::ApplicationWindow on Linux
 pub struct RawWindow<'a> {
+  /// The Win32 window handle.
   #[cfg(windows)]
   pub hwnd: isize,
   #[cfg(all(
@@ -667,5 +707,6 @@ pub struct RawWindow<'a> {
     not(target_env = "ohos")
   ))]
   pub default_vbox: Option<&'a gtk::Box>,
+  /// Marks the lifetime of the borrowed window.
   pub _marker: &'a PhantomData<()>,
 }

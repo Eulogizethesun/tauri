@@ -117,9 +117,7 @@ pub fn restart(env: &Env) -> ! {
     // `std::process::exit` does NOT relaunch — verified on device, the OS keeps
     // the process dead — so it is only the failure fallback.
     let restart_error: Option<String> = (|| -> Result<(), String> {
-      let app_guard = crate::ohos::APP
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+      let app_guard = crate::ohos::APP.lock().unwrap_or_else(|e| e.into_inner());
       let app = app_guard
         .as_ref()
         .ok_or_else(|| "OpenHarmonyApp not initialized".to_string())?;

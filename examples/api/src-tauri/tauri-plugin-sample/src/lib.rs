@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Minimal sample plugin used by the API example app.
+
 use serde::Deserialize;
 use std::path::PathBuf;
 use tauri::{
@@ -28,6 +30,7 @@ pub use error::*;
 
 /// Extensions to [`tauri::App`], [`tauri::AppHandle`] and [`tauri::Window`] to access the sample APIs.
 pub trait SampleExt<R: Runtime> {
+  /// Returns the shared sample state.
   fn sample(&self) -> &Sample<R>;
 }
 
@@ -67,6 +70,7 @@ fn ping<R: tauri::Runtime>(
     .map_err(|e| e.to_string())
 }
 
+/// Initializes the sample plugin.
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
   Builder::new("sample")
     .setup(|app, api| {

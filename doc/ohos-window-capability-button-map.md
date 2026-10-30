@@ -40,7 +40,7 @@
 | 窗口最大化 | ✅ | ✅ | `Toggle Maximize` | 几何/状态区 | maximize / unmaximize / maximize fills | |
 | 窗口最小化 | ✅ | ✅ | `Minimize (2s restore)` | 几何/状态区 | is_minimized / minimize smoke | 另有 `Minimize then is_minimized`（Persisted-Scope 区，buttons 文档未收录） |
 | 全屏模式 | ✅ | ✅ | `Toggle Fullscreen` | 几何/状态区 | setFullscreen smoke | 实际走 maximize(ENTER_IMMERSIVE) + setTitleAndDockHoverShown（mapping 文档该行 API 链已过时；setWindowLayoutFullScreen 直连路径曾实现验证后于 2026-08-21 回退移除） |
-| 窗口可见性 | ✅ | ✅ 手动 | `Hide/Show (2s restore)` | 几何/状态区 | 无 | 主窗口 hide=minimize / show=startAbility 复用实例 |
+| 窗口可见性 | ✅ | ✅ 手动 | `Hide/Show (2s restore)` | 几何/状态区 | 无 | 主窗口 hide() 按契约拒绝(#241 TR-2,2026-10-28)→按钮断言 reject 文案 + isVisible=true + minimize/unminimize 验证;子窗口 hide 正常派发(tao kind-split) |
 | 窗口聚焦 | ✅ | ✅ | `setFocus` + `isFocused (should be true)` + `Watch onFocusChanged`(toggle) + `Window Focus (create + focus sub-window)` | 几何/状态区 + 顶部 + Window Focus 区 | isFocused / onFocusChanged | `Window Focus` 按钮 buttons 文档未收录 |
 | 窗口置顶 | ✅ | ✅ | `Toggle AlwaysOnTop (partial)` | 几何/状态区 | setAlwaysOnTop smoke | **实际按钮带 `(partial)` 后缀**，buttons 文档写的是无后缀版；功能已完整实现（setWindowTopmost API14+），后缀疑似 UI 文案滞后 |
 | 用户注意力请求 | ✅ | ✅ 手动 | `Request User Attention (notification)` | 自动测试补充区 | 无 | 首次弹授权框→允许→右下角通知 |

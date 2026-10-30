@@ -38,7 +38,7 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /// Creates a Float sub-window for testing resize/move.
 /// The main UIAbility window is managed by the system; win.resize()/moveWindowTo() are rejected (no-op);
-/// Float sub-windows can be resized/moved freely (also proven by the FloatPage resize handle).
+/// Float sub-windows can be resized/moved freely (also proven by the SubWindowPage resize handle).
 async function createFloatWindow(label: string): Promise<Window> {
   await invoke('create_borderless_window', { windowId: label });
   await delay(600);
@@ -293,7 +293,7 @@ export const windowOpsTests: TestCase[] = [
   // ─── Float window creation-time race (doc/OHOS窗口遗留问题.md issue-7 addendum) ───
   // create_os_window is fire-and-forget: the Rust side pre-allocates an id and returns, while the ArkTS
   // WindowManager.createSubWindow chain (createSubWindowWithOptions →
-  // loadContentByName → FloatPage load) is still in progress. A set_size(260×180) issued immediately after build()
+  // loadContentByName → SubWindowPage load) is still in progress. A set_size(260×180) issued immediately after build()
   // raced with the creation chain; pre-fix it arrived before the window was registered in WindowManager.windows
   // → requireWindow threw "Unknown OS sub-window" → the op was silently dropped
   // (the family behind the 22 warns per round). Fix criterion: PENDING_FLOAT_WINDOWS queues during the handshake,
@@ -317,7 +317,7 @@ export const windowOpsTests: TestCase[] = [
         result.webview_acquired === true,
         `webview not acquired: ${JSON.stringify(result)}`
       );
-      // Wait 2s: notify is only sent at ArkTS createSubWindow promise END (including the FloatPage load),
+      // Wait 2s: notify is only sent at ArkTS createSubWindow promise END (including the SubWindowPage load),
       // and the queued set_size replay needs time.
       await delay(2000);
       const win = await Window.getByLabel(label);
@@ -726,19 +726,48 @@ export const windowOpsTests: TestCase[] = [
     },
   },
   {
-    name: 'window decoration flags smoke (D group, main window no-op)',
+    name: 'window decoration flags smoke (D group, main window contract #238)',
     category: 'auto',
     async fn() {
       await skipOnMobile('the setClosable/setMaximizable/setMinimizable window commands are upstream cfg(desktop) and absent from the mobile build');
       const win = getCurrentWindow();
-      // setDecorationFlags is a no-op on the main window; is*() only reads tao's bitfield, so the round-trip is self-proving.
-      // Only verify the call does not throw. Effects are verified manually on a Float sub-window.
-      await smoke(() => win.setClosable(false), 'setClosable(false)');
-      await smoke(() => win.setClosable(true), 'setClosable(true)');
-      await smoke(() => win.setMaximizable(false), 'setMaximizable(false)');
-      await smoke(() => win.setMaximizable(true), 'setMaximizable(true)');
-      await smoke(() => win.setMinimizable(false), 'setMinimizable(false)');
-      await smoke(() => win.setMinimizable(true), 'setMinimizable(true)');
+      const api = await ohosSdkApiVersion();
+      // Issue #238: on OHOS the UIAbility main window's three decoration
+      // buttons are OS-managed (@ohos.window has no API for these
+      // operation-level flags: per-button visibility via
+      // setWindowTitleButtonVisible (API 14+) and style injection via
+      // setDecorButtonStyle exist, but neither disables the operations),
+      // so the setters reject at the dispatcher. On other platforms they
+      // succeed; set false then restore true so the desktop state is clean.
+      if (api === null) {
+        await smoke(() => win.setClosable(false), 'setClosable(false)');
+        await smoke(() => win.setClosable(true), 'setClosable(true)');
+        await smoke(() => win.setMaximizable(false), 'setMaximizable(false)');
+        await smoke(() => win.setMaximizable(true), 'setMaximizable(true)');
+        await smoke(() => win.setMinimizable(false), 'setMinimizable(false)');
+        await smoke(() => win.setMinimizable(true), 'setMinimizable(true)');
+      } else {
+        for (const [name, fn] of [
+          ['setClosable(false)', () => win.setClosable(false)],
+          ['setMaximizable(false)', () => win.setMaximizable(false)],
+          ['setMinimizable(false)', () => win.setMinimizable(false)],
+        ] as const) {
+          let err: unknown = null;
+          try {
+            await fn();
+          } catch (e) {
+            err = e;
+          }
+          assert(err !== null, `${name} must reject on the OHOS main window (#238)`);
+          assert(
+            /not supported on OpenHarmony/.test(String(err)),
+            `${name} rejection must name OpenHarmony, got: ${String(err)}`
+          );
+        }
+      }
+      // setResizable/setFocusable are kind-agnostic capability flags — they
+      // still apply on both platforms. is*() reads tao's mirror, so the
+      // round-trip is self-proving.
       await smoke(() => win.setResizable(false), 'setResizable(false)');
       await smoke(() => win.setResizable(true), 'setResizable(true)');
       await smoke(() => win.setFocusable(false), 'setFocusable(false)');
@@ -748,7 +777,7 @@ export const windowOpsTests: TestCase[] = [
   // ─── 6.3 Float-specific: behavior of D11's windowKinds-branched methods on Float sub-windows ───
   // Production entry audit (2026-09-16): show→showWindowMethod (Float branch win.showWindow);
   // set-decoration-flags→setDecorationFlags (the Float branch writes 4 LocalStorage keys that drive
-  // FloatPage button visibility); set-decorations→setDecorations (the Float branch writes LocalStorage
+  // SubWindowPage button visibility); set-decorations→setDecorations (the Float branch writes LocalStorage
   // 'decorations' to drive the custom-drawn title bar visibility — during the pluginize migration it briefly bypassed this and called setWindowDecorVisible directly,
   // making Float a no-op; fixed on 2026-09-16 to delegate to WindowManager); set-background-color→calls the sub-window
   // handle directly (same API for both kinds, no branch semantics); closeWindow→reachable only via the menu path (Float has no menu;
@@ -766,7 +795,7 @@ export const windowOpsTests: TestCase[] = [
 
       // ① setDecorations (starting point: a decorated Float with decorations=true).
       //    isDecorated only reads tao's mirror (round-trip self-proving); Float's real semantics =
-      //    FloatPage's custom-drawn title bar visibility (LocalStorage 'decorations'); visual/hilog evidence belongs to the manual chapter.
+      //    SubWindowPage's custom-drawn title bar visibility (LocalStorage 'decorations'); visual/hilog evidence belongs to the manual chapter.
       assert((await w.isDecorated()) === true, 'decorated Float should start decorated');
       await w.setDecorations(false);
       assert((await w.isDecorated()) === false, 'setDecorations(false) mirror readback');
@@ -774,7 +803,7 @@ export const windowOpsTests: TestCase[] = [
       assert((await w.isDecorated()) === true, 'setDecorations(true) mirror readback');
 
       // ② decoration flags: the Float branch writes 4 LocalStorage keys. is*() reads tao's bitfield (self-proving);
-      //    the real effect = FloatPage button visibility, covered by hilog/the manual chapter; for the main-window no-op contrast see the case above.
+      //    the real effect = SubWindowPage button visibility, covered by hilog/the manual chapter; for the main-window no-op contrast see the case above.
       await w.setClosable(false);
       assert((await w.isClosable()) === false, 'setClosable(false) readback');
       await w.setMaximizable(false);
@@ -809,6 +838,123 @@ export const windowOpsTests: TestCase[] = [
       // Wrap-up: flags are restored to true; close goes through the destroy-window idempotent path (best-effort;
       // leaving a leftover window matches the suite's existing behavior — core.ts's timestamped label likewise guards against rerun collisions).
       await w.close().catch(() => {});
+    },
+  },
+  // #237: hide honesty on OHOS. The main window's hide() used to degrade to a
+  // taskbar minimize (fake success + is_minimized mirror poisoning); it now
+  // rejects with a NotSupported error naming OpenHarmony (dispatcher-layer
+  // ohos_unsupported; @ohos.window has no window-level hide API).
+  {
+    name: 'ut_window.hide rejects on OHOS (main window, #237)',
+    category: 'auto',
+    async fn() {
+      // Brief:
+      // 1. Skip on non-OHOS platforms (hide succeeds there; the rejection is
+      //    an OHOS platform difference).
+      // 2. Call hide() on the main window and expect a rejection whose message
+      //    contains "not supported on OpenHarmony".
+      const api = await ohosSdkApiVersion();
+      if (api === null) {
+        skip('non-OHOS platform — the #237 hide rejection is an OHOS platform difference');
+      }
+      let err: unknown = null;
+      try {
+        await getCurrentWindow().hide();
+      } catch (e) {
+        err = e;
+      }
+      assert(err !== null, 'hide() must reject on OHOS (no window-level hide API, #237)');
+      assert(
+        /not supported on OpenHarmony/.test(String(err)),
+        `hide() rejection must name OpenHarmony, got: ${String(err)}`
+      );
+    },
+  },
+  // #237: show() is mirror-conditional on OHOS. A minimized window gets
+  // restore+show (mirror cleared); a visible maximized window gets show-only —
+  // the former unconditional restore+show pair un-maximized it.
+  {
+    name: 'ut_window.show keeps maximized state (#237, main window)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      // Brief:
+      // 1. Skip on non-OHOS platforms and on the mobile form (the maximize
+      //    window command is upstream cfg(desktop)).
+      // 2. Maximize the main window, then show(): isMaximized must stay true
+      //    (show-only leg — no un-maximize side effect).
+      // 3. Minimize, then show(): isMinimized must read false afterwards
+      //    (restore+show leg clears the minimized mirror).
+      // 4. Cleanup: unmaximize so later cases start from the normal state.
+      const api = await ohosSdkApiVersion();
+      if (api === null) {
+        skip('non-OHOS platform — the #237 show semantics are OHOS-only');
+      }
+      await skipOnMobile('the maximize window command is upstream cfg(desktop) and absent from the mobile build');
+      const win = getCurrentWindow();
+      await win.maximize();
+      await delay(600);
+      assert((await win.isMaximized()) === true, 'precondition: main window reports maximized');
+      await win.show();
+      await delay(600);
+      assert(
+        (await win.isMaximized()) === true,
+        'show() must not un-maximize a visible maximized window (#237 conditional show)'
+      );
+      await win.minimize();
+      await delay(600);
+      assert((await win.isMinimized()) === true, 'precondition: main window reports minimized');
+      await win.show();
+      await delay(600);
+      assert(
+        (await win.isMinimized()) === false,
+        'show() on a minimized window must clear the minimized state (#237 restore+show leg)'
+      );
+      await win.unmaximize();
+      await delay(300);
+    },
+  },
+  // #238: the UIAbility main window's decoration buttons are OS-managed.
+  // The three per-button setters reject at the dispatcher; the three
+  // getters answer true (the buttons exist and are active — OS-managed).
+  {
+    name: 'ut_window main window decoration buttons (#238)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      // Brief:
+      // 1. Skip on non-OHOS platforms and on the mobile form (the decoration
+      //    window commands are upstream cfg(desktop)).
+      // 2. setMaximizable/setMinimizable/setClosable on the main window must
+      //    each reject with "not supported on OpenHarmony".
+      // 3. isMaximizable/isMinimizable/isClosable must each answer true (the
+      //    buttons are present and OS-managed).
+      const api = await ohosSdkApiVersion();
+      if (api === null) {
+        skip('non-OHOS platform — the #238 main-window contract is OHOS-only');
+      }
+      await skipOnMobile('the decoration window commands are upstream cfg(desktop) and absent from the mobile build');
+      const win = getCurrentWindow();
+      for (const [name, fn] of [
+        ['setMaximizable', () => win.setMaximizable(false)],
+        ['setMinimizable', () => win.setMinimizable(false)],
+        ['setClosable', () => win.setClosable(false)],
+      ] as const) {
+        let err: unknown = null;
+        try {
+          await fn();
+        } catch (e) {
+          err = e;
+        }
+        assert(err !== null, `${name}() must reject on the OHOS main window (#238)`);
+        assert(
+          /not supported on OpenHarmony/.test(String(err)),
+          `${name}() rejection must name OpenHarmony, got: ${String(err)}`
+        );
+      }
+      assert((await win.isMaximizable()) === true, 'main window isMaximizable must read true (OS-managed buttons)');
+      assert((await win.isMinimizable()) === true, 'main window isMinimizable must read true (OS-managed buttons)');
+      assert((await win.isClosable()) === true, 'main window isClosable must read true (OS-managed buttons)');
     },
   },
   {

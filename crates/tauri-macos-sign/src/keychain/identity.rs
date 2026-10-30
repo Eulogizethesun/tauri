@@ -25,11 +25,16 @@ fn get_pem_list(keychain_path: &Path, name_substr: &str) -> Result<std::process:
     })
 }
 
+/// An Apple developer team, as resolved from a signing certificate.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Team {
+  /// The display name of the team.
   pub name: String,
+  /// The common name of the signing certificate for this team.
   pub certificate_name: String,
+  /// The team id.
   pub id: String,
+  /// The certificate authority prefix the certificate was issued under.
   pub cert_prefix: &'static str,
 }
 
@@ -79,6 +84,7 @@ impl Team {
     })
   }
 
+  /// Returns the common name of the team signing certificate.
   pub fn certificate_name(&self) -> String {
     self.certificate_name.clone()
   }

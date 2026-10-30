@@ -5,14 +5,14 @@
 #![cfg(all(desktop, not(test)))]
 
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_env = "ohos")]
+use tauri::tray::QuickOperationConfig;
 use tauri::{
   include_image,
   menu::{Menu, MenuItem},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   Emitter, EventTarget, Manager, Runtime, WebviewUrl,
 };
-#[cfg(target_env = "ohos")]
-use tauri::tray::QuickOperationConfig;
 
 #[cfg(target_env = "ohos")]
 #[tauri::command]
@@ -80,6 +80,9 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
 
   let is_menu1 = AtomicBool::new(true);
 
+  // `mut` is consumed by the OHOS-only re-assignment below; on other
+  // targets that block is compiled out and the mut would be unused.
+  #[allow(unused_mut)]
   let mut builder = TrayIconBuilder::with_id("tray-1")
     .tooltip("Tauri")
     .icon(app.default_window_icon().unwrap().clone())
@@ -136,6 +139,25 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         }
         "toggle" => {
           if let Some(window) = app.get_webview_window("main") {
+            // Issue Eulogizethesun/tauri#237: on OHOS hide() rejects with
+            // NotSupported (the main window has no hide semantics: per the SDK
+            // d.ts minimize() is a taskbar minimize, not hide; sub-windows
+            // would hide, but this toggle only ever targets "main"), so
+            // the toggle uses taskbar minimization as the closest observable
+            // substitute: `is_minimized` decides, minimize() hides-to-taskbar
+            // and show() restores (tao's conditional show clears the minimized
+            // state without un-maximizing). Desktop keeps the original
+            // is_visible/hide pair.
+            #[cfg(target_env = "ohos")]
+            let new_title = if window.is_minimized().unwrap_or_default() {
+              let _ = window.show();
+              let _ = window.set_focus();
+              "Hide"
+            } else {
+              let _ = window.minimize();
+              "Show"
+            };
+            #[cfg(not(target_env = "ohos"))]
             let new_title = if window.is_visible().unwrap_or_default() {
               let _ = window.hide();
               "Show"
@@ -148,12 +170,14 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
           }
         }
         "new-window" => {
+          // `mut` is consumed by the OHOS-only re-assignment below.
+          #[allow(unused_mut)]
           let mut wb =
             tauri::WebviewWindowBuilder::new(app, "new", WebviewUrl::App("index.html".into()))
               .title("Tauri");
           #[cfg(target_env = "ohos")]
           {
-            wb = wb.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+            wb = wb.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
           }
           let _webview = wb.build().unwrap();
         }
@@ -187,12 +211,11 @@ pub fn create_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
           is_menu1.store(!flag, Ordering::Relaxed);
         }
         "toggle-qo" => {
+          // Toggle QuickOperation off (demonstrates runtime update).
+          // The tray handle is only consumed by the OHOS API below.
+          #[cfg(target_env = "ohos")]
           if let Some(tray) = app.tray_by_id("tray-1") {
-            // Toggle QuickOperation off (demonstrates runtime update)
-            #[cfg(target_env = "ohos")]
-            {
-              let _ = tray.set_quick_operation(None);
-            }
+            let _ = tray.set_quick_operation(None);
           }
         }
 

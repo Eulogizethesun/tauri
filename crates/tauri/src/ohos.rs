@@ -4,14 +4,30 @@ use std::sync::{Mutex, OnceLock};
 pub use openharmony_ability_derive;
 pub use tauri_runtime::OHOSWindowKind;
 
+/// OHOS entry-point attribute -- re-export of
+/// [`tauri_macros::ohos_entry_point`](../tauri_macros/attr.ohos_entry_point.html)
+/// (issue Eulogizethesun/tauri#242).
+///
+/// Expands to the same glue as [`crate::mobile_entry_point`]; exists so the
+/// two-line form names the actual platform model on every device form (the
+/// Ability/NAPI entry is required on the 2in1 desktop form too, where
+/// `cfg(mobile)` is false). See the macro docs for the full contract:
+///
+/// ```rust,ignore
+/// #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
+/// pub fn run() { /* ... */ }
+/// ```
+pub use tauri_macros::ohos_entry_point as entry_point;
+
 /// Explicit re-export of the `openharmony-ability` types used by tauri and its macros.
 ///
 /// Converged from a blanket `pub use openharmony_ability;` to an explicit list
 /// so the coupling surface is visible and auditable.
 pub mod openharmony_ability {
-  pub use ::openharmony_ability::OpenHarmonyApp;
   pub use ::openharmony_ability::get_main_thread_env;
   pub use ::openharmony_ability::version;
+  pub use ::openharmony_ability::OpenHarmonyApp;
 }
 
 pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(None);
@@ -50,14 +66,12 @@ pub static RUN_COMMAND_QUEUE: Mutex<VecDeque<RunCommandArgs>> = Mutex::new(VecDe
 /// and returns the app handle.
 ///
 /// Called once by `Builder::build` before the runtime is created. Panics when
-/// the app instance is missing — `mobile_entry_point!` must run first to
-/// install it.
+/// the app instance is missing: the entry-point macro must run first to
+/// install it (see the panic message for the correct attribute on OHOS).
 pub fn init() -> openharmony_ability::OpenHarmonyApp {
-  let ohos_app = APP
-    .lock()
-    .unwrap()
-    .clone()
-    .expect("OpenHarmony app instance not initialized — mobile_entry_point! must run before Builder::build");
+  let ohos_app = APP.lock().unwrap().clone().expect(
+    "OpenHarmony app instance not initialized -- the entry-point macro must run before Builder::build. Use #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] (all device forms): on the 2in1/desktop form cfg(mobile) is always false, so a lone #[cfg_attr(mobile, tauri::mobile_entry_point)] never expands",
+  );
   BASE_PATH.set(ohos_app.base_path()).ok();
   MODULE_NAME.set(ohos_app.module_name()).ok();
   #[cfg(feature = "tray-icon")]

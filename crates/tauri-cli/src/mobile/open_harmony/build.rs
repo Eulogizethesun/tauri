@@ -188,7 +188,7 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
     options.ci,
   )?;
 
-  let plugin_metadata = plugins::inject_plugins(&dirs.tauri, &config.project_dir())?;
+  let plugin_metadata = plugins::inject_plugins(dirs.tauri, &config.project_dir())?;
 
   let mut env = env()?;
 

@@ -421,6 +421,16 @@ class Webview {
     ).then((s) => new PhysicalSize(s))
   }
 
+  // Getters (platform notes)
+  //
+  // OpenHarmony: `position()` / `size()` are cache-backed. For a natural-layout
+  // webview (created without bounds) the cache holds the upstream
+  // WebViewAttributes::default() 200×200 placeholder — never the live rendered
+  // geometry, which is container-driven and not reported back by the platform.
+  // After a partial `setSize()` / `setPosition()`, the components the call did
+  // not set read back as the "unspecified" sentinel (i32::MIN-derived values),
+  // by contract with the render layer (issue Eulogizethesun/tauri#241).
+
   // Setters
 
   /**

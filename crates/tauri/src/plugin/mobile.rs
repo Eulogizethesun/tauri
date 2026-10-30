@@ -38,7 +38,8 @@ static PENDING_PLUGIN_CALLS_ID: AtomicI32 = AtomicI32::new(0);
 #[allow(dead_code)]
 pub(crate) static PENDING_PLUGIN_CALLS: OnceLock<Mutex<HashMap<i32, PendingPluginCallHandler>>> =
   OnceLock::new();
-pub(crate) static CHANNELS: OnceLock<Mutex<HashMap<u32, Channel<serde_json::Value>>>> = OnceLock::new();
+pub(crate) static CHANNELS: OnceLock<Mutex<HashMap<u32, Channel<serde_json::Value>>>> =
+  OnceLock::new();
 
 /// Possible errors when invoking a plugin.
 #[derive(Debug, thiserror::Error)]
@@ -62,7 +63,8 @@ pub enum PluginInvokeError {
 }
 
 pub(crate) fn register_channel(channel: Channel<serde_json::Value>) {
-  CHANNELS    .get_or_init(Default::default)
+  CHANNELS
+    .get_or_init(Default::default)
     .lock()
     .unwrap()
     .insert(channel.id(), channel);
@@ -377,7 +379,7 @@ impl<R: Runtime> PluginHandle<R> {
 /// Both the main-thread path (`Webview::on_message`) and the OHOS
 /// lock-contention path (`AppManager::extend_api` offloads to the blocking
 /// pool when the plugin store lock is busy) must run this same fallback when
-/// the command is not handled — otherwise the JS promise never settles.
+/// the command is not handled -- otherwise the JS promise never settles.
 #[cfg(any(mobile, target_env = "ohos"))]
 pub(crate) fn run_mobile_channel_fallback<R: Runtime>(
   plugin: &str,
@@ -398,7 +400,7 @@ pub(crate) fn run_mobile_channel_fallback<R: Runtime>(
     }
   }
 
-  // resolve/reject take the resolver by value — take ownership of a clone
+  // resolve/reject take the resolver by value -- take ownership of a clone
   let resolver = resolver.clone();
 
   let payload = message.payload.into_json();

@@ -643,8 +643,7 @@ impl<R: Runtime> TrayIcon<R> {
 
   /// Show or hide this tray icon.
   pub fn set_visible(&self, visible: bool) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?
-      .map_err(Into::into)
+    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?.map_err(Into::into)
   }
 
   /// Sets the tray icon temp dir path. **Linux only**.
@@ -778,20 +777,20 @@ mod tests {
           "buttonState": "Down",
           "id": "id",
           "position": {
-              "x": 0.0,
-              "y": 0.0,
+              "x": 0.0f64,
+              "y": 0.0f64,
           },
           "rect": {
               "size": {
                   "Physical": {
-                      "width": 0,
-                      "height": 0,
+                      "width": 0i32,
+                      "height": 0i32,
                   }
               },
               "position": {
                   "Physical": {
-                      "x": 0,
-                      "y": 0,
+                      "x": 0i32,
+                      "y": 0i32,
                   }
               },
           }
@@ -801,9 +800,10 @@ mod tests {
 
   #[test]
   fn tray_icon_event_from_fallback_no_panic() {
+    use super::*;
     let tray_event = tray_icon::TrayIconEvent::Click {
       id: tray_icon::TrayIconId::new("test"),
-      position: tray_icon::dpi::PhysicalPosition::new(10.0, 20.0),
+      position: tray_icon::dpi::PhysicalPosition::new(10.0f64, 20.0f64),
       rect: tray_icon::Rect::default(),
       button: tray_icon::MouseButton::Left,
       button_state: tray_icon::MouseButtonState::Up,
@@ -818,7 +818,7 @@ mod tests {
         ..
       } => {
         assert_eq!(id.0, "test");
-        assert_eq!(position.x, 10.0);
+        assert_eq!(position.x, 10.0f64);
         assert_eq!(button, MouseButton::Left);
         assert_eq!(button_state, MouseButtonState::Up);
       }
