@@ -3203,7 +3203,9 @@ pub struct WebviewWrapper {
   webview_event_listeners: WebviewEventListeners,
   // the key of the WebContext if it's not shared
   context_key: Option<PathBuf>,
-  bounds: Arc<Mutex<Option<WebviewBounds>>>,
+  // OHOS auto-resize machinery: armed/parked rates + bounds-cache realness
+  // (issue Eulogizethesun/tauri#244). Desktop only reads/writes `rates`.
+  bounds: Arc<Mutex<WebviewAutoResizeState>>,
 }
 
 impl Deref for WebviewWrapper {
@@ -4607,15 +4609,30 @@ fn handle_user_message<T: UserEvent>(
             let bounds: RectWrapper = bounds.into();
             let bounds = bounds.0;
 
-            if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+            {
               let scale_factor = window.scale_factor();
               let size = bounds.size.to_logical::<f32>(scale_factor);
               let position = bounds.position.to_logical::<f32>(scale_factor);
               let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-              b.width_rate = size.width / window_size.width;
-              b.height_rate = size.height / window_size.height;
-              b.x_rate = position.x / window_size.width;
-              b.y_rate = position.y / window_size.height;
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // A full set_bounds carries all-real components: the whole wry
+              // bounds cache becomes real geometry (issue
+              // Eulogizethesun/tauri#244).
+              auto_state.explicit = BoundsExplicitness::Full;
+              // Armed → refresh the live rates; disarmed with parked rates →
+              // mirror the update so a later enable restores the geometry this
+              // call established, not the stale pre-disable one.
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
+                b.width_rate = size.width / window_size.width;
+                b.height_rate = size.height / window_size.height;
+                b.x_rate = position.x / window_size.width;
+                b.y_rate = position.y / window_size.height;
+              }
             }
 
             if let Err(e) = webview.set_bounds(bounds) {
@@ -4640,11 +4657,24 @@ fn handle_user_message<T: UserEvent>(
               let scale_factor = window.scale_factor();
               let logical_size = size.to_logical::<f32>(scale_factor);
 
-              if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // The size axis becomes real; the position axis keeps its
+              // previous realness (the sentinel never enters the wry cache)
+              // (issue Eulogizethesun/tauri#244).
+              if auto_state.explicit == BoundsExplicitness::Natural {
+                auto_state.explicit = BoundsExplicitness::Partial;
+              }
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                 b.width_rate = logical_size.width / window_size.width;
                 b.height_rate = logical_size.height / window_size.height;
               }
+              drop(auto_state);
 
               if let Err(e) = webview.set_bounds(wry::Rect {
                 position: ohos_unspecified_position(),
@@ -4661,7 +4691,7 @@ fn handle_user_message<T: UserEvent>(
                 let scale_factor = window.scale_factor();
                 let size = size.to_logical::<f32>(scale_factor);
 
-                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                if let Some(b) = webview.bounds.lock().unwrap().rates.as_mut() {
                   let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                   b.width_rate = size.width / window_size.width;
                   b.height_rate = size.height / window_size.height;
@@ -4693,11 +4723,24 @@ fn handle_user_message<T: UserEvent>(
               let scale_factor = window.scale_factor();
               let logical_position = position.to_logical::<f32>(scale_factor);
 
-              if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // The position axis becomes real; the size axis keeps its
+              // previous realness (the sentinel never enters the wry cache)
+              // (issue Eulogizethesun/tauri#244).
+              if auto_state.explicit == BoundsExplicitness::Natural {
+                auto_state.explicit = BoundsExplicitness::Partial;
+              }
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                 b.x_rate = logical_position.x / window_size.width;
                 b.y_rate = logical_position.y / window_size.height;
               }
+              drop(auto_state);
 
               if let Err(e) = webview.set_bounds(wry::Rect {
                 position,
@@ -4714,7 +4757,7 @@ fn handle_user_message<T: UserEvent>(
                 let scale_factor = window.scale_factor();
                 let position = position.to_logical::<f32>(scale_factor);
 
-                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                if let Some(b) = webview.bounds.lock().unwrap().rates.as_mut() {
                   let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                   b.x_rate = position.x / window_size.width;
                   b.y_rate = position.y / window_size.height;
@@ -4840,32 +4883,67 @@ fn handle_user_message<T: UserEvent>(
           WebviewMessage::SetAutoResize(auto_resize) => {
             #[cfg(target_env = "ohos")]
             {
-              // Disabling always clears the runtime rates. Enabling does NOT
-              // source the base rect from `webview.bounds()`: that cache holds
-              // the `WebViewAttributes` default (200x200) for a natural-layout
-              // webview and sentinel components after a partial
-              // set_size/set_position, so rates derived from it would pin or
-              // shrink the webview on the next window resize (issue
-              // Eulogizethesun/tauri#241). A webview already armed keeps its
-              // live rates (maintained by the SetBounds/SetSize/SetPosition
-              // handlers); a natural-layout webview needs none -- it follows
-              // the window through container layout -- and the auto-resize
-              // base for a webview armed after creation is read from the
-              // actual layout by the ArkTS render layer (cross-repo contract,
-              // openharmony-ability WebviewPlugin.ets).
-              //
-              // KNOWN LIMITATION (issue Eulogizethesun/tauri#241): a disable
-              // followed by an enable permanently de-arms an explicit-bounds
-              // webview on OHOS. The disable clears the rate cache below, the
-              // enable leg stays a no-op (deliberately, see above), and the
-              // Resized handler only re-fires while the cache is `Some`, so
-              // the webview stops following window resizes for good. Desktop
-              // re-arms (its enable leg re-derives the rates from the live
-              // bounds). Re-arming would need a rate re-derivation from the
-              // live layout or an ArkTS-side re-derive; both are out of scope
-              // for this fix wave and are disclosed rather than fixed here.
+              // OHOS auto-resize contract (issue Eulogizethesun/tauri#244):
+              // the rates are Rust-side state on the handle. Disabling parks
+              // them (the Resized handler stops re-firing while `rates` is
+              // None); enabling re-arms by restoring the parked rates, or --
+              // for a webview never armed before -- by deriving them from the
+              // wry bounds cache when the geometry is fully explicit (the
+              // cache then holds real values on every component, including
+              // for a webview created with explicit bounds and armed only at
+              // runtime). A natural-layout webview stays un-armed and keeps
+              // following its ArkTS container through container layout. The
+              // ArkTS render layer is render-truth only: it applies the last
+              // explicit set_bounds and lets natural webviews track the
+              // container -- it performs no rate re-derivation of its own
+              // (openharmony-ability WebviewPlugin.ets). A partially-explicit
+              // webview (one axis still holding the natural-layout
+              // placeholder, no parked rates) cannot be derived from the
+              // cache, and the dispatch channel is fire-and-forget -- so the
+              // only honest report is a loud log naming the webview and the
+              // remedy (issue a full set_bounds first).
+              let mut state = webview.bounds.lock().unwrap();
               if !auto_resize {
-                *webview.bounds.lock().unwrap() = None;
+                state.parked = state.rates.take();
+              } else {
+                match ohos_auto_resize_enable_decision(&state) {
+                  OhosAutoResizeEnableDecision::Restore(parked) => {
+                    state.rates = Some(parked);
+                    state.parked = None;
+                  }
+                  OhosAutoResizeEnableDecision::DeriveFromCache => match webview.bounds() {
+                    Ok(cache_bounds) => {
+                      let scale_factor = window.scale_factor();
+                      let position = cache_bounds.position.to_logical::<f32>(scale_factor);
+                      let size = cache_bounds.size.to_logical::<f32>(scale_factor);
+                      let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                      state.rates = Some(WebviewBounds {
+                        x_rate: position.x / window_size.width,
+                        y_rate: position.y / window_size.height,
+                        width_rate: size.width / window_size.width,
+                        height_rate: size.height / window_size.height,
+                      });
+                    }
+                    Err(e) => {
+                      log::error!(
+                        "set_auto_resize(true) cannot re-arm webview `{}`: failed to read the bounds cache: {e}",
+                        webview.label
+                      );
+                    }
+                  },
+                  OhosAutoResizeEnableDecision::FollowContainer => {
+                    // Natural-layout webview: rates stay None on purpose; the
+                    // ArkTS container keeps it following window resizes.
+                  }
+                  OhosAutoResizeEnableDecision::LoudError => {
+                    log::error!(
+                      "set_auto_resize(true) cannot re-arm webview `{}`: its geometry is only partially explicit (a partial set_size/set_position made one axis explicit while the other still holds the natural-layout placeholder) and no rates are parked from a previous arm; it would pin or shrink on the next window resize. Issue a full set_bounds first, then re-enable auto-resize (issue Eulogizethesun/tauri#244)",
+                      webview.label
+                    );
+                    // rates stay None: the webview is left un-armed rather
+                    // than armed on an underivable base.
+                  }
+                }
               }
             }
             #[cfg(not(target_env = "ohos"))]
@@ -4873,18 +4951,22 @@ fn handle_user_message<T: UserEvent>(
               Ok(bounds) => {
                 let scale_factor = window.scale_factor();
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                *webview.bounds.lock().unwrap() = if auto_resize {
+                let mut state = webview.bounds.lock().unwrap();
+                if auto_resize {
                   let size = bounds.size.to_logical::<f32>(scale_factor);
                   let position = bounds.position.to_logical::<f32>(scale_factor);
-                  Some(WebviewBounds {
+                  state.rates = Some(WebviewBounds {
                     x_rate: position.x / window_size.width,
                     y_rate: position.y / window_size.height,
                     width_rate: size.width / window_size.width,
                     height_rate: size.height / window_size.height,
-                  })
+                  });
                 } else {
-                  None
-                };
+                  // Park (never read back on desktop -- the enable leg above
+                  // re-derives live; keeping the parked copy is OHOS-only
+                  // semantics and behavior-neutral here).
+                  state.parked = state.rates.take();
+                }
               }
               Err(e) => {
                 log::error!("failed to get webview bounds: {e}");
@@ -5355,15 +5437,14 @@ fn handle_event_loop<T: UserEvent>(
               .map(|w| (w.inner.clone(), w.webviews.clone()))
             {
               let size = size.to_logical::<f32>(window.scale_factor());
-              // This leg only re-fires for webviews that still hold a rate
-              // cache. On OHOS a SetAutoResize(false) then (true) cycle never
-              // re-arms an explicit-bounds webview: the disable clears the
-              // cache and the enable leg deliberately does not re-derive it
-              // (see the SetAutoResize handler), so this loop skips it for
-              // good. Irreversible de-arm, not a transient drop (issue
-              // Eulogizethesun/tauri#241).
+              // This leg only re-fires for webviews that still hold armed
+              // rates. A disable parks the rates (un-arming the webview), and
+              // a later enable re-arms by restoring the parked rates or
+              // re-deriving them from the wry bounds cache for fully-explicit
+              // geometry (issue Eulogizethesun/tauri#244) -- de-arming is
+              // reversible, not a permanent drop.
               for webview in webviews {
-                if let Some(b) = &*webview.bounds.lock().unwrap() {
+                if let Some(b) = &webview.bounds.lock().unwrap().rates {
                   if let Err(e) = webview.set_bounds(wry::Rect {
                     position: LogicalPosition::new(size.width * b.x_rate, size.height * b.y_rate)
                       .into(),
@@ -5934,12 +6015,84 @@ enum WebviewKind {
   WindowChild,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct WebviewBounds {
   x_rate: f32,
   y_rate: f32,
   width_rate: f32,
   height_rate: f32,
+}
+
+// --- OHOS auto-resize re-arm state (issue Eulogizethesun/tauri#244) ----------
+
+/// Whether a webview's wry bounds cache holds fully real geometry.
+///
+/// Sentinels never enter the wry cache (`merge_bounds_into_cache` screens
+/// them out), so realness is a per-axis property that only the *unset* axis
+/// of a partial write can regress: a natural-layout (bounds-less) webview's
+/// cache holds the upstream 200x200 placeholder on both axes (`Natural`);
+/// a runtime `set_size`/`set_position` makes one axis real and leaves the
+/// other at the placeholder (`Partial`); explicit creation bounds or a full
+/// `set_bounds` make every component real (`Full`).
+// `Partial` is only constructed by the OHOS partial-write arms; the type must
+// still exist on every target for the handle state and the host UT.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+enum BoundsExplicitness {
+  /// Created bounds-less: the cache holds the 200x200 placeholder.
+  #[default]
+  Natural,
+  /// One axis explicit (runtime partial write), the other still placeholder.
+  Partial,
+  /// Explicit creation bounds or a full set_bounds: the cache is all-real.
+  Full,
+}
+
+/// Per-webview auto-resize state carried on the handle (replaces the old
+/// single-slot `Option<WebviewBounds>` rate cache).
+#[derive(Default, Debug)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+struct WebviewAutoResizeState {
+  /// Armed rates — `Some` ⇒ the `Resized` handler re-fires `set_bounds`.
+  rates: Option<WebviewBounds>,
+  /// Rates parked at the last disable; restored by a later enable.
+  parked: Option<WebviewBounds>,
+  /// Whether the wry bounds cache for this webview is fully real.
+  explicit: BoundsExplicitness,
+}
+
+/// The OHOS `SetAutoResize(true)` enable decision, extracted from the handler
+/// as a pure function so the decision table is host-testable (issue
+/// Eulogizethesun/tauri#244).
+#[derive(Debug, PartialEq)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+enum OhosAutoResizeEnableDecision {
+  /// Restore the rates parked at the last disable (disable → enable cycle).
+  Restore(WebviewBounds),
+  /// Derive rates from the wry bounds cache — legal only for fully-explicit
+  /// geometry, where every cache component is real.
+  DeriveFromCache,
+  /// Natural-layout webview: stays un-armed and keeps following its ArkTS
+  /// container through container layout — correct-by-construction.
+  FollowContainer,
+  /// Non-derivable corner: partially-explicit geometry with no parked rates.
+  /// The caller logs a loud error naming the webview and the remedy — the
+  /// dispatch channel is fire-and-forget, so no synchronous `Err` exists.
+  LoudError,
+}
+
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+fn ohos_auto_resize_enable_decision(
+  state: &WebviewAutoResizeState,
+) -> OhosAutoResizeEnableDecision {
+  if let Some(parked) = &state.parked {
+    return OhosAutoResizeEnableDecision::Restore(parked.clone());
+  }
+  match state.explicit {
+    BoundsExplicitness::Full => OhosAutoResizeEnableDecision::DeriveFromCache,
+    BoundsExplicitness::Natural => OhosAutoResizeEnableDecision::FollowContainer,
+    BoundsExplicitness::Partial => OhosAutoResizeEnableDecision::LoudError,
+  }
 }
 
 // --- OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) -----------
@@ -6245,7 +6398,11 @@ You may have it installed on another user account, but it is not available for t
 
     let window_size = window.inner_size().to_logical::<f32>(scale_factor);
 
-    if webview_attributes.auto_resize {
+    // Explicit creation bounds: the wry cache is seeded with the requested
+    // rect, so the geometry is fully real whether or not auto-resize arms at
+    // creation (a runtime enable can derive from it, issue
+    // Eulogizethesun/tauri#244).
+    let rates = if webview_attributes.auto_resize {
       Some(WebviewBounds {
         x_rate: position.x / window_size.width,
         y_rate: position.y / window_size.height,
@@ -6254,6 +6411,11 @@ You may have it installed on another user account, but it is not available for t
       })
     } else {
       None
+    };
+    WebviewAutoResizeState {
+      rates,
+      parked: None,
+      explicit: BoundsExplicitness::Full,
     }
   } else {
     #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
@@ -6262,16 +6424,20 @@ You may have it installed on another user account, but it is not available for t
         position: LogicalPosition::new(0i32, 0i32).into(),
         size: window.inner_size().into(),
       });
-      Some(WebviewBounds {
-        x_rate: 0.,
-        y_rate: 0.,
-        width_rate: 1.,
-        height_rate: 1.,
-      })
+      WebviewAutoResizeState {
+        rates: Some(WebviewBounds {
+          x_rate: 0.,
+          y_rate: 0.,
+          width_rate: 1.,
+          height_rate: 1.,
+        }),
+        parked: None,
+        explicit: BoundsExplicitness::Full,
+      }
     }
     #[cfg(all(not(feature = "unstable"), not(target_env = "ohos")))]
     {
-      None
+      WebviewAutoResizeState::default()
     }
     // On OHOS, a webview created without explicit bounds must stay bounds-less:
     // wry marks it natural-layout in WebViewStyle (no width/height -> the ArkTS
@@ -6280,8 +6446,11 @@ You may have it installed on another user account, but it is not available for t
     // layer as the rendered geometry (create-time style.width/height drive the
     // wrapper Stack; a runtime set_bounds applies the full geometry and flips a
     // natural webview to explicit sizing -- openspec ohos-webview-sizing).
+    // Natural creation: the bounds cache holds the upstream 200x200
+    // placeholder, so a runtime enable must NOT derive from it -- the webview
+    // keeps following its ArkTS container (issue Eulogizethesun/tauri#244).
     #[cfg(target_env = "ohos")]
-    None
+    WebviewAutoResizeState::default()
   };
 
   if let Some(download_handler) = pending.download_handler {
@@ -7074,5 +7243,93 @@ mod mapping_tests {
     };
     let dd = WindowEventWrapper::from(SynthesizedWindowEvent::DragDrop(drop_event));
     assert!(matches!(dd.0, Some(WindowEvent::DragDrop(_))));
+  }
+}
+
+/// OHOS SetAutoResize enable-decision table, host-tested as a pure function
+/// (issue Eulogizethesun/tauri#244): restore / derive-from-cache / follow-
+/// container / loud-error, one row each, plus the parked-beats-derive
+/// precedence. A regression in any arm (e.g. re-silencing the partial corner
+/// or dropping the park) fails here without needing an OHOS device.
+#[cfg(test)]
+mod auto_resize_enable_decision_tests {
+  use super::*;
+
+  fn rates(x: f32, y: f32, w: f32, h: f32) -> WebviewBounds {
+    WebviewBounds {
+      x_rate: x,
+      y_rate: y,
+      width_rate: w,
+      height_rate: h,
+    }
+  }
+
+  // Row 1: parked rates present → restore (the disable → enable re-arm), and
+  // parked takes precedence over a derivable (Full) cache.
+  #[test]
+  fn enable_restores_parked_rates_and_parked_beats_derive() {
+    let parked = rates(0.1, 0.2, 0.3, 0.4);
+    let mut state = WebviewAutoResizeState {
+      rates: None,
+      parked: Some(parked.clone()),
+      explicit: BoundsExplicitness::Full,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::Restore(parked)
+    );
+
+    // Precedence holds even when the webview was never fully explicit: a
+    // parked rate set is the geometry the previous arm actually used.
+    state.explicit = BoundsExplicitness::Partial;
+    let parked2 = rates(0.5, 0.6, 0.7, 0.8);
+    state.parked = Some(parked2.clone());
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::Restore(parked2)
+    );
+  }
+
+  // Row 2: no parked rates, fully-explicit geometry → derive from the cache
+  // (covers "created with explicit bounds, armed only at runtime").
+  #[test]
+  fn enable_derives_for_fully_explicit_geometry() {
+    let state = WebviewAutoResizeState {
+      rates: None,
+      parked: None,
+      explicit: BoundsExplicitness::Full,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::DeriveFromCache
+    );
+  }
+
+  // Row 3: natural-layout webview → stays un-armed, follows the ArkTS
+  // container; must NOT read as an error (it is correct-by-construction).
+  #[test]
+  fn enable_keeps_natural_webview_un_armed_without_error() {
+    let state = WebviewAutoResizeState::default();
+    assert_eq!(state.explicit, BoundsExplicitness::Natural);
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::FollowContainer
+    );
+  }
+
+  // Row 4: partially-explicit geometry with no parked rates → loud error, so
+  // enable can never silently arm on the underivable 200x200 placeholder axis
+  // (the old behavior silently left rates unset while returning Ok).
+  #[test]
+  fn enable_loud_errors_on_partial_geometry_without_parked_rates() {
+    let state = WebviewAutoResizeState {
+      rates: None,
+      parked: None,
+      explicit: BoundsExplicitness::Partial,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::LoudError
+    );
   }
 }

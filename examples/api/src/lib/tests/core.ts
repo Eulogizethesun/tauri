@@ -281,21 +281,27 @@ function describeProbe(p: ViewportProbeSample | null): string {
     : 'no sample';
 }
 
-// Polls until the tag's probe reports the expected viewport within a ±1px
-// measurement tolerance. Device-measured (2in1 3QC0124C11000038, 2026-10-20
-// green-run calibration): ArkWeb reports window.innerWidth/innerHeight as the
-// component size + 1px on BOTH axes, systematically, for every geometry —
-// 300×200→301×201, 400×300→401×301, 320×240→321×241, natural 600×450→601×451,
-// main window→1101×657. The +1 is ArkWeb viewport-report semantics, not a
-// geometry error — the defect this suite pins (full-window inflation) is two
-// orders of magnitude larger (e.g. +800 wide). Tolerance must stay ≤1 so the
-// distinct set_bounds legs in case b (400×300 vs 250×150) cannot alias.
+// Polls until the tag's probe reports the expected viewport within a ±tolPx
+// measurement tolerance (default ±1). Device-measured (2in1 3QC0124C11000038,
+// 2026-10-20 green-run calibration): ArkWeb reports window.innerWidth/
+// innerHeight as the component size + 1px on BOTH axes, systematically, for
+// every geometry — 300×200→301×201, 400×300→401×301, 320×240→321×241,
+// natural 600×450→601×451, main window→1101×657. The +1 is ArkWeb
+// viewport-report semantics, not a geometry error — the defect this suite
+// pins (full-window inflation) is two orders of magnitude larger (e.g. +800
+// wide). Default tolerance must stay ≤1 so the distinct set_bounds legs in
+// case b (400×300 vs 250×150) cannot alias. Callers whose expectation is
+// RATE-derived (case d's auto-resize legs: expectation = creation rect ×
+// actual window size ÷ window size at arm time) pass tolPx=2: the applied
+// geometry is fractional and rounds on both sides of the systematic +1, so
+// ±1 would be one-sided.
 async function pollViewportProbe(
   tag: string,
   expectW: number,
   expectH: number,
   budgetMs: number,
-  what: string
+  what: string,
+  tolPx = 1
 ): Promise<ViewportProbeSample> {
   const start = Date.now();
   let last: ViewportProbeSample | null = null;
@@ -303,8 +309,8 @@ async function pollViewportProbe(
     last = await latestViewportProbe(tag);
     if (
       last &&
-      Math.abs(last.innerWidth - expectW) <= 1 &&
-      Math.abs(last.innerHeight - expectH) <= 1
+      Math.abs(last.innerWidth - expectW) <= tolPx &&
+      Math.abs(last.innerHeight - expectH) <= tolPx
     ) {
       return last;
     }
@@ -1975,6 +1981,141 @@ export const coreTests: TestCase[] = [
         if (win) {
           try { await win.destroy(); } catch { /* cleanup best-effort */ }
         }
+      }
+    },
+  },
+
+  // ─── SetAutoResize re-arm (issue Eulogizethesun/tauri#244, case d) ───
+  {
+    // Case d: a webview created with explicit bounds must keep following
+    // window resizes across a setAutoResize(false)→(true) cycle, and a
+    // runtime enable on a never-armed explicit-bounds webview must arm it.
+    // Pre-#244-fix the OHOS enable leg was a no-op, so both legs fail (the
+    // webview keeps its creation geometry at every window resize). All legs
+    // drive the RENDER truth via the viewport probe, at the creation ratio.
+    name: 'webview setAutoResize disable→enable re-arms tracking (issue #244)',
+    category: 'auto',
+    // 40s: creation wait + two probe polls (5s each) + two resize legs
+    // (0.8s settle + 7s poll each) fit inside the budget so a failure reports
+    // the leg message, not the outer timeout.
+    timeout: 40000,
+    async fn() {
+      await skipOnMobile('the case drives main-window resizes, a freeform (PC/2in1) capability; on phone the fullscreen main window is a system-level no-op');
+      // Freeform guard (same probe as window-ops' mainWindowResizable): on a
+      // fullscreen main window the resizes cannot land, so Guard ① below
+      // would fire for the wrong reason — skip instead of false-failing.
+      const win0 = getCurrentWindow();
+      let mon: Awaited<ReturnType<typeof currentMonitor>> = null;
+      try {
+        mon = await currentMonitor();
+      } catch {
+        mon = null;
+      }
+      if (mon) {
+        const outer0 = await win0.outerSize();
+        if (outer0.width >= mon.size.width * 0.95 && outer0.height >= mon.size.height * 0.95) {
+          skip('main window is fullscreen (not freeform): window resize cannot land — auto-resize tracking is unjudgeable');
+        }
+      }
+      const mainWindow = getCurrentWindow();
+      const sf = await mainWindow.scaleFactor();
+      const tagD = 'test-autosize-rearm-' + Date.now();
+      const origPhysical = await mainWindow.innerSize();
+      // Explicit creation bounds: the wry bounds cache is seeded with this
+      // rect, so the geometry is fully explicit and (post-#244) derivable on
+      // a runtime enable.
+      const child = new Webview(mainWindow, tagD, {
+        url: '/webview-viewport-probe.html',
+        x: 30,
+        y: 40,
+        width: 300,
+        height: 200,
+      });
+      // Register the created/error listeners SYNCHRONOUSLY (this call runs
+      // before the first await below): `tauri://created` is delivered by a
+      // synchronous pass over the constructor's local listener table the
+      // moment the create invoke resolves, so any await between construction
+      // and registration can consume the event and leave this wait timing
+      // out with "creation timed out" — the red-run 2026-11-03 failure mode
+      // (the await on innerSize sat between the two). Sibling cases a/b
+      // register immediately and have never flaked on this.
+      const created = waitForWebviewCreated(child, 'case d child');
+      try {
+        await created;
+        await pollViewportProbeSettled(tagD, 5000, 'case d child created');
+        await pollViewportProbe(tagD, 300, 200, 5000, 'case d child rendered at creation bounds 300×200');
+        // Window inner size BEFORE the first arm — the divisor of the rates
+        // the enable leg derives/restores.
+        const s0 = (await mainWindow.innerSize()).toLogical(sf);
+        const w0 = s0.width;
+        const h0 = s0.height;
+        // ── Leg 1: runtime enable on fully-explicit geometry. Pre-fix this
+        // arm was a no-op → the webview never follows any window resize.
+        await child.setAutoResize(true);
+        // Resize targets are ADAPTIVE (the demo main window boots at
+        // 1000×800 logical but that is not an invariant of the suite run):
+        // leg 1 grows ~1.3× (Guard ① requires ≥1.15× growth — a fixed
+        // 1000×600 target would SHRINK the boot-size window and fire the
+        // guard for the wrong reason), clamped to 85% of the monitor so a
+        // large window's growth cannot be swallowed by a WM clamp; leg 2
+        // shrinks to ~0.72× (Guard ② requires a >50px move), held above the
+        // demo's 600×400 logical min_inner_size so a clamp cannot eat the
+        // delta.
+        let tw1 = Math.round(w0 * 1.3);
+        let th1 = Math.round(h0 * 1.3);
+        if (mon) {
+          const mLog = mon.size.toLogical(sf);
+          tw1 = Math.min(tw1, Math.floor(mLog.width * 0.85));
+          th1 = Math.min(th1, Math.floor(mLog.height * 0.85));
+        }
+        await mainWindow.setSize(new LogicalSize(tw1, th1));
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        const s1 = (await mainWindow.innerSize()).toLogical(sf);
+        // Guard ①: the resize must actually land and GROW — a no-op or
+        // clamped-away resize would make the tracking assertion below
+        // vacuous.
+        assert(
+          s1.width >= w0 * 1.15 && s1.height >= h0 * 1.15,
+          `window resize had no effect: ${w0}×${h0} → ${s1.width}×${s1.height} (target ${tw1}×${th1}) — cannot judge auto-resize tracking`
+        );
+        const ew1 = Math.round((300 * s1.width) / w0);
+        const eh1 = Math.round((200 * s1.height) / h0);
+        await pollViewportProbe(
+          tagD,
+          ew1,
+          eh1,
+          7000,
+          `runtime enable armed tracking after resize to ${s1.width}×${s1.height} (expect ~${ew1}×${eh1})`,
+          2
+        );
+        // ── Leg 2: disable parks, enable restores → still tracking.
+        await child.setAutoResize(false);
+        await child.setAutoResize(true);
+        const tw2 = Math.max(620, Math.round(s1.width * 0.72));
+        const th2 = Math.max(420, Math.round(s1.height * 0.72));
+        await mainWindow.setSize(new LogicalSize(tw2, th2));
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        const s2 = (await mainWindow.innerSize()).toLogical(sf);
+        // Guard ②: same no-op-resize guard for the second leg.
+        assert(
+          Math.abs(s2.width - s1.width) > 50 || Math.abs(s2.height - s1.height) > 50,
+          `second window resize had no effect: ${s1.width}×${s1.height} → ${s2.width}×${s2.height} (target ${tw2}×${th2}) — cannot judge auto-resize tracking`
+        );
+        const ew2 = Math.round((300 * s2.width) / w0);
+        const eh2 = Math.round((200 * s2.height) / h0);
+        await pollViewportProbe(
+          tagD,
+          ew2,
+          eh2,
+          7000,
+          `disable→enable re-armed tracking after resize to ${s2.width}×${s2.height} (expect ~${ew2}×${eh2})`,
+          2
+        );
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
+        // Restore the suite's window size so later window-geometry cases are
+        // not affected by this case's resizes.
+        try { await mainWindow.setSize(origPhysical); } catch { /* best-effort */ }
       }
     },
   },
