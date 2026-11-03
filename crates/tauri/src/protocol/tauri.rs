@@ -71,7 +71,9 @@ pub fn get<R: Runtime>(
 /// Reads a proxied network response into a [`CachedResponse`] — the shared
 /// body of the OHOS / non-OHOS lock-hygiene variants in `get_response`.
 #[cfg(all(dev, mobile))]
-fn read_cached_response(r: reqwest::Response) -> Result<CachedResponse, Box<dyn std::error::Error>> {
+fn read_cached_response(
+  r: reqwest::Response,
+) -> Result<CachedResponse, Box<dyn std::error::Error>> {
   let status = r.status();
   let headers = r.headers().clone();
   let body = crate::async_runtime::safe_block_on(r.bytes())?;

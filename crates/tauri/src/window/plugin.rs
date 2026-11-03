@@ -122,7 +122,7 @@ mod commands {
     for webview in window.webviews() {
       webview.set_background_color(value.clone())?;
     }
-    window.set_background_color(value).map_err(Into::into)
+    window.set_background_color(value)
   }
   setter!(set_size_constraints, WindowSizeConstraints);
   setter!(set_theme, Option<Theme>);

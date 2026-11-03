@@ -51,7 +51,10 @@ impl<R: Runtime> ContextMenuBase for Submenu<R> {
         None => (None, None),
       };
       let window_id = window.label();
-      (*self.0).as_ref().popup(x, y, window_id).map_err(Into::into)
+      (*self.0)
+        .as_ref()
+        .popup(x, y, window_id)
+        .map_err(Into::into)
     }
     #[cfg(not(target_env = "ohos"))]
     {

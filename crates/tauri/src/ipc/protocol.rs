@@ -154,7 +154,11 @@ pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler 
           #[cfg(target_env = "ohos")]
           {
             let all_labels: Vec<String> = manager.webviews().keys().cloned().collect();
-            log::warn!("[IPC] failed to acquire webview reference: label={:?}, known_labels={:?}", label, all_labels);
+            log::warn!(
+              "[IPC] failed to acquire webview reference: label={:?}, known_labels={:?}",
+              label,
+              all_labels
+            );
           }
           respond(
             http::Response::builder()
@@ -639,7 +643,7 @@ mod tests {
     assert_eq!(invoke_request.body, InvokeBody::Raw(body));
 
     let body = json!({
-      "key": 1,
+      "key": 1i32,
       "anotherKey": "asda",
     });
 
@@ -683,7 +687,7 @@ mod tests {
     });
 
     let body_json = json!({
-      "key": 1,
+      "key": 1i32,
       "anotherKey": "string"
     });
     let body_bytes = crypto_keys

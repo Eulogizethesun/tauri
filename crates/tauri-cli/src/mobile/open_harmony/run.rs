@@ -182,7 +182,7 @@ fn install_launch_and_log(options: &Options) -> Result<Box<dyn DevProcess + Send
         .contains("-signed")
     })
     .filter(|p| p.exists())
-    .map(|p| p.clone())
+    .cloned()
     .context(
       "no signed HAP found at the expected output path. Signing is not configured, \
        and an unsigned HAP cannot be installed on a device. Set the OHOS signing \
@@ -327,7 +327,7 @@ fn install_launch_and_log(options: &Options) -> Result<Box<dyn DevProcess + Send
 fn wait_for_app_pid(env: &Env, device_id: &str, bundle_name: &str) -> String {
   use cargo_mobile2::open_harmony::hdc;
 
-  for _ in 0..10 {
+  for _ in 0i32..10i32 {
     if let Ok(out) = hdc::hdc(env, ["-t", device_id, "shell", "pidof", "-s", bundle_name])
       .stdout_capture()
       .stderr_capture()

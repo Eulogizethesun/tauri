@@ -182,33 +182,22 @@ fn exec(
 
       // Register template variables for OHOS templates
       let version = tauri_config.version.as_deref().unwrap_or("1.0.0");
-      let publisher = tauri_config
-        .bundle
-        .publisher
-        .clone()
-        .unwrap_or_else(|| {
-          // Fall back to the second segment of the identifier (e.g. "com.tauri.api" -> "tauri");
-          // if the identifier has no dot, fall back to the product name instead of an empty string.
-          tauri_config
-            .identifier
-            .split('.')
-            .nth(1)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-              tauri_config.product_name.clone().unwrap_or_default()
-            })
-        });
+      let publisher = tauri_config.bundle.publisher.clone().unwrap_or_else(|| {
+        // Fall back to the second segment of the identifier (e.g. "com.tauri.api" -> "tauri");
+        // if the identifier has no dot, fall back to the product name instead of an empty string.
+        tauri_config
+          .identifier
+          .split('.')
+          .nth(1)
+          .map(|s| s.to_string())
+          .filter(|s| !s.is_empty())
+          .unwrap_or_else(|| tauri_config.product_name.clone().unwrap_or_default())
+      });
       let short_description = tauri_config
         .bundle
         .short_description
         .clone()
-        .unwrap_or_else(|| {
-          tauri_config
-            .product_name
-            .clone()
-            .unwrap_or_default()
-        });
+        .unwrap_or_else(|| tauri_config.product_name.clone().unwrap_or_default());
       let version_code = tauri_config
         .bundle
         .open_harmony
@@ -228,12 +217,24 @@ fn exec(
 
       // bundle sub-fields: {{bundle.publisher}}, {{bundle.short-description}}, {{bundle.open-harmony.*}}
       let mut bundle_map = serde_json::Map::new();
-      bundle_map.insert("publisher".to_string(), serde_json::to_value(&publisher).unwrap_or_default());
-      bundle_map.insert("short-description".to_string(), serde_json::to_value(&short_description).unwrap_or_default());
+      bundle_map.insert(
+        "publisher".to_string(),
+        serde_json::to_value(&publisher).unwrap_or_default(),
+      );
+      bundle_map.insert(
+        "short-description".to_string(),
+        serde_json::to_value(&short_description).unwrap_or_default(),
+      );
 
       let mut ohos_map = serde_json::Map::new();
-      ohos_map.insert("version-code".to_string(), serde_json::to_value(version_code).unwrap_or_default());
-      bundle_map.insert("open-harmony".to_string(), serde_json::Value::Object(ohos_map));
+      ohos_map.insert(
+        "version-code".to_string(),
+        serde_json::to_value(version_code).unwrap_or_default(),
+      );
+      bundle_map.insert(
+        "open-harmony".to_string(),
+        serde_json::Value::Object(ohos_map),
+      );
 
       // Per-form deviceTypes for the dual-entry template: each entry's module.json5
       // emits its list via `{{{form-device-types}}}` (pre-serialized JSON string so

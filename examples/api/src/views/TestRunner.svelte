@@ -396,7 +396,7 @@
   // ArkHelper → WindowManager → win.setWindowTouchable). Rust always returns Ok;
   // real proof is hilog `grep setWindowTouchable` + visual pass-through. Briefly
   // setting true lets the user observe the window stop consuming events; false
-  // restores. For full pass-through verification create a Float overlay window.
+  // restores. For full pass-through verification create a SubWindow overlay sub-window.
   async function manualIgnoreCursorEvents() {
     await wrapManual('setIgnoreCursorEvents', async () => {
       const win = getCurrentWindow();
@@ -415,7 +415,7 @@
     });
   }
 
-  // Full pass-through test on a Float overlay sub-window (manual_tests.md §28).
+  // Full pass-through test on a SubWindow overlay sub-window (manual_tests.md §28).
   // The 3s-toggle smoke above only exercises the TSFN bridge on the main window;
   // T0/T1 require an overlay ABOVE the main window so click/hover pass-through is
   // observable. setIgnoreCursorEvents passes label, so targeting the sub-window
@@ -424,7 +424,7 @@
   async function manualOverlayIgnoreCursor() {
     await wrapManual('overlayIgnoreCursor', async () => {
       const label = 'manual-ignore-cursor-overlay';
-      // Reuse if still open; otherwise create a fresh transparent Float overlay.
+      // Reuse if still open; otherwise create a fresh transparent SubWindow overlay.
       let win = await WebviewWindow.getByLabel(label);
       if (!win) {
         await invoke('create_transparent_window', { windowId: label });
@@ -433,7 +433,7 @@
       if (!win) throw new Error('overlay window not created');
       overlayIgnoreCursorWin = win;
       await win.setIgnoreCursorEvents(true);
-      manualResult = '✅ overlay 子窗口（"manual-ignore-cursor-overlay"，800×600 Float）已 setIgnoreCursorEvents(true)。\n' +
+      manualResult = '✅ overlay 子窗口（"manual-ignore-cursor-overlay"，800×600 SubWindow）已 setIgnoreCursorEvents(true)。\n' +
         '验证步骤（30 秒窗口）：\n' +
         '  T0 触摸/点击穿透：点击 overlay 深色卡片覆盖区域 → 点击应落到下层主窗口（主窗口按钮可点/有反应，overlay 不响应不获焦）\n' +
         '  T1 hover 穿透：鼠标悬停 overlay 覆盖的主窗口按钮 → hover 高亮应生效\n' +
@@ -1094,7 +1094,7 @@ Expected behavior:
 
   // ─── Window Decorations & Transparency Manual Tests (Phase 1+2+3) ───
   let decorationsState = $state('unknown');
-  // Tracks the label of the most-recently-created Float sub-window so the BG
+  // Tracks the label of the most-recently-created SubWindow sub-window so the BG
   // buttons (set_background_color) can target it instead of the main window.
   // Historical note: @tauri-apps/api Window.setBackgroundColor used to omit
   // `label` in the invoke payload (fixed in the fork, 3ff13dff9; upstreaming
@@ -1142,7 +1142,7 @@ Expected behavior:
       const win = await WebviewWindow.getByLabel(windowId);
       if (!win) throw new Error('decorated window not created');
       lastCreatedWindowLabel = windowId;
-      // Set a title (setWindowTitle → LocalStorage 'title' → FloatPage title bar)
+      // Set a title (setWindowTitle → LocalStorage 'title' → SubWindowPage title bar)
       try { await win.setTitle('🪟 Decorated Test Window'); } catch (e) { /* may fail on main window, ignore */ }
       manualResult = `Decorated window created (id: "${windowId}").\n\n` +
         `Expected: Window WITH title bar + minimize/maximize/close buttons.\n` +
@@ -1171,7 +1171,7 @@ Expected behavior:
         `(tauri-window-N keys) in module.json5 (entry_desktop): the spawn want carries a\n` +
         `unique tauri_window_id → onAcceptWant returns the "tauri-window-<id>" instance\n` +
         `key → AMS starts a new instance.\n\n` +
-        `If a new independent window appears (separate from the Float sub-windows) → PASS.\n` +
+        `If a new independent window appears (separate from the SubWindow sub-windows) → PASS.\n` +
         `If the request instead falls back to the main instance (bare-want "tauri-primary"\n` +
         `routing: only onNewWant, no new onCreate/window) → FAIL: per-window instance key\n` +
         `not applied (launchType not "specified", or the want lost tauri_window_id).\n` +
@@ -1227,7 +1227,7 @@ Expected behavior:
     });
   }
 
-  // Set the background color on the most-recently-created Float sub-window
+  // Set the background color on the most-recently-created SubWindow sub-window
   // (click "Create Borderless Window" or "Create Transparent+Borderless" first).
   //
   // Why not win.setBackgroundColor(): @tauri-apps/api Window.setBackgroundColor
@@ -1236,7 +1236,7 @@ Expected behavior:
   // the main window (windowId=0), whose background is masked by the XComponent
   // content layer. Fixed in the fork (3ff13dff9 passes `label`); upstreaming
   // pending. These buttons invoke the command directly with the sub-window's
-  // label so it targets the correct Float sub-window. See
+  // label so it targets the correct SubWindow sub-window. See
   // ohos-window-test-mapping.md row "window background color".
   async function manualSetBackgroundColor(color, label) {
     await wrapManual(`setBackgroundColor(${label})`, async () => {
@@ -1263,7 +1263,7 @@ Expected behavior:
 
   // ─── Vibrancy (Window Effects) Manual Tests (OHOS only) ───
   // NOTE: WebviewWindow.new defaults to OHOS UIAbility (singleton) which conflicts with the
-  // main window. Use create_transparent_window (Float sub-window) instead so the window
+  // main window. Use create_transparent_window (SubWindow sub-window) instead so the window
   // creates successfully and setEffects can apply backdropBlur.
   async function manualVibrancyEffect(effectName, effect, opts, expect) {
     await wrapManual(`vibrancy:${effectName}`, async () => {
@@ -1400,19 +1400,79 @@ Expected behavior:
     });
   }
 
-  // Main-window Hide/Show — window-level ops via tao set_visible: hide →
-  // minimize_window (main window = ArkTS win.minimize(); hideAbility is not
-  // supported on PC/2in1), show → restore_window (API14+ documented inverse
-  // of minimize) + show_window (raise). No startAbility/onAcceptWant routing
-  // — that is the tray/menu showMainAbility restore path, not win.show().
+  // Main-window Hide/Show — TR-2 (issue Eulogizethesun/tauri#241): hide() on the
+  // MAIN window is contractually REJECTED at the dispatcher ("hiding the main
+  // window is not supported on OpenHarmony" — hideAbility is not supported on
+  // PC/2in1; the pre-#241 blanket hide no longer exists, while sub-windows keep
+  // the tao kind-split set_visible path). The button asserts the rejection and
+  // that the window stays visible, then exercises the supported equivalent
+  // (minimize → restore) so the operator still sees real window motion.
+  // The rejection contract is OHOS-ONLY: on non-OHOS platforms
+  // win.hide() on the main window legitimately resolves, so the assert below
+  // is platform-gated (same plugin-os detection as manualOsInfo) — unguarded
+  // it reported a bogus "hide gate regressed" on the Windows baseline.
   async function manualShowHide() {
     await wrapManual('showHide', async () => {
       const win = getCurrentWindow();
-      await win.hide();
-      ohosWinState = `main hide dispatched; 2s 后 show(restore+showWindow)`;
-      manualResult = `hide() on main window（窗口级 minimize → 退后台）。\n2 秒后 show()（restore + showWindow 窗口级恢复，不经 startAbility 实例路由）。\n若主窗口先消失再恢复 → PASS。`;
-      onMessage(manualResult);
-      setTimeout(() => getCurrentWindow().show(), 2000);
+      const isOhos = (await import('@tauri-apps/plugin-os')).platform() === 'ohos';
+      if (!isOhos) {
+        // Non-OHOS: hide()/show() is a supported round-trip — prove it
+        // instead of asserting a rejection that only exists on OHOS.
+        // Visibility is asserted via deadline-poll (2s budget, same shape as
+        // the OHOS-side driver float.hide ack poll): hide()/show() resolving
+        // does not guarantee isVisible() has flipped on the same tick on
+        // every platform, and the previous same-tick assert made this arm
+        // stricter than the OHOS arm (cross-platform asymmetry, tauri-F5).
+        const VISIBILITY_ACK_BUDGET_MS = 2000;
+        const pollVisible = async (expected) => {
+          const deadline = Date.now() + VISIBILITY_ACK_BUDGET_MS;
+          let v = await win.isVisible();
+          while (v !== expected && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            v = await win.isVisible();
+          }
+          return v;
+        };
+        await win.hide();
+        const hidden = await pollVisible(false);
+        if (hidden) {
+          throw new Error(`non-OHOS: main window still visible (isVisible=${hidden}) ${VISIBILITY_ACK_BUDGET_MS}ms after hide() resolved`);
+        }
+        await win.show();
+        const shown = await pollVisible(true);
+        if (!shown) {
+          throw new Error(`non-OHOS: main window not visible (isVisible=${shown}) ${VISIBILITY_ACK_BUDGET_MS}ms after show() resolved`);
+        }
+        ohosWinState = `hide → isVisible=${hidden}; show → isVisible=${shown}`;
+        manualResult = `hide()/show() round-trip on the main window (non-OHOS: no reject contract; #241 TR-2 is OHOS-only)。\nhide → isVisible=${hidden}, show → isVisible=${shown}。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。`;
+        onMessage(manualResult);
+      } else {
+        let rejected = null;
+        try {
+          await win.hide();
+        } catch (e) {
+          rejected = e;
+        }
+        if (rejected === null) {
+          throw new Error(
+            'hide() on the main window unexpectedly RESOLVED — the main-window hide gate regressed (must reject per issue Eulogizethesun/tauri#241)'
+          );
+        }
+        const text = typeof rejected === 'string' ? rejected : rejected instanceof Error ? rejected.message : String(rejected);
+        if (!/not supported on OpenHarmony/.test(text)) {
+          throw new Error(`hide() rejected with an unexpected error (expected the "not supported on OpenHarmony" contract message): ${text}`);
+        }
+        const visible = await win.isVisible();
+        if (!visible) {
+          throw new Error(`main window reported isVisible()=${visible} after the rejected hide() — the window must stay visible`);
+        }
+        ohosWinState = `hide 按契约拒绝; isVisible=${visible}; minimize→restore 验证`;
+        manualResult = `hide() on main window → 按契约拒绝（${text}）。\n窗口仍可见（isVisible=${visible}）。\n随后 minimize() → 1.5s → unminimize() 验证窗口仍可正常退后台/恢复。\n若三步均无报错、窗口未消失 → PASS。`;
+        onMessage(manualResult);
+      }
+      await win.minimize();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await win.unminimize();
     });
   }
 
@@ -1439,7 +1499,7 @@ Expected behavior:
     });
   }
 
-  // Decoration button group: acts on the most recently created Float sub-window (no-op on the main window)
+  // Decoration button group: acts on the most recently created SubWindow sub-window (no-op on the main window)
   async function manualSetClosable() {
     await wrapManual('setClosable', async () => {
       if (!lastCreatedWindowLabel) { manualResult = 'No sub-window. Click Create Borderless/Transparent+Borderless first.'; onMessage(manualResult); return; }
@@ -1449,7 +1509,7 @@ Expected behavior:
       await win.setClosable(!before);
       const after = await win.isClosable();
       ohosWinState = `isClosable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setClosable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected(decorations=true 时):关闭按钮 ${after ? '显示' : '隐藏'}。\nclosable 是唯一被 FloatPage 消费的 flag(line 155 控制关闭按钮显隐)。`;
+      manualResult = `setClosable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\nExpected(decorations=true 时):关闭按钮 ${after ? '显示' : '隐藏'}。\nclosable 是唯一被 SubWindowPage 消费的 flag(line 155 控制关闭按钮显隐)。`;
       onMessage(manualResult);
     });
   }
@@ -1463,7 +1523,7 @@ Expected behavior:
       await win.setMaximizable(!before);
       const after = await win.isMaximizable();
       ohosWinState = `isMaximizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setMaximizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('maximizable') 但没消费(无最大化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      manualResult = `setMaximizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('maximizable') 但没消费(无最大化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
       onMessage(manualResult);
     });
   }
@@ -1477,7 +1537,7 @@ Expected behavior:
       await win.setMinimizable(!before);
       const after = await win.isMinimizable();
       ohosWinState = `isMinimizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setMinimizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('minimizable') 但没消费(无最小化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
+      manualResult = `setMinimizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ SubWindowPage 声明了 @LocalStorageProp('minimizable') 但没消费(无最小化按钮)。\nflag 写入 LocalStorage 但无 UI 效果。`;
       onMessage(manualResult);
     });
   }
@@ -1491,7 +1551,7 @@ Expected behavior:
       await win.setResizable(!before);
       const after = await win.isResizable();
       ohosWinState = `isResizable: ${before} → ${after} (on ${lastCreatedWindowLabel})`;
-      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n⚠️ FloatPage 声明了 @LocalStorageProp('resizable') 但没消费(无 resize 手柄)。\nflag 写入 LocalStorage 但无 UI 效果。要真正禁用 resize 需走 enableDrag(false) API。`;
+      manualResult = `setResizable(${!before}) on sub-window "${lastCreatedWindowLabel}"。\n\n✅ 双腿(tao set_resizable, 2026-10-28 对齐 mapping #46): ① decoration-flags bit3→LocalStorage(API 拦截层: flag=false 时 set_inner_size 被 FLAG_RESIZABLE 门拦截) ② set-resize-by-drag 腿→按 windowId 路由(主窗 setResizeByDragEnabled / 子窗 enableDrag)。\n用户可感面=子窗边缘拖拽缩放开关: false 时边缘拖不动, 恢复后重新可拖。`;
       onMessage(manualResult);
     });
   }
@@ -1694,16 +1754,37 @@ Expected behavior:
   }
 
   // 7. set_bounds — set position+size round-trip at the webview layer
+  // Round-trips a DEDICATED explicit-bounds child: under ohos-webview-sizing D2
+  // a runtime set_bounds flips a natural (bounds-less) webview to explicit
+  // sizing, so touching the window-content webview would pin "main" to a stale
+  // bounds-cache value and break its container-following.
   async function manualSetBounds() {
     await wrapManual('set_bounds', async () => {
-      const report = await invoke('set_bounds_test');
-      const ok = report?.set_ok === true;
-      manualResult = `set_bounds_test → set_ok=${report?.set_ok}\n${ok ? '✓ PASS' : '✗ FAIL'}\n(webview 层 set position+size round-trip)`;
+      const label = 'manual-set-bounds-roundtrip-' + Date.now();
+      const child = new Webview(getCurrentWindow(), label, {
+        url: '/webview-viewport-probe.html',
+        x: 40,
+        y: 40,
+        width: 220,
+        height: 160,
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('child webview creation timed out (5s)')), 5000);
+          child.once('tauri://created', () => { clearTimeout(timer); resolve(); });
+          child.once('tauri://error', (e) => { clearTimeout(timer); reject(new Error(`child webview creation failed: ${String(e)}`)); });
+        });
+        const report = await invoke('set_bounds_test', { label });
+        const ok = report?.set_ok === true;
+        manualResult = `set_bounds_test(label=${label}) → set_ok=${report?.set_ok}\n${ok ? '✓ PASS' : '✗ FAIL'}\n(webview 层 set position+size round-trip,专用显式 bounds 子 webview)`;
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
+      }
       onMessage(manualResult);
     });
   }
 
-  // 8. Window title — set it on the main window directly (the main window's title bar is visible; setDecorations does not work on Float sub-windows)
+  // 8. Window title — set it on the main window directly (the main window's title bar is visible; set_decorations dispatches on SubWindow sub-windows — it is the UIAbility main window kind that errors, not the sub-window)
   async function manualSetTitle() {
     await wrapManual('setTitle', async () => {
       const win = getCurrentWindow();
@@ -2519,7 +2600,7 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     await wrapManual('newWindowAllow', async () => {
       await invoke('set_deny_new_window', { deny: false });
       // Explicitly reset create flag: a prior Create-button press sets it true,
-      // and Allow must open the in-page dialog (not a Float OS window).
+      // and Allow must open the in-page dialog (not a SubWindow OS window).
       await invoke('set_create_new_window', { create: false });
       window.open('https://example.com/manual-allow-test', '_blank');
       manualResult = 'Allow mode: dialog should appear with ✕ close button in title bar.\n' +
@@ -3673,7 +3754,7 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualCreateUIAbilityWindow}>Create UIAbility Instance Window</button>
         <button class="btn" onclick={manualCreateTransparentUIAbility}>Create Transparent UIAbility (主窗口透明)</button>
       </div>
-      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 装饰按钮 (Float 子窗口生效)</h5>
+      <h5 class="my-1 mt-2 text-xs text-gray-500">OHOS Window Ops — 装饰按钮 (SubWindow 子窗口生效)</h5>
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualSetClosable}>Toggle Closable</button>
         <button class="btn" onclick={manualSetMaximizable}>Toggle Maximizable</button>

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Huawei Account Kit example app binary entry point.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {

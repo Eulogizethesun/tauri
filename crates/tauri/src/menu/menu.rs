@@ -128,9 +128,7 @@ impl<R: Runtime> Menu<R> {
     #[cfg(all(target_env = "ohos", desktop))]
     {
       let refresh_handle = app_handle.clone();
-      muda::set_on_menu_change(Some(move || {
-        super::auto_refresh_menubar(&refresh_handle)
-      }));
+      muda::set_on_menu_change(Some(move || super::auto_refresh_menubar(&refresh_handle)));
     }
 
     let menu = run_main_thread!(handle, || {

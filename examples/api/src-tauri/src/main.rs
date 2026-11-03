@@ -5,6 +5,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! Comprehensive API example app binary entry point.
+
 fn main() {
   api_lib::run();
 }

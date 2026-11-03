@@ -14,7 +14,7 @@ use thiserror::Error as DeriveError;
 #[derive(Debug, DeriveError)]
 #[non_exhaustive]
 pub enum Error {
-  /// Error with context. Created by the [`Context`] trait.
+  /// Error with context. Created by the `Context` trait.
   #[error("{0}: {1}")]
   Context(String, Box<Self>),
   /// File system error.

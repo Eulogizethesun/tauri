@@ -134,7 +134,7 @@
 |------|------|
 | Rust 创建窗口可能早于 ArkTS controller 就绪 | 必须用 `ProxyJsHelper` 代理模式: 缓存操作 → controller 就绪后回放。`WindowManager` 三级队列: `pendingInits` / `pendingJsHelperProxies` / `pendingUrls` |
 | `setColorMode` 必须异步调用 | `setColorMode` 同步触发 `onConfigurationUpdate` 回调 → 回调 Rust → 主线程死锁。必须 `setTimeout(() => setColorMode(), 0)` 延迟到下一事件循环 |
-| 多窗口状态隔离: `AppStorage` 是全局的 | `MainPage` 用 `@StorageProp`（全局 `AppStorage`）, `FloatPage` 用 `@LocalStorageProp`（per-window 隔离）。全局状态（如菜单 JSON）必须带 `windowId` 键 |
+| 多窗口状态隔离: `AppStorage` 是全局的 | `MainPage` 用 `@StorageProp`（全局 `AppStorage`）, `SubWindowPage` 用 `@LocalStorageProp`（per-window 隔离）。全局状态（如菜单 JSON）必须带 `windowId` 键 |
 
 ---
 

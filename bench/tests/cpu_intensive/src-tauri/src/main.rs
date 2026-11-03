@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! CPU-intensive benchmark app used to measure runtime overhead.
+
 #[tauri::command]
 fn app_completed_successfully() {
   std::process::exit(0);

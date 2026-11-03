@@ -108,7 +108,7 @@ pub enum ConfigError {
     /// The path that failed to parse into TOML.
     path: PathBuf,
 
-    /// The parsing [`toml::Error`].
+    /// The parsing `toml::Error`.
     error: ::toml::de::Error,
   },
 
@@ -137,7 +137,7 @@ pub enum ConfigError {
   },
 }
 
-/// See [`parse`] for specifics, returns a JSON [`Value`] instead of [`Config`].
+/// See `parse` for specifics, returns a JSON [`Value`] instead of `Config`.
 pub fn parse_value(path: impl Into<PathBuf>) -> Result<(Value, PathBuf), ConfigError> {
   do_parse(path.into())
 }

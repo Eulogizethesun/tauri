@@ -140,7 +140,7 @@ pub fn parse_max_mem(file_path: &str) -> Result<Option<u64>> {
     let split: Vec<&str> = line.split(' ').collect();
     if split.len() == 3 {
       if let Ok(mb) = split[1].parse::<f64>() {
-        let current_bytes = (mb * 1024.0 * 1024.0) as u64;
+        let current_bytes = (mb * 1024.0f64 * 1024.0f64) as u64;
         highest = highest.max(current_bytes);
       }
     }
@@ -176,8 +176,8 @@ pub fn parse_strace_output(output: &str) -> HashMap<String, StraceOutput> {
     if let Some(&syscall_name) = syscall_fields.last() {
       if (5..=6).contains(&len) {
         let output = StraceOutput {
-          percent_time: syscall_fields[0].parse().unwrap_or(0.0),
-          seconds: syscall_fields[1].parse().unwrap_or(0.0),
+          percent_time: syscall_fields[0].parse().unwrap_or(0.0f64),
+          seconds: syscall_fields[1].parse().unwrap_or(0.0f64),
           usecs_per_call: syscall_fields[2].parse().ok(),
           calls: syscall_fields[3].parse().unwrap_or(0),
           errors: if len < 6 {
@@ -194,15 +194,15 @@ pub fn parse_strace_output(output: &str) -> HashMap<String, StraceOutput> {
   let total_fields: Vec<&str> = total_line.split_whitespace().collect();
   let total = match total_fields.len() {
     5 => StraceOutput {
-      percent_time: total_fields[0].parse().unwrap_or(0.0),
-      seconds: total_fields[1].parse().unwrap_or(0.0),
+      percent_time: total_fields[0].parse().unwrap_or(0.0f64),
+      seconds: total_fields[1].parse().unwrap_or(0.0f64),
       usecs_per_call: None,
       calls: total_fields[2].parse().unwrap_or(0),
       errors: total_fields[3].parse().unwrap_or(0),
     },
     6 => StraceOutput {
-      percent_time: total_fields[0].parse().unwrap_or(0.0),
-      seconds: total_fields[1].parse().unwrap_or(0.0),
+      percent_time: total_fields[0].parse().unwrap_or(0.0f64),
+      seconds: total_fields[1].parse().unwrap_or(0.0f64),
       usecs_per_call: total_fields[2].parse().ok(),
       calls: total_fields[3].parse().unwrap_or(0),
       errors: total_fields[4].parse().unwrap_or(0),

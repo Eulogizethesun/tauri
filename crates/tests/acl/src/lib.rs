@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Integration tests for the ACL resolution pipeline.
+
 #[cfg(test)]
 mod tests {
   use std::{

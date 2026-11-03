@@ -112,7 +112,7 @@ impl CspHash<'_> {
   }
 }
 
-/// [`Assets`] implementation that only contains compile-time compressed and embedded assets.
+/// `Assets` implementation that only contains compile-time compressed and embedded assets.
 pub struct EmbeddedAssets {
   assets: phf::Map<&'static str, &'static [u8]>,
   // Hashes that must be injected to the CSP of every HTML file.

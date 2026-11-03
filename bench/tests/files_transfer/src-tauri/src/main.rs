@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! File transfer benchmark app used to measure IPC throughput.
+
 use std::fs::read;
 use tauri::{command, ipc::Response, path::BaseDirectory, AppHandle, Manager, Runtime};
 

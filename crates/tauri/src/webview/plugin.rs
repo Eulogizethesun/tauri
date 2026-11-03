@@ -68,9 +68,7 @@ mod commands {
     label: Option<String>,
     value: Option<Color>,
   ) -> crate::Result<()> {
-    get_webview(webview, label)?
-      .set_background_color(value)
-      .map_err(Into::into)
+    get_webview(webview, label)?.set_background_color(value)
   }
 }
 

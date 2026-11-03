@@ -56,6 +56,74 @@ pub struct EventTracker {
   pub window_events: Mutex<Vec<String>>,
   pub menu_events: Mutex<Vec<String>>,
   pub run_events: Mutex<Vec<String>>,
+  /// Webview viewport probe samples (public/webview-viewport-probe.{html,js},
+  /// openspec ohos-webview-sizing): the RENDERED ArkWeb viewport of whichever
+  /// webview loaded the probe page, reported through the real invoke path.
+  /// Samples accumulate between `clear_tracked_events` calls -- pollers take the
+  /// latest entry per tag, so resize re-reports supersede the load-time one;
+  /// cases create their webviews and poll within one test step, and the suite
+  /// runs steps sequentially, so a mid-run clear never races a live poller.
+  pub viewport_probes: Mutex<Vec<ViewportProbeSample>>,
+}
+
+/// One viewport probe report from a webview page.
+///
+/// Field names are camelCase to match the wire the probe page speaks: the JS
+/// side sends camelCase invoke args (tauri auto-maps them to these snake_case
+/// params on `track_webview_viewport_probe`) and core.ts reads the returned
+/// samples as `.innerWidth` etc. -- hence `rename_all` for the Serialize side.
+/// Without the rename, the return JSON is snake_case and the poller reads
+/// `undefined` -- the red-light run of 2026-10-19 failed exactly that way
+/// (every assertion saw `undefinedxundefined`, a broken rig, not the designed
+/// red light).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportProbeSample {
+  /// Probe key -- the reporting webview's label (frozen into
+  /// `__TAURI_INTERNALS__.metadata` by the init scripts).
+  pub tag: String,
+  pub inner_width: f64,
+  pub inner_height: f64,
+  pub doc_width: f64,
+  pub doc_height: f64,
+  pub reported_at_ms: u64,
+}
+
+#[command]
+pub fn track_webview_viewport_probe<R: Runtime>(
+  app: tauri::AppHandle<R>,
+  tag: String,
+  inner_width: f64,
+  inner_height: f64,
+  doc_width: f64,
+  doc_height: f64,
+) -> tauri::Result<()> {
+  let tracker = app.state::<EventTracker>();
+  tracker
+    .viewport_probes
+    .lock()
+    .unwrap()
+    .push(ViewportProbeSample {
+      tag,
+      inner_width,
+      inner_height,
+      doc_width,
+      doc_height,
+      reported_at_ms: std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0),
+    });
+  Ok(())
+}
+
+#[command]
+pub fn get_tracked_webview_viewport_probes<R: Runtime>(
+  app: tauri::AppHandle<R>,
+) -> tauri::Result<Vec<ViewportProbeSample>> {
+  let tracker = app.state::<EventTracker>();
+  let probes = tracker.viewport_probes.lock().unwrap().clone();
+  Ok(probes)
 }
 
 #[command]
@@ -86,11 +154,15 @@ pub fn clear_tracked_events<R: Runtime>(app: tauri::AppHandle<R>) -> tauri::Resu
   let tracker = app.state::<EventTracker>();
   tracker.window_events.lock().unwrap().clear();
   tracker.menu_events.lock().unwrap().clear();
+  tracker.viewport_probes.lock().unwrap().clear();
   // Do NOT clear run_events — Ready fires only once and cannot be re-triggered
   Ok(())
 }
 
-// New window request handling for OHOS on_new_window tests
+// New window request handling for OHOS on_new_window tests.
+// Only referenced from OHOS-gated code paths (command registration and the
+// on_new_window handler below), so the whole group is gated to match.
+#[cfg(target_env = "ohos")]
 #[derive(Default)]
 pub struct NewWindowDenyState {
   pub deny: std::sync::atomic::AtomicBool,
@@ -98,6 +170,7 @@ pub struct NewWindowDenyState {
   pub last_url: Mutex<Option<String>>,
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> tauri::Result<()> {
   let state = app.state::<NewWindowDenyState>();
@@ -106,6 +179,7 @@ pub fn set_deny_new_window<R: Runtime>(app: tauri::AppHandle<R>, deny: bool) -> 
   Ok(())
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn set_create_new_window<R: Runtime>(
   app: tauri::AppHandle<R>,
@@ -117,6 +191,7 @@ pub fn set_create_new_window<R: Runtime>(
   Ok(())
 }
 
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn get_last_new_window_url<R: Runtime>(
   app: tauri::AppHandle<R>,
@@ -174,7 +249,7 @@ pub fn echo(request: tauri::ipc::Request<'_>) -> tauri::ipc::Response {
 
 #[command]
 pub fn spam(channel: Channel<i32>) -> tauri::Result<()> {
-  for i in 1..=1_000 {
+  for i in 1i32..=1_000i32 {
     channel.send(i)?;
   }
   Ok(())
@@ -236,9 +311,7 @@ pub fn append_test_result<R: Runtime>(
 
   // If this is the first result, write header + table header
   let mut output = if content.is_empty() || content.contains("_No tests run yet._") {
-    format!(
-      "# Test Report\n\n| # | Test | Status | Duration | Error |\n|---|------|--------|----------|-------|\n"
-    )
+    "# Test Report\n\n| # | Test | Status | Duration | Error |\n|---|------|--------|----------|-------|\n".to_string()
   } else {
     content
   };
@@ -443,6 +516,10 @@ pub fn create_isolated_window<R: tauri::Runtime>(
   window_id: String,
   data_suffix: String,
   url: String,
+  // fix-variant M1: optional useHttpsScheme opt-in -- the https://<scheme>.localhost
+  // intercept URL space only exists inside a use_https webview. Option so the
+  // pre-existing callers (which omit it) keep deserializing.
+  use_https: Option<bool>,
 ) -> tauri::Result<String> {
   // Append a unique sequence number to ensure window name is always unique
   let seq = WINDOW_SEQ.fetch_add(1, Ordering::SeqCst);
@@ -485,13 +562,17 @@ pub fn create_isolated_window<R: tauri::Runtime>(
         if (h1) {{ h1.textContent = num <= 1 ? 'Hello World' : 'Hello World' + num; }} \
       }});"
   );
+  // `mut` is consumed by the OHOS-only re-assignment below; on other
+  // targets that block is compiled out and the mut would be unused.
+  #[allow(unused_mut)]
   let mut builder = tauri::WebviewWindowBuilder::new(&app, &unique_window_id, webview_url)
     .title(format!("Isolated Window: {}", data_suffix))
     .data_directory(data_dir)
-    .inner_size(800.0, 600.0);
+    .inner_size(800.0, 600.0)
+    .use_https_scheme(use_https.unwrap_or(false));
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder
     .initialization_script(&init_script)
@@ -595,7 +676,7 @@ pub fn create_window_with_custom_ua<R: tauri::Runtime>(
       .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
 
   if !user_agent.is_empty() {
@@ -627,13 +708,14 @@ pub fn create_window_no_throttle<R: tauri::Runtime>(
 
   use tauri::utils::config::BackgroundThrottlingPolicy;
 
+  #[allow(unused_mut)]
   let mut builder = tauri::WebviewWindowBuilder::new(&app, window_id, WebviewUrl::default())
     .title("Window with No Background Throttling")
     .background_throttling(BackgroundThrottlingPolicy::Disabled)
     .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   let _window = builder
     .initialization_script(
@@ -721,16 +803,28 @@ pub fn create_transparent_window<R: tauri::Runtime>(
   radius: Option<f64>,
   color: Option<[u8; 4]>,
 ) -> tauri::Result<()> {
-  log::info!("Creating transparent window: {} (effect={:?}, radius={:?})", window_id, effect, radius);
+  log::info!(
+    "Creating transparent window: {} (effect={:?}, radius={:?})",
+    window_id,
+    effect,
+    radius
+  );
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
-  let status_script = if window_id.starts_with("test-") { "" } else { STATUS_SCRIPT };
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
+  let status_script = if window_id.starts_with("test-") {
+    ""
+  } else {
+    STATUS_SCRIPT
+  };
   let init_script = format!(
     r#"
     document.addEventListener('DOMContentLoaded', function() {{
@@ -755,13 +849,14 @@ pub fn create_transparent_window<R: tauri::Runtime>(
   // `mut` is only needed for the desktop effects reassignment below; on mobile the
   // effects block is cfg-gated out so `mut` would be unused. Suppress per-platform.
   #[allow(unused_mut)]
-  let mut builder = tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
-    .title("Transparent Window")
-    .transparent(true)
-    .inner_size(800.0, 600.0);
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
+      .title("Transparent Window")
+      .transparent(true)
+      .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder = builder.initialization_script(&init_script);
 
@@ -775,7 +870,12 @@ pub fn create_transparent_window<R: tauri::Runtime>(
       let effect = match effect_name.as_str() {
         "Blur" => tauri::window::Effect::Blur,
         "Acrylic" => tauri::window::Effect::Acrylic,
-        other => return Err(tauri::Error::Anyhow(anyhow::anyhow!("unknown effect: {}", other))),
+        other => {
+          return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+            "unknown effect: {}",
+            other
+          )))
+        }
       };
       let effects = tauri::utils::config::WindowEffectsConfig {
         effects: vec![effect],
@@ -791,9 +891,15 @@ pub fn create_transparent_window<R: tauri::Runtime>(
     let _ = (&effect, &radius, &color);
   }
 
-  eprintln!("[create_transparent_window] building window: {} effect={:?}", window_id, effect);
+  eprintln!(
+    "[create_transparent_window] building window: {} effect={:?}",
+    window_id, effect
+  );
   let _window = builder.build()?;
-  eprintln!("[create_transparent_window] build() returned OK for: {}", window_id);
+  eprintln!(
+    "[create_transparent_window] build() returned OK for: {}",
+    window_id
+  );
 
   Ok(())
 }
@@ -811,12 +917,19 @@ pub fn create_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
-  let status_script = if window_id.starts_with("test-") { "" } else { STATUS_SCRIPT };
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
+  let status_script = if window_id.starts_with("test-") {
+    ""
+  } else {
+    STATUS_SCRIPT
+  };
   let init_script = format!(
     r#"
     document.addEventListener('DOMContentLoaded', function() {{
@@ -849,7 +962,7 @@ pub fn create_borderless_window<R: tauri::Runtime>(
       .inner_size(800.0, 600.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
   builder = builder.initialization_script(&init_script);
 
@@ -858,8 +971,8 @@ pub fn create_borderless_window<R: tauri::Runtime>(
   Ok(())
 }
 
-/// Test command: create a Float sub-window WITH decorations (title bar + close button).
-/// Used to test setClosable/Maximizable/Minimizable decoration flags (FloatPage reads
+/// Test command: create a sub-window (`OHOSWindowKind::SubWindow`) WITH decorations (title bar + close button).
+/// Used to test setClosable/Maximizable/Minimizable decoration flags (SubWindowPage reads
 /// LocalStorage to control button visibility — only visible when decorations=true).
 #[cfg(desktop)]
 #[command]
@@ -870,7 +983,11 @@ pub fn create_decorated_window<R: tauri::Runtime>(
   log::info!("Creating decorated window: {}", window_id);
 
   let close_link = CLOSE_LINK_HTML;
-  let status_script = if window_id.starts_with("test-") { "" } else { STATUS_SCRIPT };
+  let status_script = if window_id.starts_with("test-") {
+    ""
+  } else {
+    STATUS_SCRIPT
+  };
   let init_script = format!(
     r#"
     document.addEventListener('DOMContentLoaded', function() {{
@@ -884,7 +1001,7 @@ pub fn create_decorated_window<R: tauri::Runtime>(
       div.style.cssText = 'text-align:center;padding:30px;';
       div.innerHTML = '<h2>\u{{1F5BC}}️ Decorated Window</h2>'
         + '<p>This window has <code>decorations: true</code>.</p>'
-        + '<p>Title bar + close button visible (FloatPage decoration buttons).</p>'
+        + '<p>Title bar + close button visible (SubWindowPage decoration buttons).</p>'
         + '<p>Test setClosable/Maximizable below — close button visibility changes.</p>'
         + '{close_link}';
       document.body.appendChild(div);
@@ -900,11 +1017,11 @@ pub fn create_decorated_window<R: tauri::Runtime>(
       .decorations(true)
       .inner_size(600.0, 400.0)
       .initialization_script(&init_script);
-  // OHOS-only: force Float so this stays a sub-window (multi-UIAbility is not
+  // OHOS-only: force the SubWindow kind so this stays a sub-window (multi-UIAbility is not
   // supported locally — the second UIAbility request is rejected by tao).
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
 
   let _window = builder.build()?;
@@ -927,7 +1044,11 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
   transparent: Option<bool>,
 ) -> tauri::Result<CreateUIAbilityWindowResult> {
   let transparent = transparent.unwrap_or(false);
-  log::info!("Creating UIAbility instance window: {} (transparent={})", window_id, transparent);
+  log::info!(
+    "Creating UIAbility instance window: {} (transparent={})",
+    window_id,
+    transparent
+  );
 
   use tauri::ohos::OHOSWindowKind;
   use tauri::Manager;
@@ -938,14 +1059,11 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
   // mobile rejection from a real failure.
   let mobile_form = !openharmony_ability::is_desktop_form();
 
-  let mut builder = tauri::WebviewWindowBuilder::new(
-    &app,
-    &window_id,
-    WebviewUrl::App("hello.html".into()),
-  )
-  .title("UIAbility Instance Window")
-  .inner_size(800.0, 600.0)
-  .ohos_window_kind(OHOSWindowKind::UIAbility);
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
+      .title("UIAbility Instance Window")
+      .inner_size(800.0, 600.0)
+      .ohos_window_kind(OHOSWindowKind::UIAbility);
 
   if transparent {
     builder = builder.transparent(true);
@@ -960,7 +1078,11 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
       // so autotest records a skip on mobile, while a DESKTOP build failure
       // still surfaces (webview_acquired=false + mobile_form=false fails the
       // test's assertion).
-      let mobile_fail_fast = if mobile_form { Some(e.to_string()) } else { None };
+      let mobile_fail_fast = if mobile_form {
+        Some(e.to_string())
+      } else {
+        None
+      };
       return Ok(CreateUIAbilityWindowResult {
         label: window_id.clone(),
         webview_acquired: false,
@@ -978,7 +1100,10 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
   let main_exists = app.get_webview_window("main").is_some();
   log::info!(
     "[create_ui_ability_window] webview_acquired={}, label={}, main_exists={}, all_labels={:?}",
-    webview_acquired, window_id, main_exists, all_labels
+    webview_acquired,
+    window_id,
+    main_exists,
+    all_labels
   );
 
   // 3.7 evidence (openspec multi-uiability-windows): fire deep-link get_current +
@@ -1039,14 +1164,23 @@ pub fn create_ui_ability_window<R: tauri::Runtime>(
       // A failed eval (webview not yet loaded, or window already closed by the
       // time a later round fires) must not abort the remaining retries.
       if let Err(e) = probe_window.eval(js) {
-        log::warn!("[create_ui_ability_window] deep-link probe eval failed: {:?}", e);
+        log::warn!(
+          "[create_ui_ability_window] deep-link probe eval failed: {:?}",
+          e
+        );
       }
       if let Err(e) = probe_window.eval(focus_js) {
-        log::warn!("[create_ui_ability_window] spawned focus probe eval failed: {:?}", e);
+        log::warn!(
+          "[create_ui_ability_window] spawned focus probe eval failed: {:?}",
+          e
+        );
       }
       if let Some(main) = &main_probe_window {
         if let Err(e) = main.eval(focus_js) {
-          log::warn!("[create_ui_ability_window] main focus probe eval failed: {:?}", e);
+          log::warn!(
+            "[create_ui_ability_window] main focus probe eval failed: {:?}",
+            e
+          );
         }
       }
     }
@@ -1110,26 +1244,26 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
 ) -> tauri::Result<CreateUIAbilityWindowRacyAttrsResult> {
   use tauri::ohos::OHOSWindowKind;
 
-  log::info!("Creating UIAbility instance window with racy attrs: {}", window_id);
+  log::info!(
+    "Creating UIAbility instance window with racy attrs: {}",
+    window_id
+  );
 
   // Same runtime predicate tao's spawn gate uses — see the comment in
   // create_ui_ability_window.
   let mobile_form = !openharmony_ability::is_desktop_form();
 
   #[allow(unused_mut)] // `.decorations()` below is cfg(desktop)-only
-  let mut builder = tauri::WebviewWindowBuilder::new(
-    &app,
-    &window_id,
-    WebviewUrl::App("hello.html".into()),
-  )
-  .title("UIAbility Racy Attrs Window")
-  // Creation-time geometry: consumed by the spawned-UIAbility path via
-  // startAbility StartOptions (tao#26 review follow-up F5) — asserted by the
-  // window-ops racy-attrs case (outer size/position readback after settle).
-  .inner_size(700.0, 500.0)
-  .position(90.0, 70.0)
-  .min_inner_size(400.0, 300.0)
-  .ohos_window_kind(OHOSWindowKind::UIAbility);
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
+      .title("UIAbility Racy Attrs Window")
+      // Creation-time geometry: consumed by the spawned-UIAbility path via
+      // startAbility StartOptions (tao#26 review follow-up F5) -- asserted by the
+      // window-ops racy-attrs case (outer size/position readback after settle).
+      .inner_size(700.0, 500.0)
+      .position(90.0, 70.0)
+      .min_inner_size(400.0, 300.0)
+      .ohos_window_kind(OHOSWindowKind::UIAbility);
   // `.decorations()` on the builder is a desktop-only API (cfg(desktop) impl
   // block in tauri — the first mobile-form build surfaced it). On a mobile
   // form the spawn is rejected by the desktop-only gate anyway, so the
@@ -1139,14 +1273,17 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
     builder = builder.decorations(false);
   }
 
-  let window = match builder.build()
-  {
+  let window = match builder.build() {
     Ok(w) => w,
     Err(e) => {
       log::error!("create_ui_ability_window_racy_attrs build failed: {:?}", e);
       // Mobile form: the desktop-only gate rejected the spawn (fail-fast).
       // Structured marker → autotest skip; desktop failure still fails.
-      let mobile_fail_fast = if mobile_form { Some(e.to_string()) } else { None };
+      let mobile_fail_fast = if mobile_form {
+        Some(e.to_string())
+      } else {
+        None
+      };
       return Ok(CreateUIAbilityWindowRacyAttrsResult {
         label: window_id,
         webview_acquired: false,
@@ -1172,7 +1309,9 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
   log::info!(
     "[create_ui_ability_window_racy_attrs] label={} acquired={} ohos_id={} — verify no \
      'Unknown OS sub-window' warn in hilog and a borderless window with a 400x300 floor",
-    window_id, webview_acquired, ohos_window_id
+    window_id,
+    webview_acquired,
+    ohos_window_id
   );
 
   // Consume tao's mobile gate trace — see the comment in
@@ -1193,7 +1332,7 @@ pub fn create_ui_ability_window_racy_attrs<R: tauri::Runtime>(
   })
 }
 
-/// Result of create_float_window_racy_attrs (float creation-race repro command).
+/// Result of create_float_window_racy_attrs (sub-window creation-race repro command).
 #[cfg(target_env = "ohos")]
 #[derive(serde::Serialize)]
 pub struct CreateFloatWindowRacyAttrsResult {
@@ -1201,15 +1340,15 @@ pub struct CreateFloatWindowRacyAttrsResult {
   pub label: String,
   /// Whether manager.get_webview_window(label) succeeded after build.
   pub webview_acquired: bool,
-  /// The pre-allocated OHOS window id for this Float window, for hilog
+  /// The pre-allocated OHOS window id for this sub-window, for hilog
   /// correlation (0 when the label registry has no entry yet).
   pub ohos_window_id: i64,
 }
 
-/// Float creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
+/// SubWindow creation-race reproduction (doc/OHOS窗口遗留问题.md issue-7 addendum):
 /// `create_os_window` pre-allocates the window id Rust-side and fire-and-forgets
 /// the ArkTS `WindowManager.createSubWindow` chain (createSubWindowWithOptions
-/// → loadContentByName → FloatPage load), so any window op dispatched right
+/// -> loadContentByName -> SubWindowPage load), so any window op dispatched right
 /// after `build()` — here an immediate `set_size` — reaches ArkTS before the
 /// window is registered in `WindowManager.windows`, `requireWindow` throws
 /// "Unknown OS sub-window '<id>'" and the op is silently lost (the 22-warn
@@ -1224,19 +1363,16 @@ pub fn create_float_window_racy_attrs<R: tauri::Runtime>(
 ) -> tauri::Result<CreateFloatWindowRacyAttrsResult> {
   use tauri::ohos::OHOSWindowKind;
 
-  log::info!("Creating Float window with racy attrs: {}", window_id);
+  log::info!("Creating sub-window with racy attrs: {}", window_id);
 
   #[allow(unused_mut)] // `.decorations()` below is cfg(desktop)-only
-  let mut builder = tauri::WebviewWindowBuilder::new(
-    &app,
-    &window_id,
-    WebviewUrl::App("hello.html".into()),
-  )
-  .title("Float Racy Attrs Window")
-  .inner_size(500.0, 400.0)
-  .ohos_window_kind(OHOSWindowKind::Float);
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
+      .title("SubWindow Racy Attrs Window")
+      .inner_size(500.0, 400.0)
+      .ohos_window_kind(OHOSWindowKind::SubWindow);
   // `.decorations()` on the builder is a desktop-only API (see the UIAbility
-  // racy command above); FloatPage renders its own chrome either way.
+  // racy command above); SubWindowPage renders its own chrome either way.
   #[cfg(desktop)]
   {
     builder = builder.decorations(false);
@@ -1255,7 +1391,9 @@ pub fn create_float_window_racy_attrs<R: tauri::Runtime>(
   log::info!(
     "[create_float_window_racy_attrs] label={} acquired={} ohos_id={} — verify no \
      'Unknown OS sub-window' warn in hilog and outer size 260x180 logical after settle",
-    window_id, webview_acquired, ohos_window_id
+    window_id,
+    webview_acquired,
+    ohos_window_id
   );
 
   Ok(CreateFloatWindowRacyAttrsResult {
@@ -1334,7 +1472,11 @@ pub fn create_transparent_ui_ability_window<R: tauri::Runtime>(
       log::error!("create_transparent_ui_ability_window build failed: {:?}", e);
       // Mobile form: the desktop-only gate rejected the spawn (fail-fast).
       // Structured marker → autotest skip; desktop failure still fails.
-      let mobile_fail_fast = if mobile_form { Some(e.to_string()) } else { None };
+      let mobile_fail_fast = if mobile_form {
+        Some(e.to_string())
+      } else {
+        None
+      };
       return Ok(CreateTransparentWindowResult {
         label,
         window_id,
@@ -1422,7 +1564,11 @@ pub fn get_current_window_id<R: tauri::Runtime>(
 ) -> tauri::Result<CurrentWindowIdResult> {
   let label = window.label().to_string();
   let window_id = openharmony_ability::window_id_for_label(&label);
-  log::info!("[get_current_window_id] label={} -> id={}", label, window_id);
+  log::info!(
+    "[get_current_window_id] label={} -> id={}",
+    label,
+    window_id
+  );
   Ok(CurrentWindowIdResult { label, window_id })
 }
 
@@ -1470,22 +1616,33 @@ pub fn create_ui_ability_windows_x3<R: tauri::Runtime>(
     // "test-" prefix matches the run-app capability window patterns ([test-*]) so
     // the spawned instance's webview is allowed to invoke commands (the x3 IPC
     // trigger below depends on it).
-    let window_id = format!("test-x3-{}-{}", std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(), i);
+    let window_id = format!(
+      "test-x3-{}-{}",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis(),
+      i
+    );
     log::info!("[x3] Creating UIAbility instance #{}: {}", i, window_id);
 
-    let builder = tauri::WebviewWindowBuilder::new(
-      &app, &window_id, WebviewUrl::App("hello.html".into()),
-    )
-    .title("UIAbility Instance Window")
-    .inner_size(800.0, 600.0)
-    .ohos_window_kind(OHOSWindowKind::UIAbility);
+    let builder =
+      tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("hello.html".into()))
+        .title("UIAbility Instance Window")
+        .inner_size(800.0, 600.0)
+        .ohos_window_kind(OHOSWindowKind::UIAbility);
 
     match builder.build() {
       Ok(w) => {
         let acquired = app.get_webview_window(&window_id).is_some();
         let all_labels: Vec<String> = app.webview_windows().keys().cloned().collect();
-        log::info!("[x3] #{} webview_acquired={}, label={}, all_labels={:?}", i, acquired, window_id, all_labels);
+        log::info!(
+          "[x3] #{} webview_acquired={}, label={}, all_labels={:?}",
+          i,
+          acquired,
+          window_id,
+          all_labels
+        );
 
         // Trigger an IPC from the new webview to verify its label is registered
         // correctly — via the page's own invoke channel, NOT a raw fetch to
@@ -1523,7 +1680,11 @@ pub fn create_ui_ability_windows_x3<R: tauri::Runtime>(
         // Same structured-marker contract as create_ui_ability_window: a
         // mobile-form build fails fast at the desktop-only gate (skip in
         // autotest); desktop failures surface as webview_acquired=false.
-        let mobile_fail_fast = if mobile_form { Some(e.to_string()) } else { None };
+        let mobile_fail_fast = if mobile_form {
+          Some(e.to_string())
+        } else {
+          None
+        };
         results.push(CreateUIAbilityWindowResult {
           label: window_id,
           webview_acquired: false,
@@ -1550,12 +1711,19 @@ pub fn create_transparent_borderless_window<R: tauri::Runtime>(
 
   let close_link = CLOSE_LINK_HTML;
   // Autotest-created windows (label prefix "test-") are created and closed
-  // programmatically; on OHOS programmatic close doesn't destroy the Float window
-  // (the windowing backend's OHOS Window::close is unimplemented), so a lingering closed popup would
-  // poll is_decorated on an unregistered webview → "failed to acquire webview
-  // reference". Skip the live isDecorated badge for autotest windows to avoid that
-  // noisy error; manual test windows keep the badge (they stay open and work).
-  let status_script = if window_id.starts_with("test-") { "" } else { STATUS_SCRIPT };
+  // programmatically; on OHOS the sub-window destroy runs asynchronously
+  // through the ArkTS bridge (tao Window::close dispatches a fire-and-forget
+  // destroyWindow; the UIAbility main window is system-managed and its close
+  // is rejected by the bridge), so a just-closed popup can briefly linger and
+  // poll is_decorated on an unregistered webview -> "failed to acquire webview
+  // reference". Skip the live isDecorated badge for autotest windows to avoid
+  // that noisy error; manual test windows keep the badge (they stay open and
+  // work).
+  let status_script = if window_id.starts_with("test-") {
+    ""
+  } else {
+    STATUS_SCRIPT
+  };
   let init_script = format!(
     r#"
     document.addEventListener('DOMContentLoaded', function() {{
@@ -1585,9 +1753,11 @@ pub fn create_transparent_borderless_window<R: tauri::Runtime>(
       .decorations(false);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
-  builder = builder.inner_size(800.0, 600.0).initialization_script(&init_script);
+  builder = builder
+    .inner_size(800.0, 600.0)
+    .initialization_script(&init_script);
 
   let _window = builder.build()?;
 
@@ -1603,17 +1773,22 @@ pub fn count_webview_windows<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> tau
 
 /// Close all webview windows except the main window. Used by the TestRunner
 /// "Close All Test Windows" button to clean up windows opened during a test
-/// run (Float sub-windows, UIAbility instances, isolated/UA/custom-ua/no-throttle
+/// run (SubWindow sub-windows, UIAbility instances, isolated/UA/custom-ua/no-throttle
 /// windows, etc.).
 ///
-/// On OHOS, `WebviewWindow::close()` only removes the window from Rust's manager
-/// — the windowing backend's `Window::close` is a no-op on OHOS and does NOT call ArkTS
-/// `destroyWindow()`, so the system window stays visible on screen. To actually
-/// destroy the system window, we must explicitly call `destroy_window` (which
-/// dispatches to ArkTS `WindowManager.closeWindow`):
-/// - Float sub-window: `win.destroyWindow()` (real destroy, removes from screen).
-/// - UIAbility main window: `hideAbility()` (background — OHOS doesn't allow
-///   programmatic Ability kill; instance stays in recent tasks but invisible).
+/// On OHOS, `WebviewWindow::close()` reaches the windowing backend's
+/// `Window::close`, which is implemented there: a SubWindow sub-window gets a
+/// fire-and-forget `destroyWindow` dispatched through the ArkTS bridge, while
+/// the UIAbility main window is system-managed (the bridge rejects window id
+/// 0 -- the ability is terminated by the system, not in-app). The runtime's
+/// `on_window_close` OHOS branch dispatches no second OS destroy: its only
+/// OS-level action is `inner.close()` -- the same tao close chain described
+/// above (tao close -> bridge destroy-window -> ArkTS `Window.destroyWindow()`),
+/// so each close is a single dispatch. Idempotency lives at both ends of that
+/// dispatch: the ArkTS destroy-window handler soft-looks the id up and treats
+/// an already-destroyed window as success, and the runtime's window-store
+/// remove guard makes a second `on_window_close` for the same id hit
+/// `removed == None` and return early.
 ///
 /// Returns the list of labels that were attempted to close (for UI feedback).
 #[command]
@@ -1631,10 +1806,12 @@ pub fn close_all_test_windows<R: tauri::Runtime>(
     if let Some(w) = app.get_webview_window(label) {
       log::info!("[close_all_test_windows] closing {}", label);
 
-      // w.close() → on_close_requested → on_window_close. On OHOS, on_window_close
-      // calls destroy_window (NAPI→ArkHelper.closeWindow) to actually destroy the
-      // OS window (the windowing backend's close/destroy are no-ops on OHOS). On other platforms,
-      // close() handles real destruction directly.
+      // w.close() -> on_close_requested -> on_window_close. On OHOS, tao's
+      // Window::close dispatches the bridge destroy_window (fire-and-forget)
+      // for sub-windows, and the runtime on_window_close OHOS branch sends no
+      // second OS destroy -- its only OS-level action is inner.close(), the
+      // same tao close chain. On other platforms, close() handles real
+      // destruction directly.
       match w.close() {
         Ok(_) => closed.push(label.clone()),
         Err(e) => log::warn!("[close_all_test_windows] close {} failed: {:?}", label, e),
@@ -1703,7 +1880,9 @@ pub fn test_web_page_snapshot<R: Runtime>(
           Ok(resp) => {
             log::info!(
               "capture_webview success: {}x{} ({} base64 chars)",
-              resp.width, resp.height, resp.png_base64.len()
+              resp.width,
+              resp.height,
+              resp.png_base64.len()
             );
             let _ = app_clone.emit(
               "web-page-snapshot-result",
@@ -1809,8 +1988,9 @@ pub fn sentry_test_breadcrumb() {
 // ─── Download Test Mode ───
 // Controls the behavior of the on_download handler for manual testing scenarios.
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, Default)]
 pub enum DownloadTestMode {
+  #[default]
   Default,
   CustomDir,
   ConfirmAllow,
@@ -1819,12 +1999,6 @@ pub enum DownloadTestMode {
   AuditLog,
   AutoRename,
   CancelAll,
-}
-
-impl Default for DownloadTestMode {
-  fn default() -> Self {
-    DownloadTestMode::Default
-  }
 }
 
 pub struct DownloadTestState {
@@ -2027,6 +2201,236 @@ pub fn cookie_test_main_thread_read<R: tauri::Runtime>(
   }))
 }
 
+/// #192: main-thread url() truth through the `ohos.webview-url` sync bridge.
+///
+/// Sync (non-`async fn`) commands execute on the OHOS main thread, so
+/// `Webview::url()` here exercises wry's `url_with_main_thread_refresh` ->
+/// `webview_url_on_main_thread` (ArkTS `WebviewUrlPlugin` action `get-url`)
+/// -- the synchronous ArkTS `WebviewController.getUrl()` read that used to be
+/// unreachable from the main thread without deadlocking. Returns the live
+/// URL string; a missing webview or a bridge failure rejects (Err), which is
+/// exactly the behavior the suite asserts on.
+#[command]
+pub fn get_webview_url<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<String, String> {
+  let webview = app
+    .get_webview(&label)
+    .ok_or_else(|| format!("webview '{label}' not found"))?;
+  let url = webview.url().map_err(|e| e.to_string())?;
+  Ok(url.to_string())
+}
+
+/// #192 helper: SPA hash-route navigation inside a dedicated webview -- no
+/// reload, the pushState-style routing the sync url() read must observe
+/// (a full-reload navigation would also refresh any stale cache; the
+/// in-page route change is what distinguishes a live controller read).
+/// Scoped eval with a sanitized fragment, not arbitrary script.
+#[command]
+pub fn navigate_webview_hash<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+  hash: String,
+) -> Result<(), String> {
+  let webview = app
+    .get_webview(&label)
+    .ok_or_else(|| format!("webview '{label}' not found"))?;
+  let safe: String = hash
+    .chars()
+    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+    .collect();
+  webview
+    .eval(format!("location.hash = '#{safe}';"))
+    .map_err(|e| e.to_string())
+}
+
+/// #188: creates a dedicated incognito WebviewWindow for the cookie-isolation
+/// probe. `WebviewWindowBuilder::incognito(true)` rides the create request as
+/// `WebviewStyle.incognito` -> ArkTS `WebOptions.incognitoMode(true)` -- the
+/// incognito cookie store that keeps writes out of persistent storage.
+#[command]
+pub fn create_incognito_webview<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  window_id: String,
+) -> Result<(), String> {
+  log::info!(
+    "[Rust] create_incognito_webview called. window_id={}",
+    window_id
+  );
+  tauri::WebviewWindowBuilder::new(
+    &app,
+    &window_id,
+    tauri::WebviewUrl::App("index.html".into()),
+  )
+  .incognito(true)
+  .inner_size(480.0, 360.0)
+  .build()
+  .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+/// #188: writes the per-store probe cookies -- a marker THROUGH the incognito
+/// webview (its `WebviewStyle.incognito` routes the ArkTS `configCookieSync`
+/// call to the incognito store) and a control through the main window's
+/// default store. Split from the read half because `set_cookie` is
+/// fire-and-forget on OHOS: the JS case waits in between (issue #110
+/// precedent), and a sync command must not sleep on the main thread.
+#[command]
+pub fn incognito_cookie_set<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<(), String> {
+  use tauri::webview::Cookie;
+
+  let incognito_win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("incognito window '{label}' not found"))?;
+  let main = app
+    .get_webview_window("main")
+    .ok_or_else(|| "main window not found".to_string())?;
+
+  incognito_win
+    .set_cookie(
+      Cookie::build(("tauri_incognito_marker", "secret_value"))
+        .domain("example.com")
+        .path("/")
+        .build(),
+    )
+    .map_err(|e| format!("incognito set_cookie failed: {e}"))?;
+  main
+    .set_cookie(
+      Cookie::build(("tauri_incognito_control", "main_value"))
+        .domain("example.com")
+        .path("/")
+        .build(),
+    )
+    .map_err(|e| format!("main set_cookie failed: {e}"))?;
+  Ok(())
+}
+
+/// #188: read-only cross-probe of the two cookie stores. The incognito store
+/// must see only the marker, the default store only the control -- any
+/// bleed-through (or a shared store) fails the JS-side assertions via the
+/// returned report.
+#[command]
+pub fn incognito_cookie_isolation<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<serde_json::Value, String> {
+  let incognito_win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("incognito window '{label}' not found"))?;
+  let main = app
+    .get_webview_window("main")
+    .ok_or_else(|| "main window not found".to_string())?;
+
+  let probe_url = url::Url::parse("https://example.com/").map_err(|e| e.to_string())?;
+  let incognito_cookies = incognito_win
+    .cookies_for_url(probe_url.clone())
+    .map_err(|e| format!("incognito cookies_for_url failed: {e}"))?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+  let main_cookies = main
+    .cookies_for_url(probe_url)
+    .map_err(|e| format!("main cookies_for_url failed: {e}"))?
+    .iter()
+    .map(|c| format!("{}={}", c.name(), c.value()))
+    .collect::<Vec<_>>();
+
+  Ok(serde_json::json!({
+    "incognito_cookies": incognito_cookies,
+    "main_cookies": main_cookies,
+    "marker_in_incognito": incognito_cookies.iter().any(|c| c.starts_with("tauri_incognito_marker=")),
+    "marker_in_main": main_cookies.iter().any(|c| c.starts_with("tauri_incognito_marker=")),
+    "control_in_main": main_cookies.iter().any(|c| c.starts_with("tauri_incognito_control=")),
+    "control_in_incognito": incognito_cookies.iter().any(|c| c.starts_with("tauri_incognito_control=")),
+  }))
+}
+
+/// #219: set_title ack-chain probe. Resolves the window by label and calls
+/// `set_title` -- on OHOS this dispatches the `ohos.window` set-title command
+/// whose ArkTS arm now awaits `WindowManager.setWindowTitle` (#219 tracked
+/// ack), so an unknown/destroyed window REJECTS here instead of returning a
+/// fake success ack. A bogus label is resolved at the tao layer (not found);
+/// a freshly destroyed window surfaces as either that or the ArkTS-side
+/// tracked failure -- both reject, which is the asserted contract.
+#[command]
+pub fn set_title_on<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+  title: String,
+) -> Result<(), String> {
+  let win = app
+    .get_webview_window(&label)
+    .ok_or_else(|| format!("window '{label}' not found"))?;
+  win.set_title(&title).map_err(|e| e.to_string())
+}
+
+/// #219 (fix-variant M3): tracked-reject probe. The tauri layer must resolve a
+/// REAL window first (the tauri-layer window-existence precondition -- the #80
+/// illegal-label leg is rejected by `get_webview_window` before any ArkTS
+/// dispatch and cannot cover this), then drives the ArkTS window-command chain
+/// into a
+/// DETERMINISTIC failure with a wire-valid but unknown window id:
+/// `WindowClient.set_window_title` -> WindowPlugin set-title arm ->
+/// `await WindowManager.setWindowTitle` -> `getWindow` lookup throws -> the arm
+/// rethrows (`set-title failed: ...`) -> NAPI reject -> `WindowAcknowledgement::
+/// ensure()` turns the rejection into a Rust Err. The asserted error message
+/// proves the rejection ORIGINATED at the ArkTS tracked op instead of a
+/// tauri-layer guard.
+#[command]
+pub async fn tracked_reject_probe<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+  #[cfg(target_env = "ohos")]
+  {
+    let _main = app
+      .get_webview_window("main")
+      .ok_or_else(|| "main window not found".to_string())?;
+    let ohos_app = tauri::ohos::APP
+      .lock()
+      .unwrap()
+      .clone()
+      .ok_or_else(|| "ohos app instance not initialized".to_string())?;
+    let client = openharmony_ability_plugin_window::WindowClient::new(&ohos_app)
+      .map_err(|e| format!("WindowClient::new failed: {e}"))?;
+    // JS-safe (<< 2^53), format-valid (>= 0), never allocated by the runtime.
+    const UNKNOWN_WINDOW_ID: i64 = 987_654_321_098;
+    match client
+      .set_window_title(UNKNOWN_WINDOW_ID, "p3-m3-tracked-reject".to_string())
+      .await
+    {
+      Ok(()) => Err(
+        "tracked-reject probe FAILED: unknown-window set-title returned a success ack (fake-ack regression)".to_string(),
+      ),
+      Err(e) => {
+        let msg = e.to_string();
+        if msg.contains("set-title failed") {
+          Ok(serde_json::json!({
+            "tracked_reject": true,
+            "origin": "arkts-tracked-op",
+            "error": msg,
+          }))
+        } else {
+          Err(format!(
+            "tracked-reject probe: rejection did not originate at the ArkTS tracked op: {msg}"
+          ))
+        }
+      }
+    }
+  }
+  #[cfg(not(target_env = "ohos"))]
+  {
+    let _ = app;
+    Ok(serde_json::json!({
+      "tracked_reject": false,
+      "skipped": "non-OHOS platform (tracked reject is OHOS-only)",
+    }))
+  }
+}
+
 /// Manual test: set a cookie for httpbin.org on the main webview cookie store
 /// and open a child window to https://httpbin.org/cookies so the user can
 /// visually verify the cookie is sent to the server and persists on reload.
@@ -2047,16 +2451,16 @@ pub fn cookie_manual_test<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result
   let url = "https://httpbin.org/cookies"
     .parse()
     .map_err(|e| format!("invalid url: {}", e))?;
-  let mut builder = tauri::WebviewWindowBuilder::new(&app, "cookie-manual-test", tauri::WebviewUrl::External(url))
-    .title("Cookie Manual Test")
-    .inner_size(480.0, 640.0);
+  #[allow(unused_mut)]
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, "cookie-manual-test", tauri::WebviewUrl::External(url))
+      .title("Cookie Manual Test")
+      .inner_size(480.0, 640.0);
   #[cfg(target_env = "ohos")]
   {
-    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+    builder = builder.ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
   }
-  builder
-    .build()
-    .map_err(|e| e.to_string())?;
+  builder.build().map_err(|e| e.to_string())?;
 
   Ok(())
 }
@@ -2140,31 +2544,243 @@ pub fn devtools_close_only<R: tauri::Runtime>(
   window.close_devtools();
   Ok(())
 }
-/// Test set_bounds / bounds round-trip for the main webview. Verifies that
-/// set_bounds calls ArkTS setBounds without error and bounds() returns
-/// consistent values after the round-trip.
+/// tauri-F8: one wall-clock wait step for the rendered-ack poll, kept at
+/// module level (out of `set_bounds_test`'s body) so its closed-channel
+/// behavior is unit-testable.
+///
+/// Async sleep: the wall-clock wait runs on the async runtime's blocking
+/// pool while the awaiting task yields, so the ack poll loop never pins an
+/// async worker thread (the previous `std::thread::sleep` blocked the worker
+/// for every 100ms tick, up to the whole 5s ack budget). tokio is not a
+/// direct dependency of this crate, so `tokio::time::sleep` is unavailable;
+/// this is the equivalent built on the `tauri::async_runtime` re-exports
+/// (tokio mpsc channel + spawn_blocking), with the poll window
+/// (POLL_INTERVAL / ACK_BUDGET) unchanged.
+///
+/// Returns true when the wait ELAPSED (the blocking task sent its completion
+/// token) and false when the channel closed first: a panicking
+/// spawn_blocking task drops the sender before sending - the ONLY reachable
+/// None cause here, because the global `tauri::async_runtime` RUNTIME is a
+/// `OnceLock` with no shutdown or drop path (crates/tauri/src/async_runtime.rs),
+/// so "runtime shutting down" never happens. `recv()` then resolves
+/// INSTANTLY with None. The old `let _ = rx.recv().await`
+/// treated both outcomes alike, so the None path degenerated into a 0ms hot
+/// loop that burned the whole 5s ack budget before failing with a misleading
+/// "no rendered ack" timeout. The bool return is what lets the caller bail.
+#[cfg(desktop)]
+async fn async_sleep(duration: std::time::Duration) -> bool {
+  let (tx, rx) = tauri::async_runtime::channel::<()>(1);
+  tauri::async_runtime::spawn_blocking(move || {
+    std::thread::sleep(duration);
+    // blocking_send: we are on the blocking pool, outside any async context.
+    // The previous `let _ = tx.send(())` built the ASYNC send future and
+    // dropped it unawaited - a no-op - so the token never arrived and the
+    // old receive below only resolved via the channel closing when this
+    // task finished (its None silently swallowed, tauri-F8).
+    let _ = tx.blocking_send(());
+  });
+  wait_sleep_token(rx).await
+}
+
+/// The observable half of `async_sleep`: maps the mpsc receive to "the wait
+/// happened" (Some) vs "the sender was dropped before sending" (None, i.e.
+/// false - the wait did not happen).
+#[cfg(desktop)]
+async fn wait_sleep_token(mut rx: tauri::async_runtime::Receiver<()>) -> bool {
+  rx.recv().await.is_some()
+}
+
+/// Test set_bounds / bounds round-trip on the webview named by `label`.
+///
+/// The caller must pass a DEDICATED (explicit-bounds child) webview label, not
+/// the window-content webview: under the ohos-webview-sizing D2 semantics a
+/// runtime set_bounds flips a natural-layout (bounds-less) webview to explicit
+/// sizing -- round-tripping "main" used to pin the window content to its stale
+/// bounds-cache value (observed 200x200) and opt it out of container-following.
+/// Re-asserting an explicit-bounds child's own geometry is side-effect-free.
+///
+/// The command is a discriminating probe, not a smoke test (issue
+/// Eulogizethesun/tauri#241):
+/// - `set_bounds` dispatches asynchronously on OHOS (runtime -> wry -> ArkTS
+///   render layer) and wry updates its bounds cache at DISPATCH time, so an
+///   immediate `bounds()` read-back would "match" regardless of whether the
+///   rect was ever applied. `set_ok` therefore awaits the RENDERED ack: the
+///   webview must run the viewport probe page, which reports its rendered
+///   viewport through the real invoke path on every resize; the command polls
+///   the tracker until a sample newer than the sends reports the requested
+///   size (+/-2px ArkWeb constant + DPI-rounding slack), else it errors.
+/// - Two back-to-back set_bounds calls with DISTINCT sizes exercise the
+///   last-wins contract: a dropped, merged, or never-applied final rect keeps
+///   the rendered viewport at the probe size and the ack never arrives.
+/// - After the ack, position()/size() are read back and asserted against the
+///   re-asserted rect (+/-2px) -- the rendered ack proves the final message was
+///   applied, and that message carried all four components, so the read-back
+///   pins the position component of the APPLIED geometry too.
 ///
 /// Desktop-only: `Webview::bounds`/`set_bounds` are in tauri's `#[cfg(desktop)]`
 /// impl block. On OHOS mobile the methods don't exist, so the command is not
-/// registered; the frontend test wraps the invoke in try/catch to skip silently.
+/// registered; the frontend test skips via skipOnMobile.
 #[cfg(desktop)]
 #[command]
-pub fn set_bounds_test<R: tauri::Runtime>(
-  window: tauri::WebviewWindow<R>,
-) -> tauri::Result<serde_json::Value> {
-  use tauri::webview::Webview;
-  let webview = window.as_ref();
-  let original = webview.bounds()?;
-  // Round-trip: set_bounds with original → should not error
-  webview.set_bounds(original)?;
-  let after_set = webview.bounds()?;
-  let original_str = format!("{:?}", original);
-  let after_set_str = format!("{:?}", after_set);
+pub async fn set_bounds_test<R: tauri::Runtime>(
+  app: tauri::AppHandle<R>,
+  label: String,
+) -> Result<serde_json::Value, String> {
+  use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+  use tauri::Manager;
+  use tauri::{Position, Rect, Size};
+
+  /// Ack budget -- the probe page reports on resize; 5s covers slow renders
+  /// while staying inside the 15s case timeout (creation wait + command).
+  const ACK_BUDGET: Duration = Duration::from_secs(5);
+  const POLL_INTERVAL: Duration = Duration::from_millis(100);
+  /// Rendered/read-back tolerance: the measured ArkWeb viewport constant
+  /// (+1px) plus DPI-rounding slack.
+  const TOLERANCE_PX: f64 = 2.0;
+
+  fn now_ms() -> u64 {
+    SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|d| d.as_millis() as u64)
+      .unwrap_or(0)
+  }
+
+  /// Physical px (x, y, w, h) of a rect under the given scale factor,
+  /// accepting either dpi variant (the bounds cache preserves whatever
+  /// variant was last sent).
+  fn physical_px(rect: &Rect, sf: f64) -> (f64, f64, f64, f64) {
+    let (x, y) = match rect.position {
+      Position::Physical(p) => (p.x as f64, p.y as f64),
+      Position::Logical(p) => (p.x * sf, p.y * sf),
+    };
+    let (w, h) = match rect.size {
+      Size::Physical(s) => (s.width as f64, s.height as f64),
+      Size::Logical(s) => (s.width * sf, s.height * sf),
+    };
+    (x, y, w, h)
+  }
+
+  async fn wait_rendered_ack(
+    app: &tauri::AppHandle<impl tauri::Runtime>,
+    label: &str,
+    viewport_w: f64,
+    viewport_h: f64,
+    since_ms: u64,
+  ) -> Result<(), String> {
+    use tauri::Manager;
+    let deadline = Instant::now() + ACK_BUDGET;
+    loop {
+      let tracker = app.state::<EventTracker>();
+      let hit = tracker
+        .viewport_probes
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|s| {
+          s.tag == label
+            && s.reported_at_ms >= since_ms
+            && (s.inner_width - viewport_w).abs() <= TOLERANCE_PX
+            && (s.inner_height - viewport_h).abs() <= TOLERANCE_PX
+        });
+      drop(tracker);
+      if hit {
+        return Ok(());
+      }
+      if Instant::now() >= deadline {
+        return Err(format!(
+          "set_bounds_test: no rendered ack from the probe page within 5s (expected viewport ~{viewport_w}x{viewport_h}, newer than {since_ms}) — the final set_bounds was never applied (or the webview does not run /webview-viewport-probe.html)"
+        ));
+      }
+      // Bail instead of spinning (tauri-F8): false means the sleep never
+      // happened (a panicking blocking task dropped the sender - the only
+      // reachable None cause; the global async runtime is a OnceLock with no
+      // shutdown path) and recv() resolved instantly - continuing would burn
+      // the whole ack
+      // budget as a 0ms hot loop before failing with a misleading "no
+      // rendered ack" timeout. Fail fast with the real diagnosis.
+      if !async_sleep(POLL_INTERVAL).await {
+        return Err(
+          "set_bounds_test: ack poll aborted - the sleep's completion token never arrived (the spawn_blocking task panicked and dropped its sender; the async runtime itself never shuts down)"
+            .to_string(),
+        );
+      }
+    }
+  }
+
+  let webview = app
+    .get_webview(&label)
+    .ok_or_else(|| format!("set_bounds_test: webview \"{label}\" not found"))?;
+  let original = webview
+    .bounds()
+    .map_err(|e| format!("set_bounds_test: bounds() failed before the round-trip: {e}"))?;
+  let sf = webview
+    .window()
+    .scale_factor()
+    .map_err(|e| format!("set_bounds_test: scale_factor failed: {e}"))?;
+  let (ox, oy, ow, oh) = physical_px(&original, sf);
+  // Expected rendered viewport (CSS px) of the re-asserted rect = logical size.
+  let (vw, vh) = (ow / sf, oh / sf);
+  // KNOWN COUPLING (issue Eulogizethesun/tauri#241): this probe mixes two
+  // independent device-ratio sources. The WIRE side converts logical bounds
+  // to ArkUI vp with wry's OHOS vp (default_display_virtual_pixel_ratio);
+  // the EXPECTED side derives everything above from Window::scale_factor()
+  // (tao app.scale() = default_display_scaled_density). Both read 1.9 on the
+  // reference device, but they are different NativeDisplayManager C APIs -
+  // on a device where the two ratios diverge, the rendered ack and the
+  // read-back below (all +/-2px) can spuriously fail. Disclosed only: no
+  // behavior or tolerance is changed for it here.
+
+  // Back-to-back sends (last-wins): first a DISTINCT probe size (guarantees a
+  // resize event on the way there), then the original rect again. The final
+  // rendered state must be the original rect; a pipeline that drops, merges,
+  // or never applies the final call leaves the viewport at the probe size and
+  // the ack below never arrives.
+  let since_ms = now_ms();
+  let probe_rect = Rect {
+    position: original.position,
+    size: Size::Physical(tauri::PhysicalSize::new(
+      ((ow - 40.0).max(1.0)).round() as u32,
+      ((oh - 30.0).max(1.0)).round() as u32,
+    )),
+  };
+  webview
+    .set_bounds(probe_rect)
+    .map_err(|e| format!("set_bounds_test: set_bounds(probe rect) failed: {e}"))?;
+  webview
+    .set_bounds(original.clone())
+    .map_err(|e| format!("set_bounds_test: set_bounds(original) failed: {e}"))?;
+
+  wait_rendered_ack(&app, &label, vw, vh, since_ms).await?;
+
+  // Real read-back assertions against the re-asserted rect (+/-2px): the ack
+  // proves the final message was applied, and that message carried all four
+  // components, so the cache-backed getters pin the applied position too.
+  let pos = webview
+    .position()
+    .map_err(|e| format!("set_bounds_test: position() read-back failed: {e}"))?;
+  let size = webview
+    .size()
+    .map_err(|e| format!("set_bounds_test: size() read-back failed: {e}"))?;
+  let (px, py) = (pos.x as f64, pos.y as f64);
+  let (pw, ph) = (size.width as f64, size.height as f64);
+  let position_matches =
+    (px - ox).abs() <= TOLERANCE_PX && (py - oy).abs() <= TOLERANCE_PX;
+  let size_matches = (pw - ow).abs() <= TOLERANCE_PX && (ph - oh).abs() <= TOLERANCE_PX;
+  if !position_matches || !size_matches {
+    return Err(format!(
+      "set_bounds_test: read-back mismatch after the rendered ack — position ({px},{py}) vs expected ({ox},{oy}), size {pw}x{ph} vs expected {ow}x{oh} (tolerance {TOLERANCE_PX}px)"
+    ));
+  }
+
   Ok(serde_json::json!({
     "set_ok": true,
-    "original": original_str,
-    "after_set": after_set_str,
-    "matches": original_str == after_set_str,
+    "matches": position_matches && size_matches,
+    "ack": "rendered",
+    "original": format!("{original:?}"),
+    "readback": {
+      "x": px, "y": py, "width": pw, "height": ph,
+      "scaleFactor": sf,
+    },
   }))
 }
 
@@ -2174,10 +2790,7 @@ pub fn test_persisted_scope<R: tauri::Runtime>(
 ) -> Result<serde_json::Value, String> {
   use tauri_plugin_fs::FsExt;
   let scope = app.try_fs_scope().ok_or("fs scope not available")?;
-  let cache_dir = app
-    .path()
-    .app_cache_dir()
-    .map_err(|e| e.to_string())?;
+  let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
   let test_path = cache_dir.join("test-persisted-scope");
   // allow_directory triggers PathAllowed event → persisted-scope saves to .persisted-scope.
   // The persisted-scope listener runs synchronously via scope.emit() inside allow_directory,
@@ -2185,16 +2798,11 @@ pub fn test_persisted_scope<R: tauri::Runtime>(
   scope
     .allow_directory(&test_path, true)
     .map_err(|e| e.to_string())?;
-  let app_data_dir = app
-    .path()
-    .app_data_dir()
-    .map_err(|e| e.to_string())?;
+  let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
   let state_file = app_data_dir.join(".persisted-scope");
   let file_exists = state_file.exists();
   let file_size = if file_exists {
-    std::fs::metadata(&state_file)
-      .map(|m| m.len())
-      .unwrap_or(0)
+    std::fs::metadata(&state_file).map(|m| m.len()).unwrap_or(0)
   } else {
     0
   };
@@ -2212,10 +2820,7 @@ pub fn clear_persisted_scope<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, String> {
   use tauri_plugin_fs::FsExt;
-  let app_data_dir = app
-    .path()
-    .app_data_dir()
-    .map_err(|e| e.to_string())?;
+  let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
   let state_file = app_data_dir.join(".persisted-scope");
   let file_existed = state_file.exists();
   if file_existed {
@@ -2239,10 +2844,7 @@ pub fn clear_persisted_scope<R: tauri::Runtime>(
 pub fn clear_window_state<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,
 ) -> Result<serde_json::Value, String> {
-  let app_config_dir = app
-    .path()
-    .app_config_dir()
-    .map_err(|e| e.to_string())?;
+  let app_config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
   let state_file = app_config_dir.join(".window-state.json");
   let file_existed = state_file.exists();
   if file_existed {
@@ -2304,11 +2906,15 @@ pub async fn set_ime_position_test(x: i32, y: i32) -> tauri::Result<()> {
 #[cfg(target_env = "ohos")]
 #[command]
 pub fn get_ime_position_result() -> Result<String, String> {
-  Ok(LAST_IME_POSITION_RESULT
-    .lock()
-    .unwrap()
-    .clone()
-    .unwrap_or_else(|| r#"{"ok":false,"code":-1,"message":"no result recorded yet","x":0,"y":0,"ts":0}"#.into()))
+  Ok(
+    LAST_IME_POSITION_RESULT
+      .lock()
+      .unwrap()
+      .clone()
+      .unwrap_or_else(|| {
+        r#"{"ok":false,"code":-1,"message":"no result recorded yet","x":0,"y":0,"ts":0}"#.into()
+      }),
+  )
 }
 
 /// Non-ohos stub.
@@ -2321,12 +2927,19 @@ pub fn set_ime_position_test(_x: i32, _y: i32) -> tauri::Result<()> {
 #[cfg(not(target_env = "ohos"))]
 #[command]
 pub fn get_ime_position_result() -> Result<String, String> {
-  Ok(r#"{"ok":false,"code":-1,"message":"not supported on this platform","x":0,"y":0,"ts":0}"#.into())
+  Ok(
+    r#"{"ok":false,"code":-1,"message":"not supported on this platform","x":0,"y":0,"ts":0}"#
+      .into(),
+  )
 }
 
 /// Create a test webview window with specific OHOS adapter flags.
 /// Used by manual test buttons in TestRunner to verify clipboard/zoom/https flags
 /// without needing to modify app config and rebuild.
+// OHOS-only: calls WebviewWindowBuilder::disable_clipboard_access, which exists
+// only under cfg(target_env = "ohos") -- without this gate the host
+// `cargo test --all-targets` workspace build fails with E0599.
+#[cfg(target_env = "ohos")]
 #[command]
 pub fn create_ohos_test_webview<R: tauri::Runtime>(
   app: tauri::AppHandle<R>,
@@ -2342,13 +2955,10 @@ pub fn create_ohos_test_webview<R: tauri::Runtime>(
     window_id, clipboard, zoom_hotkeys, https_scheme, drag_drop_overlay
   );
 
-  let mut builder = tauri::WebviewWindowBuilder::new(
-    &app,
-    &window_id,
-    WebviewUrl::App("index.html".into()),
-  )
-  .title(&label)
-  .inner_size(400.0, 300.0);
+  let mut builder =
+    tauri::WebviewWindowBuilder::new(&app, &window_id, WebviewUrl::App("index.html".into()))
+      .title(&label)
+      .inner_size(400.0, 300.0);
 
   if clipboard == Some(true) {
     builder = builder.enable_clipboard_access();
@@ -2424,11 +3034,19 @@ pub fn create_ohos_test_webview<R: tauri::Runtime>(
         use tauri::DragDropEvent;
         let desc = match d {
           DragDropEvent::Enter { paths, position } => {
-            format!("Enter paths={:?} pos=({:.0},{:.0})", paths, position.x, position.y)
+            format!(
+              "Enter paths={:?} pos=({:.0},{:.0})",
+              paths, position.x, position.y
+            )
           }
-          DragDropEvent::Over { position } => format!("Over pos=({:.0},{:.0})", position.x, position.y),
+          DragDropEvent::Over { position } => {
+            format!("Over pos=({:.0},{:.0})", position.x, position.y)
+          }
           DragDropEvent::Drop { paths, position } => {
-            format!("Drop paths={:?} pos=({:.0},{:.0})", paths, position.x, position.y)
+            format!(
+              "Drop paths={:?} pos=({:.0},{:.0})",
+              paths, position.x, position.y
+            )
           }
           DragDropEvent::Leave => "Leave".to_string(),
           _ => format!("{:?}", d),
@@ -2468,9 +3086,7 @@ pub fn dump_coverage() {
 /// Gated behind `feature = "fault-injection"` + `target_env = "ohos"`.
 #[cfg(all(target_env = "ohos", feature = "fault-injection"))]
 #[command]
-pub async fn fault_injection_set_rule(
-  rule: serde_json::Value,
-) -> tauri::Result<()> {
+pub async fn fault_injection_set_rule(rule: serde_json::Value) -> tauri::Result<()> {
   let oha_app = tauri::ohos::APP
     .lock()
     .map_err(|e| anyhow::anyhow!("APP mutex poisoned: {e}"))?
@@ -2515,4 +3131,48 @@ pub async fn fault_injection_clear() -> tauri::Result<()> {
 pub fn set_exit_confirmation(enabled: bool) {
   crate::EXIT_CONFIRM_MODE.store(enabled, std::sync::atomic::Ordering::SeqCst);
   log::info!("[cmd] set_exit_confirmation: enabled={}", enabled);
+}
+
+/// tauri-F8 regression tests: the closed-channel (None) path of the ack-poll
+/// sleep must be OBSERVABLE so `wait_rendered_ack` can bail instead of
+/// spinning. Non-mobile targets only - host builds and desktop-form builds
+/// (including OHOS 2in1, where OHOS_DEVICE_TYPE=desktop enables cfg(desktop)):
+/// the helpers are cfg(desktop) and the tests need a live async runtime.
+#[cfg(all(test, desktop))]
+mod async_sleep_tests {
+  use super::{async_sleep, wait_sleep_token};
+  use std::time::{Duration, Instant};
+
+  #[test]
+  fn elapsed_wait_reports_true_after_the_full_duration() {
+    tauri::async_runtime::block_on(async {
+      let start = Instant::now();
+      let waited = async_sleep(Duration::from_millis(150)).await;
+      assert!(
+        waited,
+        "a completed blocking sleep must report that the wait happened"
+      );
+      assert!(
+        start.elapsed() >= Duration::from_millis(150),
+        "async_sleep resolved before the requested duration elapsed"
+      );
+    });
+  }
+
+  #[test]
+  fn dropped_sender_reports_false_instead_of_an_elapsed_wait() {
+    tauri::async_runtime::block_on(async {
+      let (tx, rx) = tauri::async_runtime::channel::<()>(1);
+      drop(tx);
+      let started = Instant::now();
+      assert!(
+        !wait_sleep_token(rx).await,
+        "a dropped sender must surface as false (the wait did NOT happen)"
+      );
+      assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the closed-channel read must resolve instantly (None path), not block"
+      );
+    });
+  }
 }

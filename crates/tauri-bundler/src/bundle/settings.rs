@@ -854,7 +854,7 @@ impl SettingsBuilder {
   }
 
   /// Sets the directory to place tools used by the bundler
-  /// when [`BundleSettings::use_local_tools_dir`] is true.
+  /// when `BundleSettings::use_local_tools_dir` is true.
   #[must_use]
   pub fn local_tools_directory<P: AsRef<Path>>(mut self, path: P) -> Self {
     self

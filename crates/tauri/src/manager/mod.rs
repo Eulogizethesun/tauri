@@ -780,13 +780,13 @@ mod tests {
 
   #[test]
   fn string_replace_with_callback() {
-    let mut tauri_index = 0;
+    let mut tauri_index = 0i32;
     #[allow(clippy::single_element_loop)]
     for (src, pattern, replacement, result) in [(
       "tauri is awesome, tauri is amazing",
       "tauri",
       || {
-        tauri_index += 1;
+        tauri_index += 1i32;
         tauri_index.to_string()
       },
       "1 is awesome, 2 is amazing",
@@ -893,7 +893,7 @@ mod test {
     let webview = window
       .add_child(
         WebviewBuilder::new("main-webview", Default::default()),
-        crate::LogicalPosition::new(0, 0),
+        crate::LogicalPosition::new(0i32, 0i32),
         window.inner_size().unwrap(),
       )
       .unwrap();

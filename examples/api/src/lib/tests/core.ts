@@ -2,7 +2,7 @@ import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-ru
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
 import { emit, listen, once } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { getCurrentWindow, currentMonitor, cursorPosition, Effect, PhysicalPosition, LogicalSize } from '@tauri-apps/api/window';
+import { getCurrentWindow, currentMonitor, cursorPosition, Effect, PhysicalPosition, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
 import { appCacheDir } from '@tauri-apps/api/path';
@@ -36,6 +36,320 @@ function testCustomProtocol(url: string): Promise<{ ok: boolean; error?: string 
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
+}
+
+// Probe IPC response routing into a same-origin iframe child frame.
+// The child page (public/iframe-ipc-child.{html,js}) runs invoke('echo')
+// through the real __TAURI_INTERNALS__.invoke path (the isolation pattern
+// rejects hand-rolled raw postMessage payloads by design — see the probe
+// header and the Phase B addendum in the openspec change) and reports back
+// over the NATIVE window.postMessage channel — which is NOT the transport
+// under test, so the probe stays observable even when Tauri IPC routing is
+// broken.
+interface IframeIpcInvokeReport {
+  settled: boolean;
+  result?: unknown;
+  error?: string;
+  thrown?: string;
+  phase?: string;
+  sentAt?: number;
+  settledAt?: number;
+}
+// Phase A diagnostics: per-frame origin view reported by the probe page.
+interface IframeIpcEnv {
+  href: string;
+  protocol: string;
+  origin: string;
+  isTop: boolean;
+  parentIsTop: boolean;
+  frames: number;
+  secureContext: boolean;
+  parentAccess: string;
+  parentOrigin: string | null;
+  parentHref: string | null;
+  topAccess: string;
+  topOrigin: string | null;
+}
+interface IframeIpcRelayArrival {
+  t: number;
+  eventOrigin: string;
+  sourceIsParent: boolean;
+  id: number | string;
+  registeredByProbe: boolean;
+  echoPending: boolean;
+  errorPending: boolean;
+  mapSize: number;
+}
+interface IframeIpcDiag {
+  registeredIds?: Array<number | string>;
+  matrix?: Record<string, { t: number; eventOrigin: string; sourceIsParent: boolean } | null>;
+  relayArrivals?: IframeIpcRelayArrival[];
+  isolationCallbackIds?: Array<{ t: number; callback: string }>;
+  messageLog?: Array<{ t: number; o: string; src: string; d: string }>;
+  runReceivedAt?: number;
+}
+interface IframeIpcProbe {
+  __iframeIpcChild?: boolean;
+  phase?: string;
+  role?: string;
+  internalsType: string;
+  hasInternalsPostMessage: boolean;
+  hasTransformCallback: boolean;
+  hasIpc: boolean;
+  hasGlobalTauri: boolean;
+  invoke: IframeIpcInvokeReport;
+  invokeError: IframeIpcInvokeReport;
+  grandchildInvoke: IframeIpcInvokeReport | null;
+  forgedIgnored?: boolean;
+  env?: IframeIpcEnv;
+  diag?: IframeIpcDiag;
+  parentEnv?: Record<string, unknown>;
+  matrixThrows?: Record<string, string>;
+  matrixTargets?: Record<string, string>;
+  runSentAt?: number;
+}
+/**
+ * Platforms where an iframe can drive the Tauri IPC end to end (issue
+ * Eulogizethesun/tauri#241). Windows delivers the iframe's `window.ipc`
+ * postMessage straight to the bridge; OHOS additionally runs the frame
+ * relay in core.js. On macOS and Linux upstream injects the init scripts
+ * into the MAIN frame only (assertion 1 fails immediately), and on Android
+ * the scripts land but there is no relay, so `invoke` never settles and the
+ * case just burns its whole timeout — skip those instead of reporting a
+ * platform-inherent failure.
+ */
+async function iframeIpcSupportedPlatform(): Promise<boolean> {
+  try {
+    const { platform } = await import('@tauri-apps/plugin-os');
+    const p = platform();
+    return p === 'ohos' || p === 'windows';
+  } catch {
+    return false;
+  }
+}
+
+function runIframeIpcProbe(): Promise<IframeIpcProbe> {
+  return new Promise((resolve, reject) => {
+    const iframe = document.createElement('iframe');
+    iframe.src = '/iframe-ipc-child.html';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '240px';
+    iframe.style.height = '140px';
+    iframe.style.zIndex = '1';
+    iframe.style.border = '1px solid rgba(0,0,0,.25)';
+    iframe.setAttribute('data-test', 'iframe-ipc-probe');
+
+    let ready = false;
+    const matrixThrows: Record<string, string> = {};
+    const matrixTargets: Record<string, string> = {
+      origin: window.location.origin ?? 'null',
+      slash: '/',
+      star: '*'
+    };
+    let runSentAt = 0;
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error(`iframe IPC probe timed out: child page never reported (ready=${ready})`));
+    }, 15000);
+
+    function cleanup() {
+      clearTimeout(timeoutId);
+      window.removeEventListener('message', handleMessage);
+      iframe.remove();
+    }
+
+    function handleMessage(event: MessageEvent) {
+      const data = event.data as IframeIpcProbe | null;
+      if (!data || data.__iframeIpcChild !== true) return;
+      if (data.phase === 'ready' && !ready) {
+        ready = true;
+        runSentAt = Date.now();
+        iframe.contentWindow?.postMessage({ __iframeIpcParent: true, phase: 'run' }, '*');
+        // Phase A targetOrigin matrix: same payload shape as the core.js relay
+        // broadcast, three targetOrigin variants — which copies the child
+        // receives settles the origin semantics of the custom-protocol origin.
+        for (const mark of ['origin', 'slash', 'star'] as const) {
+          try {
+            iframe.contentWindow?.postMessage(
+              { __iframeIpcParent: true, phase: 'matrix', matrix: mark },
+              matrixTargets[mark]
+            );
+          } catch (e) {
+            matrixThrows[mark] = String(e);
+          }
+        }
+        return;
+      }
+      if (data.phase === 'result') {
+        cleanup();
+        resolve({
+          ...data,
+          runSentAt,
+          matrixThrows,
+          matrixTargets,
+          parentEnv: parentIpcEnv()
+        });
+      }
+    }
+
+    window.addEventListener('message', handleMessage);
+    document.body.appendChild(iframe);
+  });
+}
+
+// Parent-side (test document) view of the same environment facts the probe
+// reports, so both ends of the link are in one evidence record.
+function parentIpcEnv(): Record<string, unknown> {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__?: {
+      __TAURI_PATTERN__?: { pattern?: string };
+      callbacks?: { size: number };
+    };
+  }).__TAURI_INTERNALS__;
+  const isolationFrame = document.querySelector('iframe#__tauri_isolation__') as HTMLIFrameElement | null;
+  return {
+    href: String(window.location.href),
+    protocol: String(window.location.protocol),
+    origin: String(window.location.origin ?? 'null'),
+    isTop: window.top === window,
+    frames: window.frames.length,
+    secureContext: window.isSecureContext === true,
+    tauriPattern: internals?.__TAURI_PATTERN__?.pattern ?? 'missing',
+    isolationIframe: isolationFrame ? String(isolationFrame.src) : 'absent',
+    mainMapSize: internals?.callbacks?.size ?? -1
+  };
+}
+
+// One-line evidence blob for report/hilog consumption. `|` is scrubbed so the
+// markdown table row cannot be broken by the payload.
+function iframeIpcEvidence(
+  probe: IframeIpcProbe,
+  extra?: { testStart: number; missWarns: Array<{ t: number; id: string }> }
+): string {
+  const blob = JSON.stringify({
+    testStart: extra?.testStart,
+    runSentAt: probe.runSentAt,
+    missWarns: extra?.missWarns,
+    parentEnv: probe.parentEnv,
+    matrixTargets: probe.matrixTargets,
+    matrixThrows: probe.matrixThrows,
+    childEnv: probe.env,
+    childInvoke: probe.invoke,
+    childDiag: probe.diag
+  });
+  return blob.replace(/\|/g, '/');
+}
+
+// ─── Webview viewport probe (openspec ohos-webview-sizing, case-first) ───
+//
+// The cases below assert the ArkTS RENDER-layer truth (the webview page's
+// window.innerWidth/innerHeight via public/webview-viewport-probe.{html,js}
+// → track_webview_viewport_probe), not the Rust bounds cache — the multi-webview
+// cache round-trips were exactly the blind spot that let "Rust records correct,
+// ArkTS renders full-window" ship (consumer Tab-content-layer defect signature).
+//
+// Red-light contract (task 1.5): on the pre-fix HEAD, case a and case b must
+// FAIL (probe ≈ full-window size instead of the requested geometry) and case c
+// must fail on the flip leg only — the natural-follow legs are expected green
+// on HEAD (the "always 100%" fallback follows the container) and act as the
+// anti-regression guard for the D1 geometry migration.
+
+interface ViewportProbeSample {
+  tag: string;
+  innerWidth: number;
+  innerHeight: number;
+  docWidth: number;
+  docHeight: number;
+}
+
+// Latest sample reported by the webview labeled `tag` (the probe page reports
+// its own webview label; resize re-reports supersede the load-time sample).
+async function latestViewportProbe(tag: string): Promise<ViewportProbeSample | null> {
+  const probes = await invoke<ViewportProbeSample[]>('get_tracked_webview_viewport_probes');
+  let latest: ViewportProbeSample | null = null;
+  for (const p of probes) {
+    if (p.tag === tag) latest = p;
+  }
+  return latest;
+}
+
+function describeProbe(p: ViewportProbeSample | null): string {
+  return p
+    ? `${p.innerWidth}×${p.innerHeight} (doc ${p.docWidth}×${p.docHeight})`
+    : 'no sample';
+}
+
+// Polls until the tag's probe reports the expected viewport within a ±1px
+// measurement tolerance. Device-measured (2in1 3QC0124C11000038, 2026-10-20
+// green-run calibration): ArkWeb reports window.innerWidth/innerHeight as the
+// component size + 1px on BOTH axes, systematically, for every geometry —
+// 300×200→301×201, 400×300→401×301, 320×240→321×241, natural 600×450→601×451,
+// main window→1101×657. The +1 is ArkWeb viewport-report semantics, not a
+// geometry error — the defect this suite pins (full-window inflation) is two
+// orders of magnitude larger (e.g. +800 wide). Tolerance must stay ≤1 so the
+// distinct set_bounds legs in case b (400×300 vs 250×150) cannot alias.
+async function pollViewportProbe(
+  tag: string,
+  expectW: number,
+  expectH: number,
+  budgetMs: number,
+  what: string
+): Promise<ViewportProbeSample> {
+  const start = Date.now();
+  let last: ViewportProbeSample | null = null;
+  while (Date.now() - start < budgetMs) {
+    last = await latestViewportProbe(tag);
+    if (
+      last &&
+      Math.abs(last.innerWidth - expectW) <= 1 &&
+      Math.abs(last.innerHeight - expectH) <= 1
+    ) {
+      return last;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `${what}: probe "${tag}" never reported ${expectW}×${expectH} (±1) within ${budgetMs}ms — last sample: ${describeProbe(last)}`
+  );
+}
+
+// Polls until the tag's probe has produced any sample (page load + IPC uplink
+// settled) — used where the acceptance is a transition, not the initial size.
+async function pollViewportProbeSettled(
+  tag: string,
+  budgetMs: number,
+  what: string
+): Promise<ViewportProbeSample> {
+  const start = Date.now();
+  while (Date.now() - start < budgetMs) {
+    const sample = await latestViewportProbe(tag);
+    if (sample) return sample;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `${what}: probe "${tag}" produced no sample within ${budgetMs}ms — probe page load or IPC uplink broken`
+  );
+}
+
+// Fails fast on child-webview creation errors instead of letting the probe
+// poll time out with an indirect symptom.
+function waitForWebviewCreated(child: Webview, what: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what}: webview creation timed out after 5000ms`)),
+      5000
+    );
+    child.once('tauri://created', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.once('tauri://error', (e: unknown) => {
+      clearTimeout(timer);
+      reject(new Error(`${what}: webview creation failed: ${String(e)}`));
+    });
+  });
 }
 
 export const coreTests: TestCase[] = [
@@ -95,6 +409,82 @@ export const coreTests: TestCase[] = [
       }
 
       assert(received.length === 1000, `expected 1000 messages, got ${received.length}`);
+    },
+  },
+  {
+    // IPC response routing into a child frame: an invoke issued inside a
+    // same-origin iframe must settle there. On OHOS the response is routed
+    // back via webview eval (runCallback) which targets the MAIN frame only —
+    // when the callback was registered inside the iframe the response is lost
+    // and the main-frame console shows "[TAURI] Couldn't find callback id".
+    name: '@tauri-apps/api/core.invoke (iframe child frame routing)',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      if (!(await iframeIpcSupportedPlatform())) {
+        skip(
+          'iframe IPC routing needs the platform frame relay (OHOS) or direct per-frame ipc bridge (Windows); on macOS/Linux the init scripts never reach the child frame and on Android invoke would never settle, so the case would only burn its timeout'
+        );
+      }
+      // Phase A v2: capture the main frame's runCallback miss warns with
+      // absolute timestamps — correlating them with the child's relay-arrival
+      // timestamps decomposes the round trip into uplink/Rust vs downlink.
+      const missWarns: Array<{ t: number; id: string }> = [];
+      const prevWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        try {
+          const text = args.map((a) => String(a)).join(' ');
+          const m = text.match(/Couldn't find callback id (\d+)/);
+          if (m) missWarns.push({ t: Date.now(), id: m[1] });
+        } catch { /* diag only */ }
+        prevWarn(...args);
+      };
+
+      const testStart = Date.now();
+      const probe = await runIframeIpcProbe();
+      console.warn = prevWarn;
+      // Phase A: dump the origin/matrix/timeline evidence once — hilog
+      // (ARKWEB-CONSOLE) and the failure message below both carry it.
+      const evidence = iframeIpcEvidence(probe, { testStart, missWarns });
+      console.log('[iframe-ipc-diag] ' + evidence);
+
+      // 1. Init scripts must reach the iframe document at all.
+      assert(probe.internalsType === 'object',
+        `init scripts did not reach the iframe: typeof __TAURI_INTERNALS__ is "${probe.internalsType}" | diag: ${evidence}`);
+      assert(probe.hasTransformCallback, '__TAURI_INTERNALS__.transformCallback missing in iframe (core.js not injected)');
+      assert(probe.hasInternalsPostMessage, '__TAURI_INTERNALS__.postMessage missing in iframe (ipc-protocol.js not injected)');
+      assert(probe.hasIpc, 'window.ipc.postMessage missing in iframe (wry ipc bridge not injected)');
+
+      // 2. The invoke itself must settle and roundtrip.
+      assert(probe.invoke.settled === true,
+        `invoke('echo') from the iframe never settled (${probe.invoke.phase ?? 'no phase'}) — IPC response routing does not reach child frames | diag: ${evidence}`);
+      assert(probe.invoke.error === undefined && probe.invoke.thrown === undefined,
+        `invoke('echo') from the iframe rejected: ${probe.invoke.error ?? probe.invoke.thrown}`);
+      const echoed = probe.invoke.result as { message?: unknown } | undefined;
+      assert(echoed !== undefined && echoed.message === 'from-iframe',
+        `echo roundtrip mismatch from iframe: ${JSON.stringify(probe.invoke.result)}`);
+
+      // 3. Error path: the error-callback id must be relayed too — invoking a
+      //    command that does not exist has to settle via reject (the error
+      //    callback receives the response), not time out.
+      assert(probe.invokeError.settled === true
+        && typeof probe.invokeError.error === 'string'
+        && probe.invokeError.error.length > 0,
+        `invoke of a missing command from the iframe did not reject through the relay (settled=${probe.invokeError.settled}, report=${JSON.stringify(probe.invokeError)}) | diag: ${evidence}`);
+
+      // 4. Nested frame chain: main -> child -> grandchild, two relay hops.
+      const grand = probe.grandchildInvoke;
+      assert(grand !== null && grand.settled === true,
+        `invoke from the grandchild frame never settled (${JSON.stringify(probe.grandchildInvoke)}) — chained relay does not reach nested frames | diag: ${evidence}`);
+      const grandEchoed = probe.grandchildInvoke?.result as { message?: unknown } | undefined;
+      assert(grandEchoed !== undefined && grandEchoed.message === 'from-grandchild',
+        `echo roundtrip mismatch from grandchild: ${JSON.stringify(probe.grandchildInvoke?.result)}`);
+
+      // 5. Forged-message guard: a __TAURI_FRAME_CALLBACK__ message whose
+      //    source is not the direct parent must be delivered but ignored by
+      //    the relay listener (the target callback never fires).
+      assert(probe.forgedIgnored === true,
+        `forged __TAURI_FRAME_CALLBACK__ message (source ≠ parent) was not ignored by the relay listener (forgedIgnored=${probe.forgedIgnored})`);
     },
   },
 
@@ -1129,6 +1519,37 @@ export const coreTests: TestCase[] = [
     },
   },
 
+  // #191: clearAllBrowsingData must also wipe the cookie store — the plugin's
+  // pre-existing wipes (WebStorage.deleteAllData / HttpAuthCredentials /
+  // removeCache / clearHistory) never touched WebCookieManager, so a
+  // document.cookie survived a "clear all browsing data". The cookie wipe
+  // lives in the plugin (WebviewPlugin.ets clearAllBrowsingData →
+  // WebCookieManager.clearAllCookiesSync(false), guarded); this case pins the
+  // behavior end-to-end from JS. Degradation: if the cookie lifecycle is not
+  // observable on this build (set/read quirks), SKIP with disclosure instead
+  // of failing — the wipe itself is not directly asserted from JS otherwise
+  // (design R6: no new commands, no ❌ for an environment gap).
+  {
+    name: 'webview.clearAllBrowsingData clears document.cookie',
+    category: 'auto',
+    async fn() {
+      const marker = `c191_${Date.now()}`;
+      document.cookie = `${marker}=to-be-wiped; path=/`;
+      const before = document.cookie;
+      if (!before.includes(`${marker}=`)) {
+        skip(
+          `document.cookie set/read not observable on this build (before="${before}") — cookie wipe unverifiable from JS`
+        );
+      }
+      await getCurrentWebview().clearAllBrowsingData();
+      const after = document.cookie;
+      assert(
+        !after.includes(marker),
+        `document.cookie must be cleared by clearAllBrowsingData (before="${before}" after="${after}") — cookie store wipe missing (#191 regression?)`
+      );
+    },
+  },
+
   // ─── Download Intercept Tests (OHOS) ───
   {
     name: 'on_download: Requested event fires',
@@ -1336,6 +1757,228 @@ export const coreTests: TestCase[] = [
       // Intentionally NOT closing — leave for manual Close All cleanup.
     },
   },
+  // ─── Webview viewport probe cases (helpers above; red-light contract in the
+  // section header before coreTests) ───
+
+  {
+    // Case a (S1/S3/S4/S5/S6): explicit-bounds children render at the requested
+    // size, two non-overlapping children each keep their own geometry, and the
+    // Rust readback agrees with the rendered truth. Oversized rendering (probe
+    // == main-window viewport M) is the defect signature the red-light run pins.
+    name: 'webview child created with explicit bounds renders at requested size',
+    category: 'auto',
+    // 20s: two probe legs (7s each) + two creation waits must fit inside the
+    // case budget so a failure reports the leg message, not the outer timeout.
+    timeout: 20000,
+    async fn() {
+      await skipOnMobile('webview sizing commands (create_webview with bounds / position / size) are upstream cfg(desktop) and absent from the mobile build');
+      const mainWindow = getCurrentWindow();
+      const M = window.innerWidth;
+      console.log(`[viewport-probe] main window viewport M=${window.innerWidth}×${window.innerHeight}`);
+      const tagA = 'test-sizing-child-a-' + Date.now();
+      const tagB = 'test-sizing-child-b-' + Date.now();
+      const childA = new Webview(mainWindow, tagA, {
+        url: '/webview-viewport-probe.html',
+        x: 50,
+        y: 50,
+        width: 300,
+        height: 200,
+      });
+      const childB = new Webview(mainWindow, tagB, {
+        url: '/webview-viewport-probe.html',
+        x: 400,
+        y: 300,
+        width: 250,
+        height: 180,
+      });
+      try {
+        await waitForWebviewCreated(childA, 'child A');
+        await waitForWebviewCreated(childB, 'child B');
+        // Both children: probe must equal the REQUESTED geometry (S1/S4), which
+        // on HEAD reports ≈M (full-window inflation) — the failure message
+        // carries the actual sample so the red-light evidence is self-describing.
+        await pollViewportProbe(tagA, 300, 200, 7000, 'child A (bounds 50,50,300×200) rendered geometry');
+        await pollViewportProbe(tagB, 250, 180, 7000, 'child B (bounds 400,300,250×180) rendered geometry');
+        // S6 defect-signature discriminator (positive form, post-fix): the
+        // rendered viewport must not be the container/full-window size.
+        const probeA = await latestViewportProbe(tagA);
+        assert(
+          probeA !== null && probeA.innerWidth !== M,
+          `child A viewport ${describeProbe(probeA)} equals the full-window width M=${M} — oversized rendering (defect signature)`
+        );
+        // S5: two non-overlapping children keep their own geometry — already
+        // asserted above via the two independent polls; the Rust readback is the
+        // second truth source (bounds cache must agree with the rendered truth).
+        // position()/size() are documented PHYSICAL APIs: creation x/y/width/
+        // height are logical (webview plugin create_webview wraps them in
+        // LogicalPosition/LogicalSize), and the getters multiply by the window
+        // scale factor (device-measured sf=1.9 → 50,50 logical reads back as
+        // 95,95 physical). Expected readback is therefore round(logical × sf),
+        // not the raw request — the same IEEE product both sides compute.
+        const sf = await getCurrentWindow().scaleFactor();
+        const handleA = await Webview.getByLabel(tagA);
+        const handleB = await Webview.getByLabel(tagB);
+        assert(handleA !== null, `child A "${tagA}" not found by label`);
+        assert(handleB !== null, `child B "${tagB}" not found by label`);
+        const posA = await handleA!.position();
+        const sizeA = await handleA!.size();
+        const posB = await handleB!.position();
+        const sizeB = await handleB!.size();
+        assert(
+          posA.x === Math.round(50 * sf) && posA.y === Math.round(50 * sf),
+          `child A Rust position (${posA.x},${posA.y}) ≠ requested (50,50) logical × sf=${sf} (expected ${Math.round(50 * sf)},${Math.round(50 * sf)} physical)`
+        );
+        assert(
+          sizeA.width === Math.round(300 * sf) && sizeA.height === Math.round(200 * sf),
+          `child A Rust size (${sizeA.width},${sizeA.height}) ≠ requested 300×200 logical × sf=${sf} (expected ${Math.round(300 * sf)}×${Math.round(200 * sf)} physical)`
+        );
+        assert(
+          posB.x === Math.round(400 * sf) && posB.y === Math.round(300 * sf),
+          `child B Rust position (${posB.x},${posB.y}) ≠ requested (400,300) logical × sf=${sf} (expected ${Math.round(400 * sf)},${Math.round(300 * sf)} physical)`
+        );
+        assert(
+          sizeB.width === Math.round(250 * sf) && sizeB.height === Math.round(180 * sf),
+          `child B Rust size (${sizeB.width},${sizeB.height}) ≠ requested 250×180 logical × sf=${sf} (expected ${Math.round(250 * sf)}×${Math.round(180 * sf)} physical)`
+        );
+      } finally {
+        try { await childA.close(); } catch { /* cleanup best-effort */ }
+        try { await childB.close(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    // Case b (S7/S8): runtime setSize/setPosition change the RENDERED viewport,
+    // and consecutive set_bounds calls — last one wins.
+    name: 'webview child setSize/setPosition change rendered geometry (last call wins)',
+    category: 'auto',
+    // 25s: settled wait + two probe legs (7s each) must fit inside the case
+    // budget so a failure reports the leg message, not the outer timeout.
+    timeout: 25000,
+    async fn() {
+      await skipOnMobile('webview setSize/setPosition are upstream cfg(desktop) and absent from the mobile build');
+      const tag = 'test-sizing-resize-' + Date.now();
+      const child = new Webview(getCurrentWindow(), tag, {
+        url: '/webview-viewport-probe.html',
+        x: 30,
+        y: 40,
+        width: 300,
+        height: 200,
+      });
+      try {
+        await waitForWebviewCreated(child, 'case b child');
+        // Wait for the create to settle at whatever it renders (the create-size
+        // acceptance is case a's; this case isolates the runtime transition).
+        const initial = await pollViewportProbeSettled(tag, 7000, 'child created');
+        console.log(`[viewport-probe] case b initial rendered: ${describeProbe(initial)}`);
+        await child.setSize(new LogicalSize(400, 300));
+        await child.setPosition(new LogicalPosition(60, 70));
+        await pollViewportProbe(tag, 400, 300, 7000, 'setSize(400,300) rendered geometry');
+        // Position read-back (issue Eulogizethesun/tauri#241): setPosition(60,70)
+        // must land — the physical read-back pins the position component of the
+        // applied geometry. Deliberately placed BEFORE the last-wins setSize
+        // leg below: under the P2-1 sentinel contract a partial setSize sends
+        // an unspecified position component, so AFTER it the cache-backed
+        // position() legitimately reads back as the sentinel, not (60,70).
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        // KNOWN COUPLING (issue Eulogizethesun/tauri#241): this expectation
+        // mixes two independent device-ratio sources. The wire side converts
+        // the logical bounds to ArkUI vp with wry's OHOS vp
+        // (default_display_virtual_pixel_ratio); the expected physical
+        // read-back here multiplies the logical input by Window.scaleFactor()
+        // (tao app.scale() = default_display_scaled_density). Both read 1.9
+        // on the reference device, but they are different NativeDisplayManager
+        // C APIs - on a device where the two ratios diverge this +/-2px
+        // assert can spuriously fail. Disclosed only: no tolerance change.
+        const sfB = await getCurrentWindow().scaleFactor();
+        const posB = await child.position();
+        assert(
+          Math.abs(posB.x - Math.round(60 * sfB)) <= 2 && Math.abs(posB.y - Math.round(70 * sfB)) <= 2,
+          `child position (${posB.x},${posB.y}) ≠ setPosition(60,70) logical × sf=${sfB} (expected ${Math.round(60 * sfB)},${Math.round(70 * sfB)} ±2) — the position component was lost`
+        );
+        // S8: consecutive set_bounds — the final call must win, no merge/drop.
+        await child.setSize(new LogicalSize(250, 150));
+        await pollViewportProbe(tag, 250, 150, 7000, 'setSize(250,150) after consecutive calls (last-wins)');
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    // Case c (S2/S10/S11/S9): a bounds-less (natural-layout) sub-window webview
+    // viewport equals its container content area and follows window resize
+    // WITHOUT Rust re-issue; the first explicit set_bounds flips it to explicit
+    // sizing. The follow legs are the anti-regression guard (green on HEAD —
+    // the "always 100%" fallback follows the container); the flip leg is the
+    // red-light discriminator.
+    name: 'sub-window natural webview follows container then flips explicit via set_bounds',
+    category: 'auto',
+    // 25s: three probe legs (7s each) + sub-window creation must fit inside the
+    // case budget so a failure reports the leg message, not the outer timeout.
+    timeout: 25000,
+    async fn() {
+      await skipOnMobile('the flip leg drives Webview setSize (upstream cfg(desktop), absent from the mobile build)');
+      // Float sub-window via the existing demo command — JS `new WebviewWindow`
+      // defaults to the OHOS UIAbility kind which conflicts with the main window
+      // (see the vibrancy NOTE). Its single webview is the window content:
+      // created bounds-less → natural layout. inner_size(800,600) is the
+      // creation anchor for the coarse container checks below.
+      const actualLabel = await invoke<string>('create_isolated_window', {
+        windowId: 'test-sizing-sub',
+        dataSuffix: 'sizing',
+        url: '/webview-viewport-probe.html',
+      });
+      let win: WebviewWindow | null = null;
+      try {
+        const M = window.innerWidth;
+        // S2/S10: the natural webview's viewport equals ITS OWN container content
+        // area — plausibility band around the creation params (decorations/safe
+        // areas may offset the content rect, so no strict innerSize equality) and
+        // explicitly NOT the main window's viewport (wrong-container signature).
+        const initial = await pollViewportProbeSettled(actualLabel, 7000, 'sub-window webview created');
+        console.log(
+          `[viewport-probe] case c natural rendered: ${describeProbe(initial)}, sub innerSize≈` +
+          `${JSON.stringify(await (await WebviewWindow.getByLabel(actualLabel))?.innerSize())}`
+        );
+        assert(
+          initial.innerWidth >= 480 && initial.innerWidth <= 1120 &&
+          initial.innerHeight >= 360 && initial.innerHeight <= 840,
+          `natural sub-window viewport ${describeProbe(initial)} outside the 800×600 content plausibility band`
+        );
+        assert(
+          initial.innerWidth !== M,
+          `natural sub-window viewport width ${initial.innerWidth} equals the main window width M=${M} — probe page loaded into the wrong container`
+        );
+        // S11: window resize → the webview follows the new content area via
+        // container layout, no Rust bounds re-issue (autoresize is off for this
+        // bounds-less webview). Strict ±1 — design Test-Design S11 pins ±0; the
+        // measured +1px ArkWeb viewport constant (red-light-evidence.md, green
+        // calibration 1) absorbs exactly that, so a partial follow must FAIL here.
+        // The loose plausibility band above is only for the creation leg, where
+        // decorations/safe areas may offset the content rect.
+        win = await WebviewWindow.getByLabel(actualLabel);
+        assert(win !== null, `sub-window "${actualLabel}" not found by label`);
+        await win!.setSize(new LogicalSize(600, 450));
+        await pollViewportProbe(actualLabel, 600, 450, 7000, 'natural sub-window following window resize to 600×450');
+        // S9 (flip): the first explicit set_bounds overrides the natural layout —
+        // strict equality, the red-light discriminator on HEAD.
+        const subWebview = await Webview.getByLabel(actualLabel);
+        assert(subWebview !== null, `sub-window webview "${actualLabel}" not found by label`);
+        await subWebview!.setSize(new LogicalSize(320, 240));
+        await pollViewportProbe(actualLabel, 320, 240, 7000, 'set_bounds(320,240) overriding natural layout');
+      } finally {
+        if (!win) {
+          // Early-exit path (an assertion threw before `win` was assigned): the
+          // Float sub-window would otherwise leak into later cases (design test
+          // hygiene: finally must clean up regardless of where the case failed).
+          try { win = await WebviewWindow.getByLabel(actualLabel); } catch { /* already gone */ }
+        }
+        if (win) {
+          try { await win.destroy(); } catch { /* cleanup best-effort */ }
+        }
+      }
+    },
+  },
+
   // ─── Mouse Event Tests (OHOS desktop / 2in1) ───
   {
     name: 'DOM MouseEvent.dispatch (synthetic)',
@@ -1438,11 +2081,75 @@ export const coreTests: TestCase[] = [
     category: 'auto',
     async fn() {
       await skipOnMobile('the cursorPosition window command is upstream cfg(desktop) and absent from the mobile build');
-      const pos = await cursorPosition();
-      assert(typeof pos.x === 'number', `pos.x should be number, got ${typeof pos.x}`);
-      assert(typeof pos.y === 'number', `pos.y should be number, got ${typeof pos.y}`);
-      assert(pos.x >= 0, `pos.x should be >= 0, got ${pos.x}`);
-      assert(pos.y >= 0, `pos.y should be >= 0, got ${pos.y}`);
+      // ohos-cursor-passthrough 4.1 — tolerant dual-branch contract. On OHOS
+      // the value is the fed screen-global physical px (design D1) and a
+      // never-fed process rejects with the typed untracked error (D3/R5) —
+      // the old typeof/>=0 assertions were a red-light blind spot: they
+      // passed the (0,0) garbage sentinel AND could not observe the contract.
+      // resolve branch → the reading must be a real fed coordinate: finite
+      // and inside the current monitor's physical size (+40px tolerance).
+      // catch branch → tolerated ONLY as the untracked fail-safe contract,
+      // never a required path: the auto suite injects no real mouse
+      // interaction, so on OHOS this branch is reached deterministically
+      // (device-verified 2026-10-28 — see the catch comment); the
+      // authoritative cold-start reject verification lives in the ability
+      // device UT (cursor_position_with_untracked_feed_
+      // returns_untracked_error).
+      let pos: { x: number; y: number };
+      try {
+        pos = await cursorPosition();
+      } catch (e) {
+        // Only the untracked fail-safe contract's rejection is tolerated —
+        // and only by its known message. Source-verified mapping chain:
+        // tao's OHOS cursor_position Err is the untracked fail-safe (the
+        // auto suite injects no real mouse interaction, so the reading is
+        // untracked here), and tauri-runtime-wry maps it through BOTH arms
+        // to Error::FailedToGetCursorPosition (event_loop_window_getter!
+        // macro arm lib.rs:3481-3486, direct main-thread arm :3835-3843);
+        // tauri-runtime's Display (crates/tauri-runtime/src/lib.rs:162)
+        // renders it as "failed to get cursor position" (JS: "runtime
+        // error: failed to get cursor position"). FailedToSendMessage
+        // has 17 production sites in tauri-runtime-wry's lib.rs, split
+        // across two paths. Outer path: send_user_message's proxy send
+        // (:361) -- the getter! macro (:305-311) calls send_user_message
+        // first, and its `?` (:307) propagates that Err straight out of
+        // cursor_position. Inner path: the event-loop CursorPosition
+        // handler (production :5068) carries its Err over the response
+        // channel and the receiver remaps it into
+        // FailedToGetCursorPosition (:3485) before reaching JS -- the
+        // remap covers only the inner production, never the outer one.
+        // It reaches JS only when the invoke channel itself is dead,
+        // which is a real defect and must FAIL, never be tolerated.
+        // Device evidence (2026-10-28
+        // regression run): this case rejected deterministically in two
+        // consecutive rounds with exactly "runtime error: failed to get
+        // cursor position" (row65, 110/111ms) — so the previous
+        // send-message regex turned the contracted fail-safe into a false
+        // red, while the pre-tightening bare catch had turned the same
+        // reject into G6's fake green (swallow family, third instance:
+        // T28-1 window_client:None blind spot -> 23857d325 blind() -> this
+        // bare catch). Any other rejection is a real defect and must fail
+        // the case (issue Eulogizethesun/tauri#241: the original bare
+        // catch swallowed arbitrary rejects as a fake pass).
+        const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
+        if (!/failed to get cursor position/.test(msg)) {
+          throw e;
+        }
+        console.warn(`[cursorPosition] rejected — tolerated as the untracked fail-safe contract: ${e}`);
+        return;
+      }
+      // Resolve-branch asserts live OUTSIDE the try so they can actually fail
+      // the case: a NaN / out-of-domain reading silently passing would
+      // recreate the exact red-light blind spot this upgrade removes
+      // (audit round 1 major). monitor-null is covered by the dedicated
+      // currentMonitor case's assertions.
+      assert(Number.isFinite(pos.x), `pos.x should be a finite number, got ${pos.x}`);
+      assert(Number.isFinite(pos.y), `pos.y should be a finite number, got ${pos.y}`);
+      const monitor = await currentMonitor();
+      assert(
+        pos.x >= -40 && pos.x <= monitor.size.width + 40 && pos.y >= -40 && pos.y <= monitor.size.height + 40,
+        `pos (${pos.x},${pos.y}) should be within monitor physical size ${monitor.size.width}x${monitor.size.height} (+40px tolerance)`,
+      );
     },
   },
 
@@ -1570,16 +2277,54 @@ export const coreTests: TestCase[] = [
 
   // set_bounds / bounds round-trip — desktop-only (Webview::bounds/set_bounds are #[cfg(desktop)]).
   // On OHOS mobile the command is not registered; skip silently via try/catch.
+  // Round-trips a DEDICATED explicit-bounds child, never the window-content
+  // webview: under ohos-webview-sizing D2 a runtime set_bounds flips a natural
+  // (bounds-less) webview to explicit sizing, so touching "main" would pin the
+  // window content to its stale bounds-cache value (observed 200×200) — the
+  // pre-D2 form of this test did exactly that as a silent side effect.
   {
     name: 'webview.set_bounds round-trip (OHOS desktop)',
     category: 'auto',
+    timeout: 15000,
     async fn() {
+      // Desktop-form only: bounds/set_bounds are #[cfg(desktop)]; skipping here
+      // (instead of relying on the invoke rejection below) keeps mobile from
+      // creating a throwaway child webview just to skip.
+      await skipOnMobile('Webview::bounds/set_bounds are cfg(desktop) and absent from the mobile build');
+      const label = 'test-set-bounds-roundtrip-' + Date.now();
+      const child = new Webview(getCurrentWindow(), label, {
+        url: '/webview-viewport-probe.html',
+        x: 40,
+        y: 40,
+        width: 220,
+        height: 160,
+      });
       try {
-        const report = await invoke('set_bounds_test');
+        await waitForWebviewCreated(child, 'set_bounds round-trip child');
+        const report = await invoke('set_bounds_test', { label });
         assert(report.set_ok === true, `set_bounds_test failed: ${JSON.stringify(report)}`);
-        assert(report.matches === true, `bounds should match after round-trip, got: ${JSON.stringify(report)}`);
-      } catch {
-        // Not on desktop — command not registered, skip silently
+        assert(
+          report.matches === true,
+          `bounds should match after round-trip, got: ${JSON.stringify(report)}`
+        );
+        // Real read-back assertions (issue Eulogizethesun/tauri#241): the
+        // command already awaited the rendered ack (probe-page viewport) and
+        // asserted its own read-back; here the physical read-back is pinned
+        // against the CREATION rect (40,40,220×160 logical × sf) so a
+        // regression in either the position or the size component — or a
+        // never-applied rect surfacing as a rejection — fails the case.
+        const sf = await getCurrentWindow().scaleFactor();
+        const rb = report.readback;
+        assert(
+          Math.abs(rb.x - Math.round(40 * sf)) <= 2 && Math.abs(rb.y - Math.round(40 * sf)) <= 2,
+          `read-back position (${rb.x},${rb.y}) ≠ requested (40,40) logical × sf=${sf} (expected ${Math.round(40 * sf)},${Math.round(40 * sf)} ±2)`
+        );
+        assert(
+          Math.abs(rb.width - Math.round(220 * sf)) <= 2 && Math.abs(rb.height - Math.round(160 * sf)) <= 2,
+          `read-back size ${rb.width}x${rb.height} ≠ requested 220×160 logical × sf=${sf} (expected ${Math.round(220 * sf)}×${Math.round(160 * sf)} ±2)`
+        );
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
       }
     },
   },
@@ -1751,6 +2496,221 @@ export const coreTests: TestCase[] = [
         diag.label.includes(windowId),
         `label mismatch: expected to contain "${windowId}", got "${diag.label}"`,
       );
+    },
+  },
+
+  // ── committer #192: main-thread url() truth through the ohos.webview-url
+  // sync bridge. A SPA hash-route navigation inside a DEDICATED webview (no
+  // reload), then url() must return the live post-navigation URL — proving
+  // the sync bridge reads the controller's live state, not a create-time
+  // cache. Desktop: same case exercises the platform url() path.
+  {
+    name: 'webview.url() main-thread sync read after SPA navigation (#192)',
+    category: 'auto',
+    timeout: 20000,
+    async fn() {
+      const label = await invoke<string>('create_isolated_window', {
+        windowId: 'urlsync',
+        dataSuffix: 'urlsync',
+        url: '/hello.html'
+      });
+      // Let the dedicated webview attach (ArkTS create + controller attach).
+      await new Promise((r) => setTimeout(r, 1500));
+      const w = await WebviewWindow.getByLabel(label);
+      assert(w, `isolated window "${label}" not found after create`);
+      // SPA navigation: hash-route change without reload (scoped Rust-side
+      // eval — the local @tauri-apps/api build exposes no JS eval API).
+      await invoke('navigate_webview_hash', { label, hash: 'spa-route-192' });
+      await new Promise((r) => setTimeout(r, 1500));
+      const url = await invoke<string>('get_webview_url', { label });
+      assert(
+        typeof url === 'string' && url.length > 0,
+        `url() should return a non-empty string, got "${url}"`
+      );
+      assert(
+        url.includes('spa-route-192'),
+        `url() should reflect the SPA route after navigation, got "${url}"`
+      );
+      // Intentionally NOT closing — same convention as the page-load case
+      // above (OHOS autotest close leaves ghost windows); suite cleanup
+      // removes it via close_all_test_windows.
+    },
+  },
+
+  // ── committer #188: incognito webview + per-store cookie isolation.
+  // The marker cookie is written THROUGH the incognito webview, the control
+  // through the main window's default store; the cross-probe must show no
+  // bleed-through. Strict isolation asserted on OHOS (WebOptions.incognitoMode
+  // + per-store WebCookieManager calls); on desktop the case still runs the
+  // create + write + report path but does not assert store separation
+  // (WebView2 incognito profile semantics are outside this change's scope).
+  {
+    name: 'webview.incognito create + cookie isolation (#188)',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      const isOhos = (await ohosSdkApiVersion()) !== null;
+      const label = `incognito-probe-${Date.now().toString(36)}`;
+      await invoke('create_incognito_webview', { windowId: label });
+      await new Promise((r) => setTimeout(r, 1500));
+      await invoke('incognito_cookie_set', { label });
+      // set_cookie is fire-and-forget on OHOS — let the write settle.
+      await new Promise((r) => setTimeout(r, 1200));
+      const report = await invoke<any>('incognito_cookie_isolation', { label });
+      if (!isOhos) {
+        // Desktop smoke: the incognito webview exists and both writes landed
+        // somewhere — store separation itself is not asserted here.
+        assert(
+          Array.isArray(report.incognito_cookies) && Array.isArray(report.main_cookies),
+          `cookie probe should return arrays, got ${JSON.stringify(report)}`
+        );
+        return;
+      }
+      assert(
+        report.marker_in_incognito === true,
+        `marker cookie not found in the incognito store: ${JSON.stringify(report.incognito_cookies)}`
+      );
+      assert(
+        report.marker_in_main === false,
+        `marker cookie bled into the default store: ${JSON.stringify(report.main_cookies)}`
+      );
+      assert(
+        report.control_in_main === true,
+        `control cookie not found in the default store: ${JSON.stringify(report.main_cookies)}`
+      );
+      assert(
+        report.control_in_incognito === false,
+        `control cookie bled into the incognito store: ${JSON.stringify(report.incognito_cookies)}`
+      );
+    },
+  },
+
+  // ── committer #219: tracked set-title ack chain. A title set on a REAL
+  // window must resolve (ack reflects actual completion); the same command
+  // aimed at an illegal window must REJECT — never a fake success ack.
+  // (The OHOS autotest destroy path leaves ghost windows, so the destroyed
+  // leg is represented by a never-existing label; the reject contract is
+  // identical — no fabricated acknowledgement.)
+  {
+    name: 'window.set_title tracked ack: real window resolves, illegal label rejects (#219)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      // create_borderless_window is a desktop-form command (tao sub-window
+      // spawn gate) — the whole probe rides it, so skip on mobile form.
+      await skipOnMobile('create_borderless_window is desktop-form only');
+      const label = `t219-${Date.now().toString(36)}`;
+      await invoke('create_borderless_window', { windowId: label });
+      await new Promise((r) => setTimeout(r, 800));
+      // Real window: the OHOS arm awaits WindowManager.setWindowTitle — a
+      // resolve here IS the completed op, not a fire-and-forget ack.
+      await invoke('set_title_on', { label, title: 'ack-chain-ok' });
+      // Illegal window: must reject.
+      let rejected = false;
+      try {
+        await invoke('set_title_on', { label: `${label}-bogus`, title: 'nope' });
+      } catch (e) {
+        rejected = true;
+        const msg = String((e as Error)?.message ?? e);
+        assert(
+          msg.includes('not found'),
+          `bogus-label set_title should reject with not-found, got: ${msg}`
+        );
+      }
+      assert(rejected, 'bogus-label set_title must reject, not fake-ack');
+    },
+  },
+
+  // ── fix-variant M3 (#219): tracked reject reaching invoke Err. The #80
+  // illegal-label leg is rejected by get_webview_window at the tauri layer and
+  // never reaches ArkTS. This probe resolves a REAL window first, then drives
+  // the ArkTS window-command chain into a deterministic failure with a
+  // wire-valid but unknown window id — the rejection must come back from the
+  // ArkTS tracked op (`set-title failed: …`) as invoke Err, never a fake
+  // success ack.
+  {
+    name: 'window tracked reject reaches invoke Err via ArkTS op (#219 M3)',
+    category: 'auto',
+    timeout: 15000,
+    async fn() {
+      const result = await invoke<any>('tracked_reject_probe');
+      if (result && result.tracked_reject === false) {
+        // Desktop (non-OHOS) build: the probe is a no-op there.
+        assert(
+          typeof result.skipped === 'string',
+          `desktop probe must report its skip reason, got ${JSON.stringify(result)}`
+        );
+        return;
+      }
+      assert(
+        result && result.tracked_reject === true,
+        `tracked reject must reach invoke Err, got: ${JSON.stringify(result)}`
+      );
+      assert(
+        typeof result.error === 'string' && result.error.includes('set-title failed'),
+        `rejection must originate at the ArkTS tracked op, got: ${result.error}`
+      );
+    },
+  },
+
+  // ── fix-variant M1 (#186): the intercept response-header write path. The
+  // Rust protocol handler sets ACAO + Expose-Headers + an echo header; before
+  // the write path those were dropped at the wry→ArkTS seam. The vehicle is a
+  // useHttpsScheme sub-window: the main window runs use_https=false, so the
+  // https://<scheme>.localhost URL space — and with it the ArkTS
+  // setResponseHeader chain — only exists inside a useHttpsScheme webview
+  // (device-proven: the same fetch from the main page is a real-DNS failure).
+  // The probe page (p3-m1-probe.js) fetches https://myapp.localhost
+  // cross-origin, reads the echo header from response.headers, and reports via
+  // document.title → the EXISTING document-title-changed emit (no IPC from the
+  // probe page needed).
+  {
+    name: 'https-intercept response headers reach the page (#186 M1)',
+    category: 'auto',
+    timeout: 25000,
+    async fn() {
+      const label = await invoke<string>('create_isolated_window', {
+        windowId: 'p3-m1-probe',
+        dataSuffix: 'm1probe',
+        url: '/p3-m1-probe.html',
+        useHttps: true,
+      });
+      let unlisten: (() => void) | null = null;
+      try {
+        const title = await new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'M1 probe: no document-title-changed with M1- prefix within 18s ' +
+                  '(probe page load, https-intercept chain, or CSP blocked the fetch)'
+                )
+              ),
+            18000
+          );
+          listen<string>('document-title-changed', (event) => {
+            const t = String(event.payload ?? '');
+            if (t.startsWith('M1-')) {
+              clearTimeout(timer);
+              resolve(t);
+            }
+          }).then((u) => {
+            unlisten = u;
+          });
+        });
+        assert(
+          title.startsWith('M1-OK:'),
+          `M1 probe reported failure: ${title}`
+        );
+        assert(
+          title.includes('echo=p3-m1-response-header'),
+          `Rust handler response header must reach the page, probe title: ${title}`
+        );
+      } finally {
+        if (unlisten) unlisten();
+        const win = await WebviewWindow.getByLabel(label);
+        if (win) await win.destroy();
+      }
     },
   },
 ];

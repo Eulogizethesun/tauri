@@ -48,7 +48,9 @@ pub use cookie::Cookie;
 #[cfg(target_env = "ohos")]
 pub use window::OHOSWindowKind;
 
+/// An identifier for a registered window event listener.
 pub type WindowEventId = u32;
+/// An identifier for a registered webview event listener.
 pub type WebviewEventId = u32;
 
 /// Progress bar status.
@@ -93,6 +95,7 @@ pub enum UserAttentionType {
   Informational,
 }
 
+/// The filter applied to device events received by the event loop.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type")]
 pub enum DeviceEventFilter {
@@ -108,16 +111,25 @@ pub enum DeviceEventFilter {
 /// Defines the orientation that a window resize will be performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum ResizeDirection {
+  /// Resizes by moving the east edge.
   East,
+  /// Resizes by moving the north edge.
   North,
+  /// Resizes by moving the north-east corner.
   NorthEast,
+  /// Resizes by moving the north-west corner.
   NorthWest,
+  /// Resizes by moving the south edge.
   South,
+  /// Resizes by moving the south-east corner.
   SouthEast,
+  /// Resizes by moving the south-west corner.
   SouthWest,
+  /// Resizes by moving the west edge.
   West,
 }
 
+/// The error type returned by the runtime.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -149,20 +161,28 @@ pub enum Error {
   /// Failed to get cursor position.
   #[error("failed to get cursor position")]
   FailedToGetCursorPosition,
+  /// An HTTP header name was invalid.
   #[error("Invalid header name: {0}")]
   InvalidHeaderName(#[from] InvalidHeaderName),
+  /// An HTTP header value was invalid.
   #[error("Invalid header value: {0}")]
   InvalidHeaderValue(#[from] InvalidHeaderValue),
+  /// An HTTP status code was invalid.
   #[error("Invalid status code: {0}")]
   InvalidStatusCode(#[from] InvalidStatusCode),
+  /// An HTTP method was invalid.
   #[error("Invalid method: {0}")]
   InvalidMethod(#[from] InvalidMethod),
+  /// An error that can never happen.
   #[error("Infallible error, something went really wrong: {0}")]
   Infallible(#[from] std::convert::Infallible),
+  /// The event loop has been closed.
   #[error("the event loop has been closed")]
   EventLoopClosed,
+  /// The proxy URL was invalid.
   #[error("Invalid proxy url")]
   InvalidProxyUrl,
+  /// The window with the given label was not found.
   #[error("window not found")]
   WindowNotFound,
   /// The operation is not available on this platform (or requires a newer API
@@ -174,6 +194,7 @@ pub enum Error {
   #[cfg(any(target_os = "macos", target_os = "ios"))]
   #[error("failed to remove data store")]
   FailedToRemoveDataStore,
+  /// The webview runtime could not be found on this system.
   #[error("Could not find the webview runtime, make sure it is installed")]
   WebviewRuntimeNotInstalled,
 }
@@ -207,6 +228,7 @@ pub enum RunEvent<T: UserEvent> {
   ExitRequested {
     /// The exit code.
     code: Option<i32>,
+    /// The channel used to respond to the exit request.
     tx: Sender<ExitRequestedEventAction>,
   },
   /// An event associated with a window.
@@ -232,7 +254,12 @@ pub enum RunEvent<T: UserEvent> {
   /// This event is useful as a place to put your code that should be run after all state-changing events have been handled and you want to do stuff (updating state, performing calculations, etc) that happens as the "main body" of your event loop.
   MainEventsCleared,
   /// Emitted when the user wants to open the specified resource with the app.
-  #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+  #[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_env = "ohos"
+  ))]
   Opened { urls: Vec<url::Url> },
   /// Emitted when the NSApplicationDelegate's applicationShouldHandleReopen gets called
   #[cfg(target_os = "macos")]
@@ -280,6 +307,7 @@ pub enum ActivationPolicy {
 
 /// A [`Send`] handle to the runtime.
 pub trait RuntimeHandle<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 'static {
+  /// The runtime type this handle belongs to.
   type Runtime: Runtime<T, Handle = Self>;
 
   /// Creates an `EventLoopProxy` that can be used to dispatch user events to the main event loop.
@@ -389,10 +417,14 @@ pub trait RuntimeHandle<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 'st
   ) -> Result<()>;
 }
 
+/// A handle used to dispatch user events to the main event loop.
 pub trait EventLoopProxy<T: UserEvent>: Debug + Clone + Send + Sync {
+  /// Sends a user event to the main event loop.
   fn send_event(&self, event: T) -> Result<()>;
 }
 
+/// Platform-specific arguments used to initialize the runtime.
+#[cfg_attr(not(target_env = "ohos"), derive(Default))]
 pub struct RuntimeInitArgs {
   #[cfg(all(
     any(
@@ -405,32 +437,12 @@ pub struct RuntimeInitArgs {
     not(target_env = "ohos")
   ))]
   pub app_id: Option<String>,
+  /// A hook invoked for each Windows message before it is processed.
   #[cfg(windows)]
   pub msg_hook: Option<Box<dyn FnMut(*const std::ffi::c_void) -> bool + 'static>>,
   // Runtime integration layer: legitimate coupling — tauri-runtime needs the OHOS app instance to bootstrap
   #[cfg(target_env = "ohos")]
   pub app: openharmony_ability::OpenHarmonyApp,
-}
-
-#[cfg(not(target_env = "ohos"))]
-impl Default for RuntimeInitArgs {
-  fn default() -> Self {
-    Self {
-      #[cfg(all(
-        any(
-          target_os = "linux",
-          target_os = "dragonfly",
-          target_os = "freebsd",
-          target_os = "netbsd",
-          target_os = "openbsd",
-        ),
-        not(target_env = "ohos")
-      ))]
-      app_id: None,
-      #[cfg(windows)]
-      msg_hook: None,
-    }
-  }
 }
 
 /// The webview runtime interface.
@@ -1015,7 +1027,7 @@ pub trait WindowDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + 's
   /// If `false`, this will hide the cursor. If `true`, this will show the cursor.
   fn set_cursor_visible(&self, visible: bool) -> Result<()>;
 
-  // Modifies the cursor icon of the window.
+  /// Modifies the cursor icon of the window.
   fn set_cursor_icon(&self, icon: CursorIcon) -> Result<()>;
 
   /// Changes the position of the cursor in window coordinates.

@@ -334,9 +334,7 @@ fn apply_ohos_cargo_dependencies(
   if let Some(patch_path) = ability_patch_path {
     let patch = implicit_table_entry(root, "patch")?;
     let crates_io = explicit_table_entry(patch, "crates-io")?;
-    let item = crates_io
-      .entry("openharmony-ability")
-      .or_insert(Item::None);
+    let item = crates_io.entry("openharmony-ability").or_insert(Item::None);
     if matches!(item, Item::None) {
       let mut definition = InlineTable::new();
       definition.get_or_insert("path", patch_path.to_string());
@@ -495,8 +493,7 @@ mod tests {
   #[test]
   fn re_running_is_a_noop() {
     let (once, report) =
-      apply_ohos_cargo_dependencies("[package]\nname = \"app\"\n".parse().unwrap(), None)
-        .unwrap();
+      apply_ohos_cargo_dependencies("[package]\nname = \"app\"\n".parse().unwrap(), None).unwrap();
     assert!(!report.added_dependencies.is_empty());
 
     let (twice, report) = apply_ohos_cargo_dependencies(once.parse().unwrap(), None).unwrap();
@@ -518,8 +515,7 @@ mod tests {
       "openharmony-ability = { path = \"../../my-fork/crates/ability\" }\n\n",
       "[target.'cfg(windows)'.dependencies]\nwinapi = \"0.3\"\n",
     );
-    let (updated, report) =
-      apply_ohos_cargo_dependencies(manifest.parse().unwrap(), None).unwrap();
+    let (updated, report) = apply_ohos_cargo_dependencies(manifest.parse().unwrap(), None).unwrap();
 
     assert_eq!(report.added_dependencies.len(), 3); // napi-ohos, napi-derive-ohos, log
     assert_eq!(updated.matches(OHOS_TABLE_HEADER).count(), 1);
@@ -551,8 +547,7 @@ mod tests {
       "[package]\nname = \"app\"\n\n",
       "[dependencies]\nserde = \"1\"\n",
     );
-    let (updated, report) =
-      apply_ohos_cargo_dependencies(manifest.parse().unwrap(), None).unwrap();
+    let (updated, report) = apply_ohos_cargo_dependencies(manifest.parse().unwrap(), None).unwrap();
     assert_eq!(report.added_dependencies.len(), 4);
     assert!(updated.contains("napi-ohos = \"1\""));
     assert!(updated.contains("log = \"0.4\""));
@@ -576,9 +571,8 @@ mod tests {
       Some("../../openharmony-ability/crates/ability")
     );
     assert!(updated.contains("my-crate = { path = \"../my-crate\" }"));
-    assert!(updated.contains(
-      "openharmony-ability = { path = \"../../openharmony-ability/crates/ability\" }"
-    ));
+    assert!(updated
+      .contains("openharmony-ability = { path = \"../../openharmony-ability/crates/ability\" }"));
 
     let doc: DocumentMut = updated.parse().unwrap();
     assert_eq!(

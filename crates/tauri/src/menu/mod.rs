@@ -19,9 +19,9 @@ pub use builders::*;
 pub use menu::{HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use serde::{Deserialize, Serialize};
 
-use crate::{image::Image, AppHandle, Runtime};
 #[cfg(all(target_env = "ohos", desktop))]
 use crate::sealed::ManagerBase;
+use crate::{image::Image, AppHandle, Runtime};
 pub use muda::MenuId;
 
 // On OHOS, `run_on_main_thread` + `rx.recv()` deadlocks (ohos-constraints §1.2).

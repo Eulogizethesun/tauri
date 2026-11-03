@@ -33,6 +33,8 @@ pub struct SelfSignedCertificateRequest {
   pub password: String,
 }
 
+/// Generates a self signed certificate with the given request parameters and
+/// returns it as a PFX (`.p12`) bundle encoded in DER.
 pub fn generate_self_signed(request: SelfSignedCertificateRequest) -> Result<Vec<u8>> {
   let algorithm = match request.algorithm.as_str() {
     "ecdsa" => KeyAlgorithm::Ecdsa(EcdsaCurve::Secp256r1),

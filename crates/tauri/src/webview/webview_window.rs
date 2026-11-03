@@ -923,9 +923,9 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// ## Platform-specific
   ///
   /// - **Windows:** scripts are always added to subframes.
-  /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+  /// - **Android:** When `addDocumentStartJavaScript` is not supported,
   ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
-  ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+  ///   For remote URLs, we use `onPageStarted` which is not guaranteed to run before other scripts.
   ///
   /// # Examples
   ///
@@ -965,9 +965,9 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   ///
   /// ## Platform-specific
   ///
-  /// - **Android:** When [addDocumentStartJavaScript] is not supported,
+  /// - **Android:** When `addDocumentStartJavaScript` is not supported,
   ///   we prepend initialization scripts to each HTML head (implementation only supported on custom protocol URLs).
-  ///   For remote URLs, we use [onPageStarted] which is not guaranteed to run before other scripts.
+  ///   For remote URLs, we use `onPageStarted` which is not guaranteed to run before other scripts.
   ///
   /// # Examples
   ///
@@ -1460,16 +1460,20 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
 impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
   /// Sets the OHOS window kind for this window.
   ///
-  /// - `UIAbility`: UIAbility main window. The first one (windowId=0) reuses the
+  /// - `UIAbility`: a window backed by its own UIAbility instance. The first one (windowId=0) reuses the
   ///   existing container; subsequent ones start a new EntryAbility instance via
   ///   `context.startAbility` (requires `launchType: "specified"` + AbilityStage
   ///   `onAcceptWant` routing (tauri-window-N keys) in module.json5: the spawn
   ///   want carries a unique `tauri_window_id`, which onAcceptWant maps to the
   ///   `tauri-window-<id>` instance key so AMS starts a new instance; a bare
   ///   want is routed to the main instance instead).
-  /// - `Float`: Sub-window that creates a new OS-level floating window (TYPE_FLOAT).
+  /// - `SubWindow`: Application sub-window created via `windowStage.createSubWindow`,
+  ///   living inside this application's window tree (not the OS-wide floating
+  ///   window type `WindowType.TYPE_FLOAT`).
   ///
-  /// Default is `UIAbility` when not specified. Use `Float` for sub-windows.
+  /// Default when not specified: the first window of the process is
+  /// `UIAbility`, any later window is `SubWindow`. Use `SubWindow` for
+  /// sub-windows.
   pub fn ohos_window_kind(mut self, kind: crate::ohos::OHOSWindowKind) -> Self {
     self.window_builder = self.window_builder.ohos_window_kind(kind);
     self
@@ -1479,7 +1483,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
 #[cfg(target_env = "ohos")]
 impl<R: Runtime> WebviewWindow<R> {
   /// Returns the OHOS OS-level window ID (0 for main UIAbility window, >0 for
-  /// Float sub-windows / subsequent UIAbility instances).
+  /// SubWindow sub-windows / subsequent UIAbility instances).
   ///
   /// Exposed so application code (e.g. close_all_test_windows) can call
   /// openharmony-ability's `destroy_window(id)` to actually destroy the system
@@ -1487,7 +1491,13 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ArkTS `destroyWindow()`, so `WebviewWindow::close()` alone leaves the
   /// system window visible on screen.
   pub fn ohos_window_id(&self) -> Option<i64> {
-    self.window.window.dispatcher.ohos_window_id().ok().flatten()
+    self
+      .window
+      .window
+      .dispatcher
+      .ohos_window_id()
+      .ok()
+      .flatten()
   }
 }
 
@@ -2009,6 +2019,14 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **macOS:** Disables the "zoom" button in the window titlebar, which is also used to enter fullscreen mode.
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's three decoration buttons
+  ///   are OS-managed (`@ohos.window` has no API for these operation-level
+  ///   flags: per-button visibility via `setWindowTitleButtonVisible` (API
+  ///   14+) and style injection via `setDecorButtonStyle` exist, but neither
+  ///   disables the operations themselves), so calling this on the main
+  ///   window returns an `NotSupported` error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows (float/sub-window kind)
+  ///   support the flag.
   pub fn set_maximizable(&self, maximizable: bool) -> crate::Result<()> {
     self.window.set_maximizable(maximizable)
   }
@@ -2018,6 +2036,10 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ## Platform-specific
   ///
   /// - **Linux / iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
+  ///   OS-managed, so calling this on the main window returns an
+  ///   `NotSupported` error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_minimizable(&self, minimizable: bool) -> crate::Result<()> {
     self.window.set_minimizable(minimizable)
   }
@@ -2029,6 +2051,10 @@ impl<R: Runtime> WebviewWindow<R> {
   /// - **Linux:** "GTK+ will do its best to convince the window manager not to show a close button.
   ///   Depending on the system, this function may not have any effect when called on a window that is already visible"
   /// - **iOS / Android:** Unsupported.
+  /// - **OpenHarmony:** the UIAbility main window's decoration buttons are
+  ///   OS-managed, so calling this on the main window returns an
+  ///   `NotSupported` error (issue
+  ///   Eulogizethesun/tauri#238). Sub-windows support the flag.
   pub fn set_closable(&self, closable: bool) -> crate::Result<()> {
     self.window.set_closable(closable)
   }
@@ -2101,6 +2127,10 @@ impl<R: Runtime> WebviewWindow<R> {
   ///
   /// - **Windows**: If using decorations or shadows, you may want to try this workaround <https://github.com/tauri-apps/tao/issues/72#issuecomment-975607891>
   /// - **Linux**: Unsupported
+  /// - **OpenHarmony:** only `Effect::Blur` and `Effect::Acrylic` are applied;
+  ///   `Mica`/`Tabbed` variants are skipped with an info log, and macOS-specific
+  ///   effects fall back to a basic blur approximation. Requires the window to
+  ///   be `transparent` (see `crates/tauri/src/vibrancy/ohos.rs`).
   pub fn set_effects<E: Into<Option<crate::utils::config::WindowEffectsConfig>>>(
     &self,
     effects: E,
@@ -2277,11 +2307,26 @@ impl<R: Runtime> WebviewWindow<R> {
   }
 
   /// Hide this window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** kind-split (issue Eulogizethesun/tauri#237, refined
+  ///   by #241 to match the tao T28-4 contract). On a MAIN window there is no
+  ///   hide semantics: per the SDK d.ts `minimize()` has dual semantics by
+  ///   caller type (main window = taskbar minimize, not hide, restored from
+  ///   the dock; sub-window / float = hide, restorable via `showWindow()`
+  ///   since API 9), and UIAbility-level `hideAbility` is out of reach on
+  ///   PC/2in1 -- so this call returns a `NotSupported` error naming
+  ///   OpenHarmony and the window is left untouched. Sub-windows / floating
+  ///   windows hide for real (the SDK `minimize()` is the hide primitive
+  ///   there) and [`Self::show`] restores them -- the former blanket error
+  ///   regressed every sub-window hide. Use [`Self::minimize`] on the main
+  ///   window for taskbar minimization (issue Eulogizethesun/tauri#241).
   pub fn hide(&self) -> crate::Result<()> {
     self.window.hide()
   }
 
-  /// Closes this window. It emits [`crate::RunEvent::CloseRequested`] first like a user-initiated close request so you can intercept it.
+  /// Closes this window. It emits `WindowEvent::CloseRequested` first like a user-initiated close request so you can intercept it.
   ///
   /// ## Platform-specific
   ///
@@ -2290,7 +2335,7 @@ impl<R: Runtime> WebviewWindow<R> {
   ///   requests through the Web `onWindowExit` event, which the framework
   ///   only registers for script-opened new-window dialogs (`window.open`
   ///   targets). This API (and the JS `getCurrentWindow().close()`) does emit
-  ///   [`crate::RunEvent::CloseRequested`] and honors `prevent_close`.
+  ///   `WindowEvent::CloseRequested` and honors `prevent_close`.
   pub fn close(&self) -> crate::Result<()> {
     self.window.close()
   }
@@ -2300,7 +2345,7 @@ impl<R: Runtime> WebviewWindow<R> {
   /// ## Platform-specific
   ///
   /// - **OpenHarmony:** like on desktop, `destroy` skips
-  ///   [`crate::RunEvent::CloseRequested`] and tears the window down
+  ///   `WindowEvent::CloseRequested` and tears the window down
   ///   directly. For the main window only the Rust-side lifecycle runs — the
   ///   OS-level ability window is system-managed and an in-app destroy is
   ///   rejected by the bridge (only sub-windows are destroyed OS-level).

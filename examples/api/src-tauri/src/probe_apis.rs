@@ -6,13 +6,9 @@
 //! calls — execution is the coverage, errors are aggregated into the
 //! returned string.
 
-use tauri::Manager;
-
 /// AppHandle monitor/cursor quartet + a return summary per API.
 #[tauri::command]
-pub fn probe_app_monitors<R: tauri::Runtime>(
-  app: tauri::AppHandle<R>,
-) -> Result<String, String> {
+pub fn probe_app_monitors<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {
   let mut out = Vec::new();
 
   match app.primary_monitor() {
@@ -98,9 +94,7 @@ pub fn probe_window_menu_set_remove<R: tauri::Runtime>(
 #[tauri::command]
 pub fn probe_display_refresh_rate() -> Result<String, String> {
   let rate = {
-    let app = tauri::ohos::APP
-      .lock()
-      .unwrap_or_else(|e| e.into_inner());
+    let app = tauri::ohos::APP.lock().unwrap_or_else(|e| e.into_inner());
     let app = app
       .as_ref()
       .ok_or_else(|| "ohos APP not initialized".to_string())?;

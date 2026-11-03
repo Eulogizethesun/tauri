@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>p3-m1-probe: script pending</title>
+  <style>
+    body {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 8px;
+      background: #fff;
+      color: #222;
+      margin: 0;
+    }
+    #status { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div id="status">p3-m1-probe: script pending</div>
+  <!-- External script: CSP default-src has no 'unsafe-inline' (same constraint
+       as webview-viewport-probe.html). Loaded inside a useHttpsScheme window so
+       the https://<scheme>.localhost intercept URL space exists; reports via
+       document.title (the create_isolated_window on_document_title_changed
+       emit) — no IPC required from this page. -->
+  <script src="p3-m1-probe.js"></script>
+</body>
+</html>

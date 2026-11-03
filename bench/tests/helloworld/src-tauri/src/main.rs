@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! Minimal benchmark app used as the runtime overhead baseline.
+
 #[tauri::command]
 fn app_loaded_successfully() {
   std::process::exit(0);

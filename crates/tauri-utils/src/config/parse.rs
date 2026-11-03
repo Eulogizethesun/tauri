@@ -110,7 +110,7 @@ pub enum ConfigError {
     /// The path that failed to parse into TOML.
     path: PathBuf,
 
-    /// The parsing [`toml::Error`].
+    /// The parsing `toml::Error`.
     error: Box<::toml::de::Error>,
   },
 

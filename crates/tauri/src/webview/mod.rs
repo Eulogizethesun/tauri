@@ -20,9 +20,9 @@ use serde::Serialize;
 use tauri_macros::default_runtime;
 pub use tauri_runtime::webview::{NewWindowFeatures, PageLoadEvent, ScrollBarStyle};
 // Remove this re-export in v3
-pub use tauri_runtime::Cookie;
 #[cfg(desktop)]
 use tauri_runtime::dpi::{PhysicalPosition, PhysicalSize};
+pub use tauri_runtime::Cookie;
 // `WebviewBuilder::build` compiles for `any(desktop, test)` (the manager unit
 // tests exercise it through the mock runtime), so these imports follow suit.
 #[cfg(any(desktop, test))]
@@ -257,9 +257,9 @@ pub enum NewWindowResponse<R: Runtime> {
   ///
   /// ## Platform-specific:
   ///
-  /// **Linux**: The webview must be related to the caller webview. See [`WebviewBuilder::related_view`].
-  /// **Windows**: The webview must use the same environment as the caller webview. See [`WebviewBuilder::environment`].
-  /// **macOS**: The webview must use the same webview configuration as the caller webview. See [`WebviewBuilder::with_webview_configuration`] and [`NewWindowFeatures::webview_configuration`].
+  /// **Linux**: The webview must be related to the caller webview. See `WebviewBuilder::related_view`.
+  /// **Windows**: The webview must use the same environment as the caller webview. See `WebviewBuilder::environment`.
+  /// **macOS**: The webview must use the same webview configuration as the caller webview. See `WebviewBuilder::with_webview_configuration` and `NewWindowFeatures::webview_configuration`.
   Create {
     /// Window that was created.
     window: crate::WebviewWindow<R>,
@@ -1613,6 +1613,17 @@ impl<R: Runtime> Webview<R> {
   }
 
   /// Returns the bounds of the webviews's client area.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** this reads the webview's bounds cache, not the live
+  ///   rendered geometry. For a natural-layout webview (created without
+  ///   `bounds`) that cache holds the upstream `WebViewAttributes::default()`
+  ///   200x200 placeholder -- never the actual on-screen geometry, which is
+  ///   container-driven and not reported back by the platform. After a
+  ///   partial [`Self::set_size`] / [`Self::set_position`], the components
+  ///   the call did not set read back as the "unspecified" sentinel
+  ///   (`i32::MIN`-derived values), by contract with the render layer.
   pub fn bounds(&self) -> crate::Result<tauri_runtime::dpi::Rect> {
     self.webview.dispatcher.bounds().map_err(Into::into)
   }
@@ -1621,11 +1632,23 @@ impl<R: Runtime> Webview<R> {
   ///
   /// - For child webviews, returns the position of the top-left hand corner of the webviews's client area relative to the top-left hand corner of the parent window.
   /// - For webview window, returns the inner position of the window.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** cache-backed -- see [`Self::bounds`]; for a
+  ///   natural-layout webview this returns the cached placeholder, not the
+  ///   live position.
   pub fn position(&self) -> crate::Result<PhysicalPosition<i32>> {
     self.webview.dispatcher.position().map_err(Into::into)
   }
 
   /// Returns the physical size of the webviews's client area.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** cache-backed -- see [`Self::bounds`]; for a
+  ///   natural-layout webview this returns the cached placeholder (200x200),
+  ///   not the live size.
   pub fn size(&self) -> crate::Result<PhysicalSize<u32>> {
     self.webview.dispatcher.size().map_err(Into::into)
   }
@@ -1981,6 +2004,30 @@ tauri::Builder::default()
     let listeners = self.manager().listeners();
 
     listeners.unlisten_js(event, id);
+
+    // Clean the JS-side registration in the frame that owns it. The listen
+    // registration eval runs in the MAIN document (webview evals are not
+    // frame-targeted), so a listener registered from inside an iframe has
+    // its `_listeners` entry -- and the `transformCallback` handler id it
+    // points to -- in the top frame, while the JS-side `_unlisten` helper ran
+    // in the calling (child) frame and could not reach either. Evaluating
+    // the unlisten script here unregisters the handler callback in the main
+    // frame and deletes the stale table entry; on OHOS a callback-id miss is
+    // forwarded down the frame relay (scripts/core.js), which reclaims the
+    // child frame's own `callbacks` entry. Without this, every iframe
+    // listen/unlisten cycle leaked both the table entry and the child
+    // frame's handler closure (issue Eulogizethesun/tauri#241).
+    //
+    // Best-effort: the Rust-side registry is already updated above, so a
+    // failing eval (e.g. the loop is tearing down) must not turn `unlisten`
+    // into an error the JS caller never saw before.
+    if let Err(e) = self.eval(crate::event::unlisten_js_script(
+      listeners.listeners_object_name(),
+      &format!("'{event}'"),
+      &id.to_string(),
+    )) {
+      log::warn!("failed to clean up the JS event listener registration: {e}");
+    }
 
     Ok(())
   }

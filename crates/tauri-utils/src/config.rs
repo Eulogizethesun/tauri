@@ -2219,7 +2219,7 @@ pub struct WindowConfig {
   )]
   pub disable_input_accessory_view: bool,
   ///
-  /// Set a custom path for the webview's data directory (localStorage, cache, etc.) **relative to [`appDataDir()`]/${label}**.
+  /// Set a custom path for the webview's data directory (localStorage, cache, etc.) **relative to `appDataDir()`/${label}**.
   ///
   /// To set absolute paths, use [`WebviewWindowBuilder::data_directory`](https://docs.rs/tauri/2/tauri/webview/struct.WebviewWindowBuilder.html#method.data_directory)
   ///
@@ -3253,7 +3253,7 @@ fn default_min_sdk_version() -> u32 {
 
 /// General configuration for the OpenHarmony target.
 #[skip_serializing_none]
-#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenHarmonyConfig {
@@ -3287,17 +3287,6 @@ pub struct OpenHarmonyConfig {
   /// `continuable` is `Some(true)`; defaults to `[identifier]` when omitted.
   #[serde(alias = "continue-type")]
   pub continue_type: Option<Vec<String>>,
-}
-
-impl Default for OpenHarmonyConfig {
-  fn default() -> Self {
-    Self {
-      version_code: None,
-      device_types: OpenHarmonyDeviceTypes::default(),
-      continuable: None,
-      continue_type: None,
-    }
-  }
 }
 
 /// Per-form OHOS device types. Each list drives one Entry HAP's `module.json5`

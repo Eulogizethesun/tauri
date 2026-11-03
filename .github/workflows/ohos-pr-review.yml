@@ -432,7 +432,7 @@ jobs:
             - [ ] `@Builder` requiring `this` is inside `@Component` (module-level @Builder has no this)
             - [ ] `onLoadIntercept` return value is inverted `!ret` (semantics opposite to Tauri on_navigation)
             - [ ] WebView events pre-build registered inside `@Builder`
-            - [ ] Multi-window state uses `@LocalStorageProp` isolation (FloatPage), not global `@StorageProp`
+            - [ ] Multi-window state uses `@LocalStorageProp` isolation (SubWindowPage), not global `@StorageProp`
             - [ ] `setColorMode` called asynchronously (`setTimeout(..., 0)`) to avoid deadlock
 
             ### E. Platform Isolation
