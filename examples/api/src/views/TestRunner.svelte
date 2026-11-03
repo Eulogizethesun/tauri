@@ -97,14 +97,15 @@
   // The api-gap batch (S10) runs last: it contains destructive ops (app hide/show, settings-page jumps) and must come after all other batches.
   // The risk-supplement batch (2026-09-04) sits after windowOps and before the coverage batch:
   // the three risk-point follow-ups (fs watcher / shell subprocess), skipped on platforms other than OHOS,
-  // appended at the tail to keep the numbering stable (the suite now spans #1-#313; the 2026-10-09
-  // NFC batch was later inserted at #137, and the 2026-10-12 review-fix cases at #50
-  // (clearAllBrowsingData routing) and #297 (setSizeConstraints min-floor read-back),
-  // each shifting subsequent case numbers by one).
+  // appended at the tail to keep the numbering stable (later batches insert
+  // cases mid-suite and shift the subsequent numbers: the 2026-10-09 NFC
+  // batch, the 2026-10-12 review-fix cases (clearAllBrowsingData routing)
+  // and (setSizeConstraints min-floor read-back), each shifting by one).
   // The 2026-10-23 #207 regression case (shell.open URL via the OHOS url bridge, side-effect) was
-  // appended at the end of the risk-supplement batch, shifting the stronghold batch by one (#1-#314 now).
+  // appended at the end of the risk-supplement batch, shifting the stronghold batch by one.
   // The 2026-10-26 #226 regression case (resourceDir → extracted OHOS resfile) was appended right
-  // after it, shifting the stronghold batch once more (#1-#315 now).
+  // after it, shifting the stronghold batch once more. Case indices are historical hints, not
+  // stable ids — upstream case insertions (e.g. #241's core wave) shift them too.
   // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
   // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
