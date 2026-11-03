@@ -74,3 +74,13 @@
   6. WebviewPlugin.ets `applyGeometry` 注释「density-1 契约下等于 physical px」措辞修正(vp 端到端 + DPI≠1 caveat,指向绿灯校准 2)。
 - 修复后复跑终轮(见 run 4)收口。
 
+---
+
+# 勘误(2026-11-03,issue Eulogizethesun/tauri#245;对上文两条 2026-10-28 P2-3 勘误注记的再勘误,原文保留)
+
+**:28「运行时 Physical→vp 分支在真机上从未被执行」与 :52「设备上没有任何用例走 Physical→vp 正向分支」按当前 head 已不成立——准确口径为「已执行,未单独断言」。**
+
+- 时序:上述两条注记写作时(2026-10-28,针对本归档的 2026-10-20 测试态)该陈述属实——当时 `set_bounds_test` 仅回发创建缓存的原 rect(全 Logical,见上文 run 2 记录的签名改造);同日同 PR#241 波次的 `267da0949` 给该命令加入 DISTINCT 探测腿,size 分量改发 `Size::Physical`(examples/api/src-tauri/src/cmd.rs `set_bounds_test` 的 probe_rect)→ wry `set_bounds_with_cache` 经 `size_to_logical_vp`/`geometry_to_logical_vp` 走 `to_logical(vp)` 的 Physical 除法分支。自此每次 desktop 形态套件轮该分支都在真机上执行并绿(如 2026-10-30 finalchain 327 例基线 row 71 `webview.set_bounds round-trip (OHOS desktop)` ✅)。
+- 「未单独断言」仍准确:套件断言的是渲染 viewport==请求逻辑值(`wait_rendered_ack` 以 original 的逻辑口径)与物理读回==logical×sf(core.ts 读回腿),均穿透该分支而不钉住其 vp 数值——探测腿的中间 viewport 不设断言,且 Logical 输入下该换算是恒等,故 vp 取 1.0 还是 1.9 不改变任何既有断言结果。上文两条注记的保留部分(「读回乘法链≠Physical 输入换算的真机证据」「round 语义由实现注释与 host 检查覆盖」)不受本再勘误影响。
+- 密度口径随同目录 design.md 2026-11-03 勘误统一:两个比例源(scaledDensity / virtualPixelRatio)本机实测均 **1.9**,非 1.0(依据与复现命令见该勘误块)。
+

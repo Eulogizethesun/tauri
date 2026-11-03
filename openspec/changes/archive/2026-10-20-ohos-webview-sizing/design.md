@@ -214,3 +214,14 @@ tags: [ohos]
 routed_skills: [rust-ohos]
 
 (rust-ohos 已查——域内容为 BUILD.gn 构建模板,与本 change 的 tauri-ohos fork 栈不适用,无模式可吸收;OHOS 约束改以 `.claude/skills/tauri-ohos-design/references/ohos-constraints.md` 为准。PB-A/PB-C:.botbrain/.projectbrain 不存在,⚠️ unavailable。)
+
+---
+
+## 勘误(2026-11-03,issue Eulogizethesun/tauri#245,原文保留不改写)
+
+**:189(S1 判据)「2in1 PC density 1.0,vp==px」的密度数字错误——参考设备实测 1.9,非 1.0。**
+
+- 参考设备 `3QC0124C11000038`(2in1)两个显示比例源实测同为 **1.9**(二者属不同 NativeDisplayManager C API,本机同值):
+  - `Window::scale_factor()`(tao `app.scale()` = NDK `default_display_scaled_density()`):绿灯读回链实测 1.9(95 = round(50×1.9) 双轴精确成立,见同目录 `red-light-evidence.md` 绿灯校准二;`consumer-advisory.md` 复测环境同记 scale 1.9)。
+  - 显示虚拟像素比(wry OHOS wire 侧 `default_display_virtual_pixel_ratio()`,经 `openharmony_ability::virtual_pixel_ratio`):设备 hilog 实测 1.9——ArkWeb chromium 日志行 `[sliding_observer.cc:110] virtual_pixel_ratio: 1.9, dpi: 264` 跨会话稳定复现(2026-08-27→2026-11-03 各次设备采集均同值;复现命令 `hdc shell "hilog -x | grep virtual_pixel_ratio"`,2026-11-03 现场复测输出 3 行均为 1.9)。wry 侧 `virtual_pixel_ratio` 文档同记参考设备 vp=1.9(wry/src/ohos/mod.rs `vp_ratio_sanitized` 文档段)。
+- 影响面::189 的判据本体(探针 ArkWeb `innerWidth/innerHeight` vs 请求几何)是 vp 对 vp 的比较链且套件全以 Logical 几何驱动(Logical 输入到 vp 为恒等),与密度无关——±0 容差与红灯/绿灯记录不受此错误影响;受影响的是「density 1.0」作为设备事实的引用,一律按 1.9 读。「vp==px」仅密度 1.0 时成立,本设备物理 px 与 vp 相差 1.9 倍(物理→vp 需除以 1.9,wry `set_bounds_with_cache` 即此换算)。

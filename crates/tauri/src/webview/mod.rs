@@ -1622,8 +1622,14 @@ impl<R: Runtime> Webview<R> {
   ///   200x200 placeholder -- never the actual on-screen geometry, which is
   ///   container-driven and not reported back by the platform. After a
   ///   partial [`Self::set_size`] / [`Self::set_position`], the components
-  ///   the call did not set read back as the "unspecified" sentinel
-  ///   (`i32::MIN`-derived values), by contract with the render layer.
+  ///   the call did not set keep their last cached value: the
+  ///   "unspecified" sentinel values (`i32::MIN`-derived) sent on the wire
+  ///   for those components are screened out by the wry-side bounds-cache
+  ///   merge and are never observable through this method (issue
+  ///   Eulogizethesun/tauri#245). Within one dpi variant the merge is
+  ///   per-component; a partial write in a different variant keeps the
+  ///   cached axis wholesale, so an unset component still reads back as
+  ///   whatever was cached before the call.
   pub fn bounds(&self) -> crate::Result<tauri_runtime::dpi::Rect> {
     self.webview.dispatcher.bounds().map_err(Into::into)
   }

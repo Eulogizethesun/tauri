@@ -2721,9 +2721,13 @@ pub async fn set_bounds_test<R: tauri::Runtime>(
   // Expected rendered viewport (CSS px) of the re-asserted rect = logical size.
   let (vw, vh) = (ow / sf, oh / sf);
   // KNOWN COUPLING (issue Eulogizethesun/tauri#241): this probe mixes two
-  // independent device-ratio sources. The WIRE side converts logical bounds
-  // to ArkUI vp with wry's OHOS vp (default_display_virtual_pixel_ratio);
-  // the EXPECTED side derives everything above from Window::scale_factor()
+  // independent device-ratio sources. The WIRE side converts physical units
+  // to ArkUI vp with wry's OHOS vp (default_display_virtual_pixel_ratio) --
+  // the probe rect below is sent with a `Size::Physical` size (the position
+  // keeps whichever variant the bounds cache holds), and wry's OHOS path
+  // divides physical px by vp (a Logical input would pass through as vp
+  // unchanged); the EXPECTED side derives everything above from
+  // Window::scale_factor()
   // (tao app.scale() = default_display_scaled_density). Both read 1.9 on the
   // reference device, but they are different NativeDisplayManager C APIs -
   // on a device where the two ratios diverge, the rendered ack and the

@@ -428,8 +428,12 @@ class Webview {
   // WebViewAttributes::default() 200×200 placeholder — never the live rendered
   // geometry, which is container-driven and not reported back by the platform.
   // After a partial `setSize()` / `setPosition()`, the components the call did
-  // not set read back as the "unspecified" sentinel (i32::MIN-derived values),
-  // by contract with the render layer (issue Eulogizethesun/tauri#241).
+  // not set keep their last cached value: the "unspecified" sentinels
+  // (i32::MIN-derived values) sent on the wire for those components are
+  // screened out by the wry-side bounds-cache merge and are never observable
+  // through these getters (issue Eulogizethesun/tauri#245). Within one dpi
+  // variant the merge is per-component; a partial write in a different variant
+  // keeps the cached axis wholesale.
 
   // Setters
 
