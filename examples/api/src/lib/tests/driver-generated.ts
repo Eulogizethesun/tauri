@@ -112,6 +112,29 @@
 //               three mutation needles kept verbatim - its own entry,
 //               header-touching, completed here by the next hand-edit
 //               per protocol
+//   (SHA pending - the entry below is header-touching, its SHA filled
+//               in by the next hand-edit per protocol) - the issue
+//               Eulogizethesun/tauri#248 TR-5 smoke relabel: the
+//               float.hide+show+center case is renamed to carry the
+//               suite's smoke convention ("... smoke (hide() dispatch
+//               outcome unverifiable from JS)") because the
+//               "dispatched AND applied" discriminator is NOT
+//               constructible at this layer - tao's is_minimized() is
+//               also a mirror read (tao window.rs:2115, fed by the same
+//               eager pair-write as the visible bit in set_visible's
+//               sub-window hide arm), the real ArkTS-side read-back
+//               (win.getWindowStatus() via WindowPlugin.ets windowState)
+//               is reachable only through the ability repo's
+//               plugin-window NAPI client (crates/plugin-window/src/lib.rs:771)
+//               which no tauri JS surface routes to, and the three log
+//               signals stay capture-dependent (a case cannot read hilog
+//               at runtime). Chosen arm, recorded for the issue reply:
+//               ASSERTED = the gate leak (hide() must resolve on a float
+//               sub-window) + the visibility-mirror flip poll; SMOKE-ONLY
+//               = the ArkTS-side application of the dispatched minimize
+//               (the case passes even when ArkTS no-ops after the eager
+//               mirror write). All pre-existing assertions kept verbatim;
+//               the case remains a plain TestCase (still not blind()).
 // 用例语义: 盲调用（执行即覆盖）——错误被吞掉但错误分支被点亮；
 //           命令/插件不存在 → skip；其余任何结果（含业务错误）→ pass。
 import { skip, skipOnMobile, type TestCase } from '../test-runner';
@@ -665,13 +688,19 @@ export const driverTests: TestCase[] = [
   driverCase('float.destroy', async () => {
     const label = uniq('fltd'); await invoke('create_borderless_window', { windowId: label }); await delay(600); const w = await Window.getByLabel(label); if (w) { await w.destroy(); }
   }),
-  // float.hide+show+center is an ASSERTION case, not a blind coverage probe:
+  // float.hide+show+center is an ASSERTION case with an explicit SMOKE label
+  // (issue Eulogizethesun/tauri#248 TR-5), not a blind coverage probe:
   // blind() swallows every non-"skip:" error, which would turn the #241
   // visibility assert below into dead code. It is therefore a plain TestCase
   // whose failures reach the runner and FAIL, with an explicit timeout (the
-  // hide-ack poll adds up to 2s on top of the creation/settle delays).
+  // hide-ack poll adds up to 2s on top of the creation/settle delays). The
+  // smoke label marks the one leg no suite-layer assertion can cover: the
+  // ArkTS-side APPLICATION of the dispatched hide (see the decision comment
+  // inside the case - the discriminator is not constructible at this layer;
+  // what IS asserted vs what is smoke-only is recorded there and in the
+  // header's HAND-EDIT ANCHORS entry).
   {
-    name: 'driver: float.hide+show+center',
+    name: 'driver: float.hide+show+center smoke (hide() dispatch outcome unverifiable from JS)',
     category: 'driver',
     timeout: 8000,
     fn: async () => {
@@ -702,6 +731,32 @@ export const driverTests: TestCase[] = [
       // cause log, so the failure message below names both and this
       // comment is why they are indistinguishable from the suite side.
       // show() restores, center() recenters.
+      // #248 TR-5 arm decision (re-derived on the merged chain, 2026-11-03):
+      // the "dispatched AND applied" discriminator E asked for is not
+      // constructible at this layer, so the case carries a smoke label and
+      // the split is recorded here. What is ASSERTED: hide() resolves (a
+      // rejection = the main-window gate leaked onto sub-windows - the
+      // catch below fails the case) and the visible mirror reads false
+      // within the poll window (catches set_visible(false) never running).
+      // What is SMOKE-ONLY: the ArkTS-side application of the dispatched
+      // minimize - tao writes the visible/minimized mirror pair eagerly
+      // BEFORE the dispatch, so both isVisible() AND isMinimized() read
+      // the intent bits, not system truth (tao window.rs is_minimized() =
+      // mirror.minimized load; the eager pair-write comment is on
+      // set_visible's sub-window hide arm). The real read-back exists on
+      // the ArkTS side (WindowPlugin.ets windowState -> win.getWindowStatus(),
+      // a live WindowStatusType read) but its only Rust caller is the
+      // ability repo's plugin-window NAPI client (crates/plugin-window
+      // src/lib.rs:771 is_window_minimized) - the tauri JS surface routes
+      // plugin:window|is_minimized through the dispatcher to tao's mirror,
+      // never to that client, and examples/api's cmd.rs exposes no
+      // window-state read command. The three hilog signals named in the
+      // failure message above are capture-dependent: a case executes in
+      // the app and cannot read hilog at runtime, so none of them can
+      // become an in-case assertion. Instrumenting the dispatch outcome
+      // (a hilog in the window plugin's windowCommand "minimize" arm or a
+      // notifyWindowStatus forward) lives in openharmony-ability - outside
+      // this issue's named file scope (driver-generated.ts only).
       const label = uniq('flth');
       await invoke('create_borderless_window', { windowId: label });
       await delay(600);
