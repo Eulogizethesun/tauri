@@ -387,7 +387,9 @@ pub struct Context<T: UserEvent> {
   /// guarantees the entry exists once `recv()` returns. The event-loop-side
   /// constructor does not go through the map -- it captures the UIAbility-main
   /// flag straight from the tao window in hand. Entries are removed
-  /// when the window leaves the store (`on_window_close_ohos`), so the map
+  /// when the window leaves the store (`on_window_close_ohos`) or when the
+  /// creation fails after the record (`create_window`'s Err path,
+  /// `ohos_remove_main_window`, issue Eulogizethesun/tauri#247), so the map
   /// holds at most one entry per live window -- repeated create/destroy of a
   /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
   #[cfg(target_env = "ohos")]
@@ -450,6 +452,17 @@ impl<T: UserEvent> Context<T> {
       .get(&window_id)
       .copied()
       .unwrap_or(false)
+  }
+
+  /// OHOS: remove a window's registry entry (issue
+  /// Eulogizethesun/tauri#247). Symmetric to [`Self::ohos_record_main_window`]:
+  /// that fn writes the entry before any creation reply is sent, so a creation
+  /// that fails after the record (`create_webview` erroring inside
+  /// `create_window`) must drop it on the Err path -- the store-based cleaner
+  /// (`on_window_close_ohos`) only runs for windows that entered the store.
+  #[cfg(target_env = "ohos")]
+  fn ohos_remove_main_window(&self, window_id: &WindowId) {
+    ohos_registry_remove(&self.ohos_main_window_registry, window_id);
   }
 }
 
@@ -5747,6 +5760,20 @@ fn parse_proxy_url(url: &Url) -> Result<ProxyConfig> {
   }
 }
 
+/// OHOS core of the registry removal, shared by
+/// `Context::ohos_remove_main_window` (the `create_window` Err path, issue
+/// Eulogizethesun/tauri#247). Split from the method so the lock discipline is
+/// exercisable by the registry UTs: tao's OHOS event loop requires the N-API
+/// app env and cannot be built in a test binary, so `Context` itself is out of
+/// reach there.
+#[cfg(target_env = "ohos")]
+fn ohos_registry_remove(registry: &Mutex<HashMap<WindowId, bool>>, window_id: &WindowId) {
+  registry
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .remove(window_id);
+}
+
 fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
   window_id: WindowId,
   webview_id: u32,
@@ -5958,7 +5985,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     // Using WindowChild would set explicit pixel dimensions via WebViewStyle,
     // causing layout differences on high-DPI devices. Child webviews created via
     // add_child still use WindowChild with explicit bounds.
-    webviews.push(create_webview(
+    let created_webview = match create_webview(
       #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
       WebviewKind::WindowChild,
       #[cfg(any(not(feature = "unstable"), target_env = "ohos"))]
@@ -5969,7 +5996,25 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
       context,
       webview,
       focused_webview.clone(),
-    )?);
+    ) {
+      Ok(webview) => webview,
+      Err(e) => {
+        // Issue Eulogizethesun/tauri#247 (OHOS): the registry entry recorded
+        // above (`ohos_record_main_window`) must not outlive this window when
+        // creation fails. The store-based cleaner (`on_window_close_ohos`)
+        // only runs for windows that entered the store, so the Err path
+        // removes the entry itself before the error escapes. The record point
+        // deliberately stays where it is: the user-thread dispatcher
+        // constructor reads the registry during creation (see
+        // `ohos_record_main_window`), so the record must precede the creation
+        // reply on every path, success or failure.
+        #[cfg(target_env = "ohos")]
+        context.ohos_remove_main_window(&window_id);
+        return Err(e);
+      }
+    };
+
+    webviews.push(created_webview);
   }
 
   let window = Arc::new(window);
@@ -7331,5 +7376,84 @@ mod auto_resize_enable_decision_tests {
       ohos_auto_resize_enable_decision(&state),
       OhosAutoResizeEnableDecision::LoudError
     );
+  }
+}
+
+/// Issue Eulogizethesun/tauri#247: registry-level UTs for the failed-creation
+/// cleanup. Scope note: the full `create_window` path is not drivable from any
+/// test binary -- tao's OHOS `EventLoopBuilder::build` panics without the
+/// N-API app env, so `EventLoop`/`Context` cannot be constructed outside the
+/// app process. These UTs therefore exercise the real removal implementation
+/// (`ohos_registry_remove`, the exact function the `create_window` Err arm
+/// reaches through `Context::ohos_remove_main_window`) against a standalone
+/// registry; the Err-arm wiring itself is review-verified and the residual gap
+/// is disclosed in the issue reply.
+#[cfg(all(test, target_env = "ohos"))]
+mod ohos_main_window_registry_tests {
+  use super::*;
+
+  fn registry() -> Arc<Mutex<HashMap<WindowId, bool>>> {
+    Arc::new(Mutex::new(HashMap::new()))
+  }
+
+  fn contains_entry(registry: &Arc<Mutex<HashMap<WindowId, bool>>>, id: WindowId) -> bool {
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .contains_key(&id)
+  }
+
+  // The create_webview Err arm must drop the recorded entry for the failed
+  // window only -- a sibling window that created successfully keeps its entry
+  // (its own dispatcher still reads it).
+  #[test]
+  fn remove_drops_only_the_failed_window_entry() {
+    let registry = registry();
+    // create_window's record point: the entry exists before any creation reply.
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(7), true);
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(9), false);
+
+    ohos_registry_remove(&registry, &WindowId::from(7));
+
+    assert!(!contains_entry(&registry, WindowId::from(7)));
+    assert!(contains_entry(&registry, WindowId::from(9)));
+  }
+
+  // Reaching the Err arm twice (or removing an id that never got recorded)
+  // must be a no-op, mirroring on_window_close_ohos's idempotent remove.
+  #[test]
+  fn remove_is_idempotent_on_unknown_id() {
+    let registry = registry();
+    ohos_registry_remove(&registry, &WindowId::from(404));
+    ohos_registry_remove(&registry, &WindowId::from(404));
+    assert!(registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .is_empty());
+  }
+
+  // A panicking event-loop thread poisons the lock; the Err-path cleanup must
+  // still land (same recovery discipline as the record/remove close paths).
+  #[test]
+  fn remove_recovers_from_poisoned_registry_lock() {
+    let registry = registry();
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(3), true);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = registry.lock().unwrap();
+      panic!("poison the registry lock");
+    }));
+
+    ohos_registry_remove(&registry, &WindowId::from(3));
+
+    assert!(!contains_entry(&registry, WindowId::from(3)));
   }
 }
