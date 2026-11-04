@@ -359,29 +359,35 @@ pub fn forms_for_device_types(device_types: &OpenHarmonyDeviceTypes) -> Vec<&'st
 }
 
 /// Copy `tauri.conf.json` and the configured `bundle.resources` into the
-/// `entry_{form}` module's `src/main/resources/rawfile/` directory — the only
+/// `entry_{form}` module's `src/main/resources/resfile/` directory — the
 /// app-writable location besides `AppScope/resources` that the HAP actually
-/// packages (a top-level `assets/` dir would be silently dropped). At runtime
-/// the files are reachable through the resource manager's rawfile APIs.
+/// packages (a top-level `assets/` dir would be silently dropped).
+///
+/// `resfile` (not `rawfile`) is required for `resource_dir()` to work: the
+/// system extracts a module's `resources/resfile` HAP content into the
+/// directly readable `/data/storage/el1/bundle/<module>/resources/resfile`
+/// directory (the official `resourceDir` location, matching the Rust path
+/// resolver), while `rawfile` content stays inside the zipped HAP and is only
+/// reachable through the resource manager's rawfile APIs.
 fn inject_resources(
   config: &OpenHarmonyConfig,
   tauri_config: &TauriConfig,
   form: &str,
 ) -> Result<()> {
-  let rawfile_dir = config
+  let resfile_dir = config
     .project_dir()
-    .join(format!("entry_{form}/src/main/resources/rawfile"));
+    .join(format!("entry_{form}/src/main/resources/resfile"));
 
-  create_dir_all(&rawfile_dir)
-    .fs_context("failed to create rawfile directory", rawfile_dir.clone())?;
+  create_dir_all(&resfile_dir)
+    .fs_context("failed to create resfile directory", resfile_dir.clone())?;
 
   write(
-    rawfile_dir.join("tauri.conf.json"),
+    resfile_dir.join("tauri.conf.json"),
     serde_json::to_string(&tauri_config).with_context(|| "failed to serialize tauri config")?,
   )
   .fs_context(
     "failed to write tauri config",
-    rawfile_dir.join("tauri.conf.json"),
+    resfile_dir.join("tauri.conf.json"),
   )?;
 
   let resources = match &tauri_config.bundle.resources {
@@ -392,7 +398,7 @@ fn inject_resources(
   if let Some(resources) = resources {
     for resource in resources.iter() {
       let resource = resource.context("failed to get resource")?;
-      let dest = rawfile_dir.join(resource.target());
+      let dest = resfile_dir.join(resource.target());
       crate::helpers::fs::copy_file(resource.path(), dest)?;
     }
   }

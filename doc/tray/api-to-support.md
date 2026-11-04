@@ -271,6 +271,8 @@ TrayIconEvent
 | 无快捷键系统 | accelerator 无效 | stub：忽略快捷键，显示文本 |
 | minimize/hide/close 窗口激活竞争 | 系统先激活窗口再执行动作 | setTimeout(300ms) 延迟执行 |
 | close 等价于 minimize | OHOS 无法 destroyWindow 后恢复 | close → minimize |
+| 托盘菜单项无法禁用 | StatusBarMenuItem 无 enabled 字段，禁用标志被忽略、禁用项仍可点仍触发命令 | 平台限制：Rust 侧每进程 warn 一次，文档说明；窗口菜单栏/弹窗菜单路径不受限 |
+| 托盘子菜单封顶一层 | StatusBarSubMenuItem 无嵌套字段，二层以上子项被丢弃、嵌套标题降级为可点叶子 | 平台限制：Rust 侧每进程 warn 一次，文档说明；menubar/弹窗菜单多层不受限 |
 
 ---
 
