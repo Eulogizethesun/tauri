@@ -21,6 +21,7 @@
   import { apiGapTests } from '../lib/tests/api-gap';
   import { riskSupplementTests } from '../lib/tests/risk-supplement';
   import { strongholdTests } from '../lib/tests/stronghold';
+  import { zombieCloseTests } from '../lib/tests/zombie-close';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, currentMonitor, cursorPosition, Effect, LogicalSize, PhysicalPosition, PhysicalSize, UserAttentionType } from '@tauri-apps/api/window';
@@ -108,8 +109,12 @@
   // stable ids — upstream case insertions (e.g. #241's core wave) shift them too.
   // The stronghold batch (2026-09-09) likewise sits before the coverage batch: in-memory operations only
   // (store/procedure chains); snapshot scrypt (~107s per call) belongs to the manual buttons, with numbering stability as above.
+  // The zombie-close batch (openspec ohos-main-window-close-zombie, 2026-11-04) is appended at the
+  // very end of the std batch so every existing case number stays stable (8 cases: the main-window
+  // prevented arm + the sub-window confirmation contract; OHOS-only, skipped elsewhere; the
+  // failure-injection case needs the fault-injection feature and skips on plain autotest builds).
   const coverageTests = ['true', '1'].includes(String(import.meta.env.VITE_COVERAGE_TESTS)) ? [...driverTests, ...sideReplayTests, ...badInputTests, ...faultInjectionTests, ...windowOpsExtraTests, ...apiGapTests] : [];
-  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...riskSupplementTests, ...strongholdTests, ...coverageTests];
+  const allTests = [...coreTests, ...pluginTests, ...dpiTests, ...windowDpiTests, ...imageTests, ...menuTests, ...trayTests, ...ohosAdapterTests, ...ohosInitTests, ...ohosGapTests, ...ohosMobilePluginTests, ...ohosScreenshotTests, ...ohosContinuationTests, ...windowOpsTests, ...riskSupplementTests, ...strongholdTests, ...zombieCloseTests, ...coverageTests];
   const webview = getCurrentWebview();
 
   async function runAll() {
@@ -164,6 +169,13 @@
   //      not through ExitRequested/restart_on_exit; the process is hard-killed and the OS restarts it → boot 3)
   //   boot 3 (restart-launched): the restart after restart (OS-automatic or manual relaunch;
   //     deciding "was it an automatic restart" relies on an external pidof/hilog timeline; this side only records and clears state)
+  //   boot 4 (main-close-launched, openspec ohos-main-window-close-zombie): armed in boot 1
+  //     BEFORE the exit leg (the exit leg is lethal since #100 — it kills the process, so the
+  //     close leg must run first) — the single-main-window close (getCurrent().close()) must
+  //     terminate the process via the D1 gate → #100 terminate chain; a boot carrying this phase
+  //     means the app was relaunched after the close did NOT terminate it (zombie regression).
+  //     Only observable externally: pidof empty + no persist-error loop + zero destroy-window
+  //     bridge traffic for id 0 in hilog.
   // Cross-process state lives in appCacheDir/process-phase.json (persisted via fs, surviving process death;
   // localStorage's persistence across process restarts is unverified, so it is not used).
   const delayMs = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -233,13 +245,45 @@
         onMessage('[process] 本次启动为 restart() 之后（OS 自动重启 or 手动拉起，判定见外部 pidof/hilog 时间线）');
         await writeProcessPhase(null);
         // Experiment over; the report was already generated and pulled at boot 1, so no auto runAll
+      } else if (phase === 'main-close-launched') {
+        // boot N+1 of the main-window close terminate leg (ut_main_window_close_terminates):
+        // only reachable when the close did NOT terminate the process and the app was
+        // relaunched externally (hdc shell aa start / launcher tap). A proper D1-gate
+        // terminate (terminateSelf) leaves no boot after boot 1.
+        onMessage('[process] 本次启动为主窗 close 之后（外部手动拉起;close 正常终止进程则永远不会有此 boot）');
+        await writeProcessPhase(null);
       } else {
         await runAll();
-        onMessage('[process] runAll 完成，invoking plugin:process|exit（code 0 → ExitRequested；#82-14 分层后事件循环不再派发终止，预期进程存活）...');
+        // ── main-window close terminate leg (ut_main_window_close_terminates, openspec
+        // ohos-main-window-close-zombie) — runs BEFORE the exit leg below: since the #100
+        // fix (issue Eulogizethesun/tauri#100) plugin:process|exit is LETHAL
+        // (RunEvent::ExitRequested unvetoed → ControlFlow::Exit → tao pending-exit →
+        // LoopDestroyed → app-control terminate → terminateSelf), so anything appended
+        // after the exit invoke is unreachable — the previous placement of this leg (after
+        // the exit invoke, riding the "exit leaves the process alive" premise of the
+        // #82-14 era) was dead code. The single-main-window close must terminate the app
+        // through the D1 gate + #100 chain and must NEVER reach the bridge's
+        // destroy-window (ArkTS rejects id 0 by design). If the log line below fires, the
+        // process outlived its own main-window close → the reported zombie state regressed
+        // (window alive, accounting gone, all window commands dead); the exit/restart legs
+        // below then run as diagnostics before the manual relaunch.
+        // EXIT_CONFIRM_MODE is force-disabled first: it is a product toggle, not part
+        // of this experiment's contract.
+        try { await invoke('set_exit_confirmation', { enabled: false }); } catch { /* not registered */ }
+        onMessage('[process] invoking main window close（getCurrentWindow().close() → D1 gate → terminateSelf，预期进程终止）...');
+        await writeProcessPhase('main-close-launched');
+        await getCurrentWindow().close();
+        await delayMs(8000);
+        onMessage('[process] main close 后 8s 进程仍存活 → 主窗 close 未终止进程（zombie 回归，FAIL）');
+        await writeProcessPhase(null);
+        // ── exit leg (pre-existing experiment): in the happy path the close leg above
+        // already terminated the process, so this only runs in the zombie-regression
+        // case. The #100 chain makes exit(0) lethal — exactly what the 'exit-launched'
+        // boot handler expects ("上一进程在 8s 观察窗内终止"). ExitRequested prevention
+        // in lib.rs is gated on EXIT_CONFIRM_MODE, which this experiment never enables,
+        // so the exit request passes through unprevented without any upfront toggling.
+        onMessage('[process] invoking plugin:process|exit（code 0 → ExitRequested；#100 链生效，预期进程终止；正常路径进程已死于 close，不会走到这里）...');
         await writeProcessPhase('exit-launched');
-        // ExitRequested prevention in lib.rs is gated on EXIT_CONFIRM_MODE,
-        // which this experiment never enables, so the exit request passes
-        // through unprevented without any upfront toggling.
         await invoke('plugin:process|exit', { code: 0 });
         await delayMs(8000);
         onMessage('[process] exit 后 8s 进程仍存活 → exit 未生效');
