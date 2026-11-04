@@ -394,6 +394,18 @@ pub struct Context<T: UserEvent> {
   /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
   #[cfg(target_env = "ohos")]
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
+  /// OHOS: windows whose OS destruction was requested by this runtime and is
+  /// still unconfirmed (design D2 in-flight guard). The close dispatcher
+  /// registers a window here when it fires `inner.close()` and the destruction
+  /// confirmation (the ArkTS notifyWindowClose loopback, or tao's Ok-resolve
+  /// Destroyed re-emission) removes it when it runs the confirmation executor.
+  /// A CloseRequested for an in-flight window is therefore the loopback of our
+  /// own destroy request -- it must NOT be re-dispatched to the app (the app
+  /// already answered once; a second dispatch would duplicate the event and
+  /// its veto could not stop the in-flight destroy anyway). All mutations
+  /// happen on the event-loop thread.
+  #[cfg(target_env = "ohos")]
+  ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
 }
 
 impl<T: UserEvent> Context<T> {
@@ -445,13 +457,7 @@ impl<T: UserEvent> Context<T> {
   /// stays the backstop for that degenerate case).
   #[cfg(target_env = "ohos")]
   fn ohos_is_ui_ability_main(&self, window_id: WindowId) -> bool {
-    self
-      .ohos_main_window_registry
-      .lock()
-      .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .get(&window_id)
-      .copied()
-      .unwrap_or(false)
+    ohos_registry_is_main(&self.ohos_main_window_registry, &window_id)
   }
 
   /// OHOS: remove a window's registry entry (issue
@@ -3633,6 +3639,8 @@ impl<T: UserEvent> Wry<T> {
       webview_runtime_installed: wry::webview_version().is_ok(),
       #[cfg(target_env = "ohos")]
       ohos_main_window_registry: Default::default(),
+      #[cfg(target_env = "ohos")]
+      ohos_pending_close: Default::default(),
     };
 
     Ok(Self {
@@ -4005,9 +4013,12 @@ where
 
   // OHOS: the close path drops the window's UIAbility-main registry entry
   // (issue Eulogizethesun/tauri#241); thread the shared map through the
-  // iteration context.
+  // iteration context. The pending-close set (design D2 in-flight guard)
+  // rides along.
   #[cfg(target_env = "ohos")]
   let ohos_main_window_registry = runtime.context.ohos_main_window_registry.clone();
+  #[cfg(target_env = "ohos")]
+  let ohos_pending_close = runtime.context.ohos_pending_close.clone();
 
   move |event, event_loop, control_flow| {
     for p in plugins.lock().unwrap().iter_mut() {
@@ -4023,6 +4034,8 @@ where
           exit_state: exit_state.clone(),
           #[cfg(target_env = "ohos")]
           ohos_main_window_registry: ohos_main_window_registry.clone(),
+          #[cfg(target_env = "ohos")]
+          ohos_pending_close: ohos_pending_close.clone(),
           #[cfg(feature = "tracing")]
           active_tracing_spans: active_tracing_spans.clone(),
         },
@@ -4043,6 +4056,8 @@ where
         exit_state: exit_state.clone(),
         #[cfg(target_env = "ohos")]
         ohos_main_window_registry: ohos_main_window_registry.clone(),
+        #[cfg(target_env = "ohos")]
+        ohos_pending_close: ohos_pending_close.clone(),
         #[cfg(feature = "tracing")]
         active_tracing_spans: active_tracing_spans.clone(),
       },
@@ -4065,6 +4080,10 @@ pub struct EventLoopIterationContext<'a, T: UserEvent> {
   /// Eulogizethesun/tauri#241).
   #[cfg(target_env = "ohos")]
   pub ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
+  /// OHOS: windows with an unconfirmed destroy in flight (design D2 in-flight
+  /// guard), threaded to the close path like the registry above.
+  #[cfg(target_env = "ohos")]
+  pub ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
 }
@@ -5186,6 +5205,8 @@ fn handle_event_loop<T: UserEvent>(
     exit_state,
     #[cfg(target_env = "ohos")]
     ohos_main_window_registry,
+    #[cfg(target_env = "ohos")]
+    ohos_pending_close,
     #[cfg(feature = "tracing")]
     active_tracing_spans,
   } = context;
@@ -5395,17 +5416,21 @@ fn handle_event_loop<T: UserEvent>(
           TaoWindowEvent::CloseRequested => {
             #[cfg(not(target_env = "ohos"))]
             on_close_requested(callback, window_id, windows);
-            // OHOS: on_close_requested_ohos drives destruction + exit checks
-            // itself; loop exit is driven by the system (LoopDestroyed), so its
-            // return value is intentionally ignored.
+            // OHOS: the close dispatcher (design D2) drives the destruction
+            // initiation, the in-flight guard and the main-window exit gate;
+            // it sets `ControlFlow::Exit` itself when the exit request passes.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_close_requested_ohos(
-                callback,
+              on_close_requested_ohos(
+                OhosCloseCtx {
+                  callback,
+                  windows: windows.clone(),
+                  exit_state: exit_state.clone(),
+                  ohos_main_window_registry: ohos_main_window_registry.clone(),
+                  ohos_pending_close: ohos_pending_close.clone(),
+                  control_flow,
+                },
                 window_id,
-                windows,
-                exit_state,
-                ohos_main_window_registry.clone(),
               );
             }
           }
@@ -5428,17 +5453,22 @@ fn handle_event_loop<T: UserEvent>(
                 }
               }
             }
-            // OHOS: the store entry is removed by the window-close path
-            // (on_window_close_ohos, idempotent); this arm is a safety net for
-            // any Destroyed event that arrives without a prior close.
+            // OHOS: destruction-confirmation executor (design D2) -- the
+            // landing point for tao's Destroyed (MainEvent::WindowDestroy
+            // pairing and the Ok-resolve re-emission). Idempotent against the
+            // close-path removal.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_window_close_ohos(
-                callback,
+              on_window_close_ohos(
+                OhosCloseCtx {
+                  callback,
+                  windows: windows.clone(),
+                  exit_state: exit_state.clone(),
+                  ohos_main_window_registry: ohos_main_window_registry.clone(),
+                  ohos_pending_close: ohos_pending_close.clone(),
+                  control_flow,
+                },
                 window_id,
-                windows,
-                exit_state,
-                ohos_main_window_registry.clone(),
               );
             }
           }
@@ -5506,30 +5536,41 @@ fn handle_event_loop<T: UserEvent>(
       Message::Window(id, WindowMessage::Close) => {
         #[cfg(not(target_env = "ohos"))]
         on_close_requested(callback, id, windows);
+        // OHOS: same dispatcher as the CloseRequested event arm (design D2):
+        // app-facing veto dispatch, then initiate/gate by window kind.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_close_requested_ohos(
-            callback,
+          on_close_requested_ohos(
+            OhosCloseCtx {
+              callback,
+              windows: windows.clone(),
+              exit_state: exit_state.clone(),
+              ohos_main_window_registry: ohos_main_window_registry.clone(),
+              ohos_pending_close: ohos_pending_close.clone(),
+              control_flow,
+            },
             id,
-            windows,
-            exit_state,
-            ohos_main_window_registry.clone(),
           );
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
         #[cfg(not(target_env = "ohos"))]
         on_window_close(id, windows);
-        // OHOS: call the full close handler directly, skipping CloseRequested
-        // to avoid recursion.
+        // OHOS: initiator without a CloseRequested dispatch (design D4) --
+        // upstream `destroy()` semantics skip the veto event; the removal
+        // moves to the destruction confirmation.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_window_close_ohos(
-            callback,
+          ohos_destroy_message_ohos(
+            OhosCloseCtx {
+              callback,
+              windows: windows.clone(),
+              exit_state: exit_state.clone(),
+              ohos_main_window_registry: ohos_main_window_registry.clone(),
+              ohos_pending_close: ohos_pending_close.clone(),
+              control_flow,
+            },
             id,
-            windows,
-            exit_state,
-            ohos_main_window_registry.clone(),
           );
         }
       }
@@ -5616,131 +5657,317 @@ fn on_window_close(window_id: WindowId, windows: Arc<WindowsStore>) {
   }
 }
 
-/// OHOS variant of `on_close_requested`: forwards to `on_window_close_ohos`
-/// (which also drives OS window destruction and the exit check).
-/// Returns `true` if the loop should exit (unused on OHOS — the system drives
-/// teardown via LoopDestroyed).
+/// Shared context for the OHOS close path (design D1/D2 rework): everything
+/// the dispatch/initiate/confirm helpers need, bundled so each helper stays
+/// under its line budget. Built fresh per event-loop arm (the `&mut
+/// ControlFlow` reborrow ends with the arm).
 #[cfg(target_env = "ohos")]
-fn on_close_requested_ohos<'a, T: UserEvent>(
+struct OhosCloseCtx<'a, T: UserEvent> {
   callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
-  window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
-) -> bool {
-  let (tx, rx) = channel();
-  let windows_ref = windows.0.borrow();
-  if let Some(w) = windows_ref.get(&window_id) {
-    let label = w.label.clone();
-    let window_event_listeners = w.window_event_listeners.clone();
-
-    drop(windows_ref);
-
-    let listeners = window_event_listeners.lock().unwrap();
-    let handlers = listeners.values();
-    for handler in handlers {
-      handler(&WindowEvent::CloseRequested {
-        signal_tx: tx.clone(),
-      });
-    }
-    callback(RunEvent::WindowEvent {
-      label,
-      event: WindowEvent::CloseRequested { signal_tx: tx },
-    });
-    if let Ok(true) = rx.try_recv() {
-      // User prevented close, do not call on_window_close
-    } else {
-      return on_window_close_ohos(
-        callback,
-        window_id,
-        windows,
-        exit_state,
-        ohos_main_window_registry,
-      );
-    }
-  }
-  false
+  ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
+  control_flow: &'a mut ControlFlow,
 }
 
-/// OHOS variant of `on_window_close`: remove from store, fire events, check if
-/// event loop should exit. Returns `true` if all windows are closed and user
-/// did not prevent exit (callers on OHOS never act on it — teardown is
-/// system-driven).
 #[cfg(target_env = "ohos")]
-fn on_window_close_ohos<'a, T: UserEvent>(
-  callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
-  window_id: WindowId,
-  windows: Arc<WindowsStore>,
-  exit_state: Arc<ExitState>,
-  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
-) -> bool {
-  // Remove window entry from WindowsStore (idempotent)
-  let removed = windows.0.borrow_mut().remove(&window_id);
-  // `mut` would only be needed by the Windows-only surface drop below, which
-  // never applies inside this OHOS-only function; the OHOS path only reads
-  // `inner` and moves `label`.
-  if let Some(window_wrapper) = removed {
-    // Drop the window's UIAbility-main record together with the store entry
-    // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
-    // live window count across repeated create/destroy cycles of the same
-    // label. Idempotent: the close paths can run more than once per window.
-    ohos_main_window_registry
-      .lock()
-      .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .remove(&window_id);
+fn ohos_pending_close_insert(set: &Mutex<HashSet<WindowId>>, id: &WindowId) {
+  set
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .insert(*id);
+}
 
-    // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
-    // kind) call destroyWindow; the main (UIAbility) window is system-managed -- the
-    // bridge's destroy-window handler rejects window id 0, so for it this is
-    // a rejected fire-and-forget and the OS window remains until the system
-    // closes it. Without this call the OS sub-window stays on
-    // screen → ghost windows that diverge from Rust's records.
-    //
-    // Recursion safety: close -> ArkTS destroyWindow -> SubWindowPage
-    // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
-    // The second on_window_close call hits `removed == None` (this block already
-    // removed it) and returns early — the idempotent remove breaks the cycle.
-    use tao::platform::ohos::WindowExtOpenHarmony;
-    if let Some(ref inner) = window_wrapper.inner {
-      inner.close();
+/// Returns whether the window had an unconfirmed destroy in flight. Taking the
+/// registration here (not peeking) is what keeps a duplicate loopback
+/// (`notifyWindowClose` fires from both the SubWindowPage button and
+/// `aboutToDisappear`) from re-entering the executor twice.
+#[cfg(target_env = "ohos")]
+fn ohos_pending_close_take(set: &Mutex<HashSet<WindowId>>, id: &WindowId) -> bool {
+  set
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .remove(id)
+}
+
+/// OHOS variant of `on_close_requested`: the destruction INITIATOR side of the
+/// confirmation-driven rework (design D2).
+///
+/// A CloseRequested for a window whose destroy we already requested is the
+/// ArkTS destruction loopback (our own `inner.close()` -> destroyWindow ->
+/// `aboutToDisappear` -> `notifyWindowClose`): it is the (b) confirmation
+/// channel, NOT a fresh user close -- the app already answered once and a
+/// second dispatch would duplicate the event while its veto could not stop the
+/// in-flight destroy. Those go straight to the confirmation executor.
+///
+/// Everything else dispatches CloseRequested to the app (first veto level);
+/// on veto the close ends with all accounting intact. Unvetoed, the window is
+/// split by kind: the UIAbility root goes through the exit gate (design D1),
+/// any other window (sub-window or spawned UIAbility instance) only gets the
+/// destroy request dispatched -- the store/registry entries and the Destroyed
+/// event move to the confirmation executor, so a failed bridge call leaves the
+/// accounting matching the still-alive window (report zombie fix, D3).
+#[cfg(target_env = "ohos")]
+fn on_close_requested_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  // In-flight guard: this CloseRequested is the destruction loopback.
+  if ohos_pending_close_take(&ctx.ohos_pending_close, &window_id) {
+    log::info!("[wry] CloseRequested for in-flight window: destruction loopback (confirmation)");
+    on_window_close_ohos(ctx, window_id);
+    return;
+  }
+
+  let (label, window_event_listeners) = {
+    let windows_ref = ctx.windows.0.borrow();
+    match windows_ref.get(&window_id) {
+      Some(w) => (w.label.clone(), w.window_event_listeners.clone()),
+      None => return,
     }
+  };
 
-    let label = window_wrapper.label;
-
-    // Fire WindowEvent::Destroyed
-    callback(RunEvent::WindowEvent {
-      label,
-      event: WindowEvent::Destroyed,
+  let (tx, rx) = channel();
+  let listeners = window_event_listeners.lock().unwrap();
+  let handlers = listeners.values();
+  for handler in handlers {
+    handler(&WindowEvent::CloseRequested {
+      signal_tx: tx.clone(),
     });
+  }
+  (ctx.callback)(RunEvent::WindowEvent {
+    label,
+    event: WindowEvent::CloseRequested { signal_tx: tx },
+  });
+  if let Ok(true) = rx.try_recv() {
+    // User prevented close: no destroy request, no accounting change.
+    return;
+  }
+  ohos_dispatch_close_ohos(ctx, window_id);
+}
 
-    // Check if all windows are closed
-    let is_empty = windows.0.borrow().is_empty();
-    if is_empty {
-      // Guard against duplicate ExitRequested (LoopDestroyed path may also fire)
-      if !exit_state.0.load(Ordering::SeqCst) {
-        let (tx, rx) = channel();
-        callback(RunEvent::ExitRequested { code: None, tx });
+/// Reads the registry + the OS window id and routes an unvetoed close to the
+/// main-window gate or the sub-window initiator. Registry read strictly
+/// precedes any removal (design "先读后摘", coexists with the #247 Err-path
+/// removal). The registry alone is not sufficient as the root test:
+/// `ohos_record_main_window` writes `true` for EVERY UIAbility-kind window
+/// (spawned instances included), and only the id-0 root's destruction equals
+/// app termination -- gating on the registry alone would tear down the whole
+/// app when a secondary UIAbility window closes (multi-UIAbility regression).
+#[cfg(target_env = "ohos")]
+fn ohos_dispatch_close_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  use tao::platform::ohos::WindowExtOpenHarmony;
 
-        let recv = rx.try_recv();
-        let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
-        log::info!(
-          "[wry] ExitRequested (all windows closed) should_prevent: {}",
-          should_prevent
-        );
+  let registry_says_main = ohos_registry_is_main(&ctx.ohos_main_window_registry, &window_id);
+  let os_window_id = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.as_ref())
+    .and_then(|w| w.window_id());
 
-        // Mark ExitRequested as sent
-        exit_state.0.store(true, Ordering::SeqCst);
+  if registry_says_main && os_window_id == Some(0) {
+    let label = match ctx.windows.0.borrow().get(&window_id) {
+      Some(w) => w.label.clone(),
+      None => return,
+    };
+    ohos_main_window_close_gate(ctx, window_id, label);
+  } else {
+    ohos_initiate_destroy_ohos(ctx, window_id);
+  }
+}
 
-        if !should_prevent {
-          // On OHOS, the system has already started the destruction flow
-          // (LoopDestroyed), so we must not set ControlFlow::Exit.
-          // On other platforms, the caller must set ControlFlow::Exit.
-          return true;
-        }
+/// OHOS main-window (UIAbility root) close gate (design D1). The root window
+/// is the app root: its confirmed close must terminate the app through the
+/// `ExitRequested` veto and the #100 terminate chain
+/// (`ControlFlow::Exit` -> tao pending-exit -> `LoopDestroyed` -> app-control
+/// `terminate` -> `terminateSelf`) and must never dispatch the bridge's
+/// destroy-window (which rejects id 0 by design -- D5).
+#[cfg(target_env = "ohos")]
+fn ohos_main_window_close_gate<T: UserEvent>(
+  ctx: OhosCloseCtx<'_, T>,
+  window_id: WindowId,
+  label: String,
+) {
+  let OhosCloseCtx {
+    callback,
+    windows,
+    exit_state,
+    ohos_main_window_registry,
+    control_flow,
+    ..
+  } = ctx;
+
+  let exit_in_flight = exit_state.0.load(Ordering::SeqCst);
+  let should_prevent = if exit_in_flight {
+    // Teardown already in flight (RequestExit / pre-close probe / prior gate
+    // run): dedup, do not ask the app again.
+    false
+  } else {
+    let (tx, rx) = channel();
+    callback(RunEvent::ExitRequested { code: None, tx });
+    let prevent = matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent));
+    log::info!(
+      "[wry] ExitRequested (main window close) should_prevent: {}",
+      prevent
+    );
+    prevent
+  };
+
+  match ohos_exit_gate_decision(exit_in_flight, should_prevent) {
+    OhosExitGateAction::Cancel => {
+      // Close cancelled: store/registry untouched, window commands keep
+      // working (the report's zombie state is exactly what this arm avoids).
+      log::info!("[wry] main window close cancelled by ExitRequested veto (label {label})");
+    }
+    OhosExitGateAction::ProceedTeardown | OhosExitGateAction::TeardownAndExit => {
+      // Teardown first, then the exit request: Destroyed is truthful at this
+      // moment (the terminate is in flight and takes the window with it).
+      // Idempotent: a second gate run for the same window removes nothing.
+      let removed = windows.0.borrow_mut().remove(&window_id).is_some();
+      ohos_registry_remove(&ohos_main_window_registry, &window_id);
+      if removed {
+        callback(RunEvent::WindowEvent {
+          label,
+          event: WindowEvent::Destroyed,
+        });
       }
+      exit_state.0.store(true, Ordering::SeqCst);
+      *control_flow = ControlFlow::Exit;
     }
   }
-  false
+}
+
+/// OHOS destruction initiator (design D2): dispatch `inner.close()` WITHOUT
+/// removing the store/registry entries and without firing Destroyed. Registers
+/// the in-flight guard so the destruction loopback is recognized as the
+/// confirmation. Idempotent against a window whose wrapper holds no tao window
+/// (no request can be issued -> no registration -> no confirmation expected).
+///
+/// Known boundary: if tao's `close()` cannot dispatch (bridge client
+/// unavailable -- an app-wide degenerate state), the registration stays behind;
+/// the next real destruction loopback for that window then skips one app-facing
+/// dispatch. Accounting never diverges: the loopback only fires from a real
+/// destruction flow, so the executor's removal is truthful either way.
+#[cfg(target_env = "ohos")]
+fn ohos_initiate_destroy_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  let inner = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.clone());
+  let Some(inner) = inner else {
+    return;
+  };
+  ohos_pending_close_insert(&ctx.ohos_pending_close, &window_id);
+  use tao::platform::ohos::WindowExtOpenHarmony;
+  log::info!(
+    "[wry] on_window_close: dispatching destroy_window ohos_id={:?}",
+    inner.window_id()
+  );
+  inner.close();
+}
+
+/// OHOS core of the destruction confirmation (design D2): the landing point
+/// for both confirmation channels -- (b) the ArkTS destruction loopback
+/// arriving as an in-flight CloseRequested, and (a) tao's Ok-resolve
+/// Destroyed re-emission (plus the MainEvent::WindowDestroy pairing arm, whose
+/// CloseRequested leg always runs the initiator first). Removes the store
+/// entry, drops the registry record, fires `Destroyed` (now truthful), and
+/// runs the all-closed exit check with the SUB-WINDOW semantics of design D6
+/// (the main-window arm never reaches here with accounting still present).
+/// Idempotent: a window already removed early-exits, so duplicate
+/// confirmations dispatch nothing.
+#[cfg(target_env = "ohos")]
+fn on_window_close_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  let OhosCloseCtx {
+    callback,
+    windows,
+    exit_state,
+    ohos_main_window_registry,
+    ohos_pending_close,
+    control_flow,
+  } = ctx;
+
+  // Take the in-flight registration (idempotent no-op for window-destroy-pair
+  // or legacy confirmations that arrive without a prior initiate).
+  let _ = ohos_pending_close_take(&ohos_pending_close, &window_id);
+
+  // Remove window entry from WindowsStore (idempotent)
+  let removed = windows.0.borrow_mut().remove(&window_id);
+  let Some(window_wrapper) = removed else {
+    return;
+  };
+
+  // Drop the window's UIAbility-main record together with the store entry
+  // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
+  // live window count across repeated create/destroy cycles of the same
+  // label.
+  ohos_registry_remove(&ohos_main_window_registry, &window_id);
+
+  let label = window_wrapper.label;
+
+  // Fire WindowEvent::Destroyed -- only now is the OS window confirmed gone.
+  callback(RunEvent::WindowEvent {
+    label,
+    event: WindowEvent::Destroyed,
+  });
+
+  // All-closed exit check (design D6 sub-window semantics). Unlike the old
+  // code, `exit_state` is only marked when the exit request passes: a vetoed
+  // all-closed moment must leave the dedup guard clear for the next trigger.
+  let is_empty = windows.0.borrow().is_empty();
+  if ohos_all_closed_exit_predicate(is_empty, exit_state.0.load(Ordering::SeqCst))
+    == OhosAllClosedAction::SetExit
+  {
+    let (tx, rx) = channel();
+    callback(RunEvent::ExitRequested { code: None, tx });
+    let should_prevent = matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent));
+    log::info!(
+      "[wry] ExitRequested (all windows closed) should_prevent: {}",
+      should_prevent
+    );
+    if !should_prevent {
+      exit_state.0.store(true, Ordering::SeqCst);
+      // The #100 chain is the only process exit: propagate to tao's
+      // pending-exit check at the end of this MainEvent dispatch.
+      *control_flow = ControlFlow::Exit;
+    }
+  }
+}
+
+/// OHOS handler for `Message::Window(.., Destroy)`: the initiator side without
+/// a CloseRequested dispatch (upstream `destroy()` semantics skip the veto
+/// event). OHOS diverges from upstream's unconditional removal (design D4):
+/// real state first, so the removal moves to the confirmation executor. The
+/// root window still routes through the exit gate: destroying the ability root
+/// terminates the app, and that termination must stay subject to the app's
+/// exit veto.
+#[cfg(target_env = "ohos")]
+fn ohos_destroy_message_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  use tao::platform::ohos::WindowExtOpenHarmony;
+
+  let in_store = ctx.windows.0.borrow().contains_key(&window_id);
+  if !in_store {
+    return;
+  }
+  let registry_says_main = ohos_registry_is_main(&ctx.ohos_main_window_registry, &window_id);
+  let os_window_id = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.as_ref())
+    .and_then(|w| w.window_id());
+  if registry_says_main && os_window_id == Some(0) {
+    let label = match ctx.windows.0.borrow().get(&window_id) {
+      Some(w) => w.label.clone(),
+      None => return,
+    };
+    ohos_main_window_close_gate(ctx, window_id, label);
+  } else {
+    ohos_initiate_destroy_ohos(ctx, window_id);
+  }
 }
 
 fn parse_proxy_url(url: &Url) -> Result<ProxyConfig> {
@@ -5772,6 +5999,76 @@ fn ohos_registry_remove(registry: &Mutex<HashMap<WindowId, bool>>, window_id: &W
     .lock()
     .unwrap_or_else(|poisoned| poisoned.into_inner())
     .remove(window_id);
+}
+
+/// OHOS core of the registry read, split from
+/// `Context::ohos_is_ui_ability_main` for the same testability reason as
+/// [`ohos_registry_remove`]. Unknown ids read as sub-windows (`false`): the
+/// close path then falls back to the dispatch/confirm arm, and tao's own
+/// main-window gate stays the backstop for that degenerate case.
+#[cfg(target_env = "ohos")]
+fn ohos_registry_is_main(registry: &Mutex<HashMap<WindowId, bool>>, window_id: &WindowId) -> bool {
+  registry
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .get(window_id)
+    .copied()
+    .unwrap_or(false)
+}
+
+/// The main-window close gate's decision after the `ExitRequested` dispatch
+/// (design D1, pure). The OHOS capability window is the app root: "prevent
+/// exit but the main window is closed" is structurally unreachable, so an
+/// ExitRequested veto cancels the whole close.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OhosExitGateAction {
+  /// A teardown is already in flight (`exit_state` set by RequestExit / the
+  /// pre-close probe / a prior gate run): merge into it idempotently without
+  /// re-dispatching ExitRequested (the Message::Exit confluence).
+  ProceedTeardown,
+  /// The app vetoed this exit: cancel the close and touch no accounting.
+  Cancel,
+  /// ExitRequested dispatched and unprevented: tear down and drive the #100
+  /// terminate chain (ControlFlow::Exit -> tao pending-exit -> terminate).
+  TeardownAndExit,
+}
+
+/// Decision table (design D1): `(exit_state_set, should_prevent)`.
+#[cfg(target_env = "ohos")]
+fn ohos_exit_gate_decision(exit_state_set: bool, should_prevent: bool) -> OhosExitGateAction {
+  if exit_state_set {
+    OhosExitGateAction::ProceedTeardown
+  } else if should_prevent {
+    OhosExitGateAction::Cancel
+  } else {
+    OhosExitGateAction::TeardownAndExit
+  }
+}
+
+/// The sub-window destruction-confirmation executor's all-closed exit decision
+/// (design D6, pure). Deliberately consumed ONLY by the confirmation executor:
+/// the main-window arm unconditionally sets `ControlFlow::Exit` after its gate
+/// (capability window = app root; remaining sub-windows die with terminateSelf),
+/// so it never consults this predicate.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OhosAllClosedAction {
+  /// Store empty and no exit requested yet: dispatch ExitRequested and, if
+  /// unprevented, mark `exit_state` and set `ControlFlow::Exit`.
+  SetExit,
+  /// Windows remain, or a teardown is already in flight: no-op.
+  Noop,
+}
+
+/// Decision table (design D6): `(store_empty, exit_state_set)`.
+#[cfg(target_env = "ohos")]
+fn ohos_all_closed_exit_predicate(store_empty: bool, exit_state_set: bool) -> OhosAllClosedAction {
+  if store_empty && !exit_state_set {
+    OhosAllClosedAction::SetExit
+  } else {
+    OhosAllClosedAction::Noop
+  }
 }
 
 fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
@@ -7455,5 +7752,109 @@ mod ohos_main_window_registry_tests {
     ohos_registry_remove(&registry, &WindowId::from(3));
 
     assert!(!contains_entry(&registry, WindowId::from(3)));
+  }
+
+  // The registry read side must keep the unknown-id fallback: an id that never
+  // got recorded (or whose record was already dropped) reads as a sub-window so
+  // the close path falls back to the dispatch/confirm arm instead of the
+  // main-window exit gate (lib.rs `ohos_is_ui_ability_main` contract).
+  #[test]
+  fn is_main_reads_unknown_id_as_false() {
+    let registry = registry();
+    assert!(!ohos_registry_is_main(&registry, &WindowId::from(404)));
+  }
+
+  // A recorded UIAbility-kind window reads true; a recorded sub-window reads
+  // false -- the exact values `ohos_record_main_window` writes.
+  #[test]
+  fn is_main_reads_recorded_kinds() {
+    let registry = registry();
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(0), true);
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(5), false);
+    assert!(ohos_registry_is_main(&registry, &WindowId::from(0)));
+    assert!(!ohos_registry_is_main(&registry, &WindowId::from(5)));
+  }
+}
+
+/// Design D1/D6 pure decision helpers: the main-window exit gate and the
+/// sub-window all-closed predicate, extracted so the decision tables are
+/// exercisable by host/device UTs (the full executor needs the N-API app env
+/// and cannot be built in a test binary -- see `ohos_main_window_registry_tests`).
+#[cfg(all(test, target_env = "ohos"))]
+mod ohos_exit_gate_tests {
+  use super::*;
+
+  // Decision table (design D1): exit already in flight always merges into the
+  // in-flight teardown (Message::Exit idempotent confluence), whatever the
+  // (not-even-asked) veto answer would be.
+  #[test]
+  fn exit_gate_in_flight_always_proceeds_to_teardown() {
+    assert_eq!(
+      ohos_exit_gate_decision(true, false),
+      OhosExitGateAction::ProceedTeardown
+    );
+    assert_eq!(
+      ohos_exit_gate_decision(true, true),
+      OhosExitGateAction::ProceedTeardown
+    );
+  }
+
+  // First exit request vetoed: the close is cancelled and NO accounting is
+  // touched (store/registry entries stay; the window stays fully usable --
+  // the report's zombie state is exactly what this arm prevents).
+  #[test]
+  fn exit_gate_vetoed_cancels_without_teardown() {
+    assert_eq!(
+      ohos_exit_gate_decision(false, true),
+      OhosExitGateAction::Cancel
+    );
+  }
+
+  // First exit request passes: tear down and drive the #100 terminate chain.
+  #[test]
+  fn exit_gate_unprevented_tears_down_and_exits() {
+    assert_eq!(
+      ohos_exit_gate_decision(false, false),
+      OhosExitGateAction::TeardownAndExit
+    );
+  }
+
+  // Decision table (design D6): last confirmed removal empties the store and
+  // no exit was requested yet -> request the exit.
+  #[test]
+  fn all_closed_empty_and_unrequested_sets_exit() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(true, false),
+      OhosAllClosedAction::SetExit
+    );
+  }
+
+  // Store empty but a teardown is already in flight (exit_state set by the
+  // main-window gate / RequestExit / pre-close probe): no second exit request.
+  #[test]
+  fn all_closed_empty_but_exit_in_flight_is_noop() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(true, true),
+      OhosAllClosedAction::Noop
+    );
+  }
+
+  // Windows remain: never exit, whatever the exit state.
+  #[test]
+  fn all_closed_nonempty_is_noop_regardless_of_exit_state() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(false, false),
+      OhosAllClosedAction::Noop
+    );
+    assert_eq!(
+      ohos_all_closed_exit_predicate(false, true),
+      OhosAllClosedAction::Noop
+    );
   }
 }
