@@ -19,13 +19,13 @@ rust-version.workspace = true
 #  "os-webview",
 #  "linux-body",
 #] }
-wry = { path = "../../../wry", default-features = false, features = [
+wry = { git = "https://github.com/Eulogizethesun/wry", branch = "ohdev-git", default-features = false, features = [
     "protocol",
     "os-webview",
     "linux-body",
   ] }
 #tao = { git = "https://github.com/richerfu/tao", branch= "feat-ohos-webview",  default-features = false, features = ["rwh_06"] }
-tao = { path = "../../../tao",  default-features = false, features = ["rwh_06"] }
+tao = { git = "https://github.com/Eulogizethesun/tao", branch = "ohdev-git",  default-features = false, features = ["rwh_06"] }
 tauri-runtime = { version = "2.10.0", path = "../tauri-runtime" }
 tauri-utils = { version = "2.8.3", path = "../tauri-utils" }
 raw-window-handle = "0.6"
@@ -71,9 +71,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 jni = "0.21"
 
 [target.'cfg(target_env = "ohos")'.dependencies]
-openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }
-openharmony-ability-plugin-window = { path = "../../../openharmony-ability/crates/plugin-window" }
-openharmony-ability-plugin-url = { path = "../../../openharmony-ability/crates/plugin-url" }
+openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+openharmony-ability-plugin-window = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+openharmony-ability-plugin-url = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 napi-ohos = "1.2"
 
 [features]

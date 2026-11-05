@@ -17,14 +17,14 @@ tauri-build = { path = "../../../crates/tauri-build", features = ["codegen"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 log = "0.4.21"
-tauri-plugin-huawei-account = { path = "../../../../plugins-workspace/plugins/huawei-account" }
+tauri-plugin-huawei-account = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 napi-ohos = { version = "1.1" }
 napi-derive-ohos = { version = "1.1" }
 hilog = "0.2"
 # required by the `tauri::mobile_entry_point` derive (references `openharmony_ability` at crate root)
-openharmony-ability = { path = "../../../../openharmony-ability/crates/ability" }
+openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 
 [dependencies.tauri]
 path = "../../../crates/tauri"

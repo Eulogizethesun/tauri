@@ -23,22 +23,22 @@ tiny_http = "0.11"
 log = "0.4.21"
 anyhow = "1"
 tauri-plugin-sample = { path = "./tauri-plugin-sample/" }
-tauri-plugin-http = { path = "../../../../plugins-workspace/plugins/http" }
-tauri-plugin-os = { path = "../../../../plugins-workspace/plugins/os" }
-tauri-plugin-fs = { path = "../../../../plugins-workspace/plugins/fs", features = [
+tauri-plugin-http = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-os = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-fs = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git", features = [
   "watch",
 ] }
-tauri-plugin-persisted-scope = { path = "../../../../plugins-workspace/plugins/persisted-scope" }
-tauri-plugin-shell = { path = "../../../../plugins-workspace/plugins/shell" }
-tauri-plugin-clipboard-manager = { path = "../../../../plugins-workspace/plugins/clipboard-manager" }
-tauri-plugin-process = { path = "../../../../plugins-workspace/plugins/process" }
-tauri-plugin-updater = { path = "../../../../plugins-workspace/plugins/updater" }
-tauri-plugin-autostart = { path = "../../../../plugins-workspace/plugins/autostart" }
-tauri-plugin-log = { path = "../../../../plugins-workspace/plugins/log" }
-tauri-plugin-notification = { path = "../../../../plugins-workspace/plugins/notification" }
-tauri-plugin-window-state = { path = "../../../../plugins-workspace/plugins/window-state" }
+tauri-plugin-persisted-scope = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-shell = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-clipboard-manager = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-process = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-updater = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-autostart = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-log = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-notification = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-window-state = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 sentry = { version = "0.42", default-features = false, features = ["reqwest", "rustls", "backtrace", "contexts", "panic", "debug-images"] }
-tauri-plugin-sentry = { path = "../../../../sentry-tauri" }
+tauri-plugin-sentry = { git = "https://github.com/Eulogizethesun/sentry-tauri", branch = "ohdev-git" }
 chrono = "0.4"
 url = "2"
 # ws echo server fixture (port 3004) for plugin-websocket autotest; used under #[cfg(desktop)]
@@ -48,54 +48,54 @@ url = "2"
 tungstenite = "0.24"
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
-tauri-plugin-dialog = { path = "../../../../plugins-workspace/plugins/dialog" }
+tauri-plugin-dialog = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # deep-link is registered for non-OHOS in lib.rs (the #[cfg(not(target_env = "ohos"))] block,
 # L93-111) and the plugin ships native desktop support (windows/macos/linux targets in its
 # own Cargo.toml). Declared here rather than in the unconditional [dependencies] to avoid a
 # duplicate with the OHOS entry below (L58).
-tauri-plugin-deep-link = { path = "../../../../plugins-workspace/plugins/deep-link" }
+tauri-plugin-deep-link = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 napi-ohos = { version = "1.1" }
 napi-derive-ohos = { version = "1.1" }
 hilog = "*"
-openharmony-ability = { path = "../../../../openharmony-ability/crates/ability" }
+openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 # OHOS print-job terminal-state events (print-state crossbeam channel → emit "ohos-print-state")
-openharmony-ability-plugin-webview = { path = "../../../../openharmony-ability/crates/plugin-webview" }
+openharmony-ability-plugin-webview = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 # set_ime_position_test facade call (D3.8 direct-await version)
-openharmony-ability-plugin-window = { path = "../../../../openharmony-ability/crates/plugin-window" }
-tauri-plugin-dialog = { path = "../../../../plugins-workspace/plugins/dialog" }
-tauri-plugin-single-instance = { path = "../../../../plugins-workspace/plugins/single-instance" }
-tauri-plugin-global-shortcut = { path = "../../../../plugins-workspace/plugins/global-shortcut" }
-tauri-plugin-deep-link = { path = "../../../../plugins-workspace/plugins/deep-link" }
-tauri-plugin-store = { path = "../../../../plugins-workspace/plugins/store" }
-tauri-plugin-sql = { path = "../../../../plugins-workspace/plugins/sql", features = ["sqlite"] }
-tauri-plugin-websocket = { path = "../../../../plugins-workspace/plugins/websocket" }
-tauri-plugin-cli = { path = "../../../../plugins-workspace/plugins/cli" }
-tauri-plugin-upload = { path = "../../../../plugins-workspace/plugins/upload" }
-tauri-plugin-localhost = { path = "../../../../plugins-workspace/plugins/localhost" }
-tauri-plugin-opener = { path = "../../../../plugins-workspace/plugins/opener" }
-tauri-plugin-positioner = { path = "../../../../plugins-workspace/plugins/positioner" }
+openharmony-ability-plugin-window = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+tauri-plugin-dialog = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-single-instance = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-global-shortcut = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-deep-link = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-store = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-sql = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git", features = ["sqlite"] }
+tauri-plugin-websocket = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-cli = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-upload = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-localhost = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-opener = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-positioner = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # Mobile-native plugins adapted to OHOS (mobile-form bridges; runtime invoke
 # routing for plugin:NAME|command requires OHOS_DEVICE_TYPE=mobile for the
 # biometric/nfc/barcode-scanner commands that have no Rust invoke_handler).
-tauri-plugin-haptics = { path = "../../../../plugins-workspace/plugins/haptics" }
-tauri-plugin-geolocation = { path = "../../../../plugins-workspace/plugins/geolocation" }
-tauri-plugin-biometric = { path = "../../../../plugins-workspace/plugins/biometric" }
-tauri-plugin-nfc = { path = "../../../../plugins-workspace/plugins/nfc" }
-tauri-plugin-barcode-scanner = { path = "../../../../plugins-workspace/plugins/barcode-scanner" }
-tauri-plugin-huawei-account = { path = "../../../../plugins-workspace/plugins/huawei-account" }
+tauri-plugin-haptics = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-geolocation = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-biometric = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-nfc = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-barcode-scanner = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-huawei-account = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # OHOS-only: minimal accessibility API (font scale / screen reader state + event)
-tauri-plugin-accessibility = { path = "../../../../plugins-workspace/plugins/accessibility" }
+tauri-plugin-accessibility = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # OHOS-only: in-app webview screenshot + color picking
-tauri-plugin-screenshot = { path = "../../../../plugins-workspace/plugins/screenshot" }
+tauri-plugin-screenshot = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # OHOS-only: passive app-continuation restore queries
-tauri-plugin-continuation = { path = "../../../../plugins-workspace/plugins/continuation" }
+tauri-plugin-continuation = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # OHOS-only: IOTA Stronghold secret management (pure-Rust plugin, no bridge;
 # ohos builds need a prebuilt libsodium via SODIUM_LIB_DIR — see plugin README)
-tauri-plugin-stronghold = { path = "../../../../plugins-workspace/plugins/stronghold" }
-muda = { path = "../../../../muda" }
-tray-icon = { path = "../../../../tray-icon" }
+tauri-plugin-stronghold = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git" }
+tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git" }
 
 [dependencies.tauri]
 path = "../../../crates/tauri"
