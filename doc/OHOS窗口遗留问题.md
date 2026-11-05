@@ -10,6 +10,7 @@
 > - **问题五**:Window 大量 Atomic 镜像位与 ArkTS 真实状态不同步 —— 单向写不回读、maximized/minimized 为僵尸字段、系统状态变化不回灌,导致 is_* 查询与实际状态脱节
 > - **问题六**:set_cursor_visible / set_ignore_cursor_events / set_cursor_icon / set_always_on_top 尚未测试 —— 前三者已 dispatch 到系统 API 但行为未验证,always_on_top 为 no-op 无 z-order API
 > - **问题七**(已修复 2026-09-17):spawned UIAbility 窗口创建期属性竞态 —— tao 侧 `PENDING_WINDOW_OPS` 队列至 stage 注册后回放,真机六项判据全过、299 例回归持平;连带发现的 Float 创建期同类竞态亦已修复并真机验证(2026-09-18,warn 23→0、300 例持平,见该节附注)
+> - **问题八**(已修复 2026-11-04):单主窗口应用 close 僵尸态 —— 根窗关窗被当作普通子窗走"先摘账后派发"路径,桥按设计拒绝 id 0,窗口存活而记账消失、全部窗口命令静默死亡;修复=主窗 ExitRequested 门+#100 终止链、子窗确认驱动记账(外部缺陷报告 TAURI-OHOS-BUG-MAIN-WINDOW-CLOSE-ZOMBIE)
 >
 > **姊妹文档**:[多窗口特性实现文档.md](多窗口特性实现文档.md) 描述多窗口的正向实现(创建/路由/竞态);本文档专门记录正向文档未覆盖的遗留问题。
 
@@ -17,7 +18,7 @@
 
 ## 问题一:窗口事件路由架构债
 
-> **状态**:中期重构级技术债,非紧急。单窗口应用完全不受影响;多窗口关窗已临时补偿;多窗口其他事件类型的路由正确性是持续渗血点。
+> **状态**:中期重构级技术债,非紧急。~~单窗口应用完全不受影响~~ **已证伪(2026-11-04)**:单窗口应用的主窗 close 恰是本债最先暴露的受害路径——关窗侧记账先于销毁确认、根窗销毁请求被桥按设计拒绝,整个应用落入"窗口活着、记账没了"的僵尸态(问题八,已修复);多窗口关窗已临时补偿;多窗口其他事件类型的路由正确性是持续渗血点。
 >
 > **关联代码**:
 > - [tao `MainEvent::WindowDestroy`](../../tao/src/platform_impl/ohos/mod.rs) — 已改为 no-op
@@ -30,10 +31,10 @@ Tauri OHOS 适配在多窗口场景下,窗口关闭事件的派发路径与其�
 
 - **不是 bug**:当前代码在它支持的场景下能跑通(7-anchor 测试 PASS)。
 - **是架构债**:多窗口下用 ad-hoc 旁路绕过了 tao 的设计假设,债务随功能演进暴露。
-- **紧急度**:中期重构级,非紧急。单窗口不受影响;多窗口关窗已补偿;多窗口其他事件路由是持续渗血点。
+- **紧急度**:中期重构级,非紧急。~~单窗口不受影响~~已证伪——主窗 close 僵尸态(问题八)正是单窗口路径,2026-11-04 修复;多窗口关窗已补偿;多窗口其他事件路由是持续渗血点。
 
 **为什么"现在还能跑":**
-- 单窗口下 ZST 无害——只有一个窗口,覆盖不覆盖都一样。早期 OHOS 只支持单窗口,ZST 是省事占位,无后果。
+- 单窗口下 ZST 无害——只有一个窗口,覆盖不覆盖都一样。早期 OHOS 只支持单窗口,ZST 是省事占位,无后果。(此"无害"仅限 WindowId 碰撞维度;关窗时序维度单窗口应用同样被本债命中,见问题八。)
 - 多窗口是 2026-06 才加的(openspec `ohos-window-lifecycle`、`ohos-predefined-multi-window` 归档)。债务随多窗口功能才显现。
 - drain 补偿了最痛的关窗场景——关错窗口会直接导致主窗口 webview 被移除,是最先暴露、最痛的点,所以最先被补。
 
@@ -773,3 +774,69 @@ examples/api 新增自动用例 `window.createUIAbilityWindowRacyAttrs`(#286,`cr
 - **单测(设备侧执行,2026-09-18)**:注册表语义 5 条(gate/settle/unknown-ready/幂等 unregister+晚 notify no-op/UIAbility pending 同样门控组合判据)逐条 ok;ability 全量 **80✅/0❌**、tao 全量 **71✅/0❌**(hdc 推送手工配方;`--lib` 门控——tao examples 未 cfg 门控 OHOS 属存量问题)。**未注入失败路径**(无廉价注入点):notify(false) 走 ArkTS `.catch` 同一 settle 调用+单测覆盖语义,V5 drop 竞态由 info 级 drop 日志留观测。
 
 证据文件(examples/api/):`hilog-float-red-green1.log`(RED 两轮+首 GREEN)、`hilog-float-final.log`(终验)、`float-race-run1-report.md`(ACL 挡板轮)/`float-race-red-report.md`(RED)/`float-race-green-report.md`+`float-race-final-report.md`(GREEN×2);UT 日志:`openharmony-ability/ut-ability-device.log`、`tao/ut-tao-device.log`。
+
+---
+
+## 问题八:单主窗口应用 close 僵尸态 —— 关窗侧"先摘账后派发"遇上根窗不可销毁,窗口活、记账死
+
+> **状态**:已修复并真机验证(2026-11-04)。外部应用方(artcraft)缺陷报告 `TAURI-OHOS-BUG-MAIN-WINDOW-CLOSE-ZOMBIE.md`(2026-11-03,两轮独立复现、复现率 100%,报告位于 `D:\xuqiu\craft\artcraft\`)证实本债最先暴露的受害路径恰是单窗口应用的主窗 close——此前"单窗口应用完全不受影响"的判断被直接证伪(问题一节内已同步修正)。修复=主窗 `ExitRequested` 门 + #100 终止链 + 子窗确认驱动记账,openspec change `ohos-main-window-close-zombie`,真机 326✅/9⏭/0❌ 零回归 + 五步判据链全指纹。
+>
+> **关联代码**:
+> - [tauri-runtime-wry 主窗门/确认执行器](../crates/tauri-runtime-wry/src/lib.rs) —— 修复主体:`OhosCloseCtx` + `ohos_main_window_close_gate`(ExitRequested 门,registry 真且 OS 窗 id==0 双判别)/`on_close_requested_ohos`(在途守卫)/`on_window_close_ohos`(确认执行器,幂等)/`ohos_initiate_destroy_ohos`(发起侧只派发不摘账)/`ohos_destroy_message_ohos`(Message::Destroy 路由)
+> - [tao 销毁确认事件回传](../../tao/src/platform_impl/ohos/window.rs) —— `DESTROY_CONFIRMATIONS` 全局队列 + `close()` Ok 臂 enqueue + waker 唤醒((a) 兜底确认通道)
+> - [tao 事件循环 drain 合成 Destroyed](../../tao/src/platform_impl/ohos/event_loop.rs) —— dispatch 头部回灌销毁确认
+> - [openharmony-ability `destroy-window` ArkTS 守卫](../../openharmony-ability/plugins/window/src/main/ets/WindowPlugin.ets) —— `windowId===0` throw 保留为平台语义守卫(主 UIAbility 窗不可当 sub-window 销毁),本修复零改动
+> - [examples/api 设备用例](../examples/api/src/lib/tests/zombie-close.ts) —— 8 条:主窗 prevent 臂 + 子窗 6 auto + drain manual
+> - 依赖的既有能力(零新增):`ohos_main_window_registry` 主窗判别(#238/#247)、tao pending-exit→terminate 链(#100)、AppControl graceful terminateSelf
+
+### 现象
+
+单主窗应用前端 `getCurrent().close()` 触发主窗关闭后:OS 窗口不关闭、进程存活,但 Rust 侧 `WindowsStore` 记账已被无条件摘除——此后全部窗口命令(getter 与 min/max/close alike)静默失效,窗口进入"僵尸态",只能 force-stop 恢复。伴随症状:关窗即收到假 `WindowEvent::Destroyed`(窗口实际活着),app 侧状态机被误导,报告方观察到每秒 4 条 persist 错误心跳。
+
+### 机制(缺陷链六点,2026-11-04 行号级核对)
+
+1. `on_window_close_ohos` 无条件先摘 store(destroy 之前、不看结果)
+2. destroy 为 fire-and-forget、失败仅 log 无回滚
+3. `WindowEvent::Destroyed` 在窗口实际还活着时无条件派发
+4. all-closed 臂不设 `ControlFlow::Exit`,赌系统 LoopDestroyed(主窗 destroy 失败时永不兑现)→ 进程永活
+5. ArkTS `destroy-window` 对 `windowId===0` 直接 throw(平台语义正确,非缺陷——主 UIAbility 窗不可当 sub-window 销毁)
+6. 主窗 close 未接任何终止能力(close 链零 terminate 接线)
+
+合流成僵尸:根窗 close 走普通子窗路径 → 摘账(第 1 点)→ 桥拒 id 0(第 5 点)→ 摘账无回滚(第 2 点)→ 假 Destroyed(第 3 点)→ 无退出(第 4/6 点)。相邻已修件构成修复前提:AppControl `terminate` 已是 graceful `terminateSelf`;`app.exit()` 链已接 `ControlFlow::Exit → tao pending-exit → LoopDestroyed → RunEvent::Exit → terminate(env,0)`(#100)——缺口纯在 close 链未接此成熟链路。
+
+### 后果
+
+1. **单窗口应用 100% 命中**:主窗是唯一窗口,close 即触发;多窗口应用此前靠"多窗关窗临时补偿"掩住了主路径(问题一)。
+2. **僵尸态不可自愈**:记账消失后全部窗口命令静默失败,无任何报错,只能 force-stop。
+3. **假 Destroyed 污染 app 状态机**:上层按"窗口已关"进入清理/持久化流程,而窗口还活着——报告方每秒 4 条 persist 错误即此。
+4. **进程永活**:无退出接线,close 后进程成为纯僵尸。
+
+### 真机复现(报告方,2026-11-03)
+
+artcraft 应用(单主窗)前端 `getCurrent().close()`,两轮独立复现、复现率 100%,症状与上述机制逐条对上(报告 `D:\xuqiu\craft\artcraft\TAURI-OHOS-BUG-MAIN-WINDOW-CLOSE-ZOMBIE.md` §1-§6)。
+
+### 修复(2026-11-04,change `ohos-main-window-close-zombie`)
+
+- **主窗门**(`ohos_main_window_close_gate`,design D1/D5):判别=registry 真且 OS 窗 id==0 **双条件**——`ohos_record_main_window` 对每个 UIAbility-kind 窗都记 true(spawned 实例含),单 registry 判别会把 spawned UIAbility 关窗误当主窗关、误杀全应用(多 UIAbility 回归);只有 id 0 根窗的关闭等价于应用终止。门行为:先问 `RunEvent::ExitRequested`(app 可 `prevent_exit`);prevent → 取消、零记账触碰(按钮继续可用,僵尸态正是本臂要消灭的);未 prevent → 摘 store+registry → 派发一次真 Destroyed → `exit_state=true` + `ControlFlow::Exit` 接 #100 终止链(`terminateSelf`)。**绝不调桥 destroy-window**(其对 id 0 按设计拒绝)。
+- **子窗确认驱动记账**(design D2/D3):发起侧(`on_close_requested_ohos` 未 prevent / `ohos_initiate_destroy_ohos` / `Message::Destroy` 路由)只派发销毁指令并登记在途集合,不摘账、不派发 Destroyed;**销毁确认到达**(`on_window_close_ohos` 确认执行器)才摘 store/registry、派发 Destroyed;destroy 失败(真失败)沉默留账,后续窗口命令继续应答。幂等:已摘账的重复确认早退。
+- **双确认通道幂等合流**(Task 1.1 判据):(b) ArkTS aboutToDisappear→`notifyWindowClose` 回环为主通道但**非必达**(已销毁窗=幂等 ack 无新 aboutToDisappear;失败=静默),(a) tao `close()` Ok-resolve 补发确认事件(`DESTROY_CONFIRMATIONS` + drain 合成 Destroyed)为兜底——两通道经在途守卫(`ohos_pending_close`)幂等合流,每窗恰一次 Destroyed。
+- **在途回环识别**(spec 场景):Rust 发起销毁后的回环 CloseRequested = 确认信号,不再向 app 重复派发 `CloseRequested`(app 每次用户 close 恰收一次),直接驱动确认摘账。
+- **all-closed 出口谓词**(仅子窗臂,design D6):子窗全确认关闭且未 prevent → `SetExit` 接终止链;主窗臂不消费此谓词(主窗关闭无条件终止)。
+- **tao 侧**(4.4):`close()` Ok 臂 push `DESTROY_CONFIRMATIONS` + waker 唤醒;事件循环 dispatch 头部 drain 合成 `WindowEvent::Destroyed`。
+- **零 openharmony-ability 改动**;upstream 非 OHOS 路径零触碰(`#[cfg(target_env = "ohos")]` 隔离)。
+
+### 验证(2026-11-04,3QC0124C11000038,HAD-W32)
+
+- **套件零回归**:std 形态 326✅/9⏭/0❌(1030 基线 327 例 319✅/8⏭/0❌ 无一翻转;+7 zombie 用例 6✅+1⏭ 预期 skip+1 #244 新例✅);进程形态(`VITE_PROCESS_TESTS`,真主窗关闭相位)326✅/9⏭/0❌ 同口径。
+- **五步判据链**(进程形态 11:15:56.555 真主窗 close):`[wry] ExitRequested (main window close) should_prevent: false` → `Destroyed, label=main` → `[RunEvent] Exit` → **terminateSelf 真调起**(`[AppControl] terminateSelf requested` ×2 + `async terminate self` ×2)→ sceneboard 2ms 后拆 root session(pidof 空)。
+- **反指纹四条全零**(旧代码形态,捕获窗内零命中):`destroy_window ohos_id=Some(0)` / `Error persisting window size` 心跳 / 主窗 close 后桥 `destroy-window` 调用 / 假 `ExitRequested (all windows closed)` 发射。
+- **prevent 臂三形态三发**(10:33:04 std / 11:15:48 进程形态 / 10:41:16 std 重启):`should_prevent: true` 全 veto,记账完整、主窗存活、`getByLabel('main')` 在。
+- **子窗回环确认链**:33 次零重复(每窗恰一次 Destroyed)。
+- **失败注入(D3 沉默留账)**:fault-injection 构建(`prod,fault-injection`,无插桩)行 335 ⏭→✅(327✅/8⏭/0❌):注入 `destroy-window` 失败(1300004,恰 1 发)→ Destroyed delta=0、`getByLabel` 仍在、`isVisible` true、后续窗口命令继续应答——destroy 真失败时记账零触碰。
+- **变异红臂**(修后必挂):①主窗门路由摘除(双判别两处 `false &&`)→ prevent 用例红(325✅/**1❌**/9⏭,失败消息逐字命中 `confirm-exit-requested not received after main-window close in confirm mode`),旧 bug 签名同步回归(`close: destroy_window failed for window 0: "Cannot destroy the main Ability window (id 0)"`)——红后字节级还原(pristine 快照 diff 零差)重绿;②记账先行还原(发起侧先摘后发,变异恰 10 行纯插入)→ 失败注入用例红(326✅/**1❌**/8⏭,`destroy FAILED but accounting was torn down (Destroyed delta 1)`,行 329-334 全绿零附带破坏,注入失败签名 1300004 同发)——红后字节级还原(diff 零差)重绿(绿证据=失败注入构建行 335 ✅)。
+
+### 已知限制(多 UIAbility 形态,Non-Goals 划走)
+
+- `terminateSelf` 只终结**调用方**(root)ability。进程内 spawned UIAbility 实例(多 UIAbility 专项用例留下)会保活进程,直至系统后台回收(实测 ~11 分钟:AMS prepare-terminate 拆三实例,`ProcessMgr isLast:0/0/1`,root 死后 660s);期间 exit path 每次唤醒重试 terminate、每条 `Synchronous bridge is not ready` warn(桥会话随 root 死)。**单实例(报告场景)terminateSelf → 唯一 ability → isLast:1 即死**——std 套件 exit 族(app.exit 同链)17 分钟内多次进程重启零拖延为实证。
+- 主窗关闭的"全应用终止"语义对 spawned UIAbility 实例**不扩散**(双判别防误杀的反面):spawned 实例的窗关闭走子窗臂、进程存活是当前形态;多 UIAbility 终止收编 = `multi-uiability-windows` change 另行。
+- 双判别在本事件反向验证:系统拆 spawned 实例时,我们的代码正确按子窗臂处理其窗(destroy 19/18/13),零误杀。

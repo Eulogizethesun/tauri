@@ -387,11 +387,25 @@ pub struct Context<T: UserEvent> {
   /// guarantees the entry exists once `recv()` returns. The event-loop-side
   /// constructor does not go through the map -- it captures the UIAbility-main
   /// flag straight from the tao window in hand. Entries are removed
-  /// when the window leaves the store (`on_window_close_ohos`), so the map
+  /// when the window leaves the store (`on_window_close_ohos`) or when the
+  /// creation fails after the record (`create_window`'s Err path,
+  /// `ohos_remove_main_window`, issue Eulogizethesun/tauri#247), so the map
   /// holds at most one entry per live window -- repeated create/destroy of a
   /// same-label window does not accumulate. Issue Eulogizethesun/tauri#238.
   #[cfg(target_env = "ohos")]
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
+  /// OHOS: windows whose OS destruction was requested by this runtime and is
+  /// still unconfirmed (design D2 in-flight guard). The close dispatcher
+  /// registers a window here when it fires `inner.close()` and the destruction
+  /// confirmation (the ArkTS notifyWindowClose loopback, or tao's Ok-resolve
+  /// Destroyed re-emission) removes it when it runs the confirmation executor.
+  /// A CloseRequested for an in-flight window is therefore the loopback of our
+  /// own destroy request -- it must NOT be re-dispatched to the app (the app
+  /// already answered once; a second dispatch would duplicate the event and
+  /// its veto could not stop the in-flight destroy anyway). All mutations
+  /// happen on the event-loop thread.
+  #[cfg(target_env = "ohos")]
+  ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
 }
 
 impl<T: UserEvent> Context<T> {
@@ -443,13 +457,18 @@ impl<T: UserEvent> Context<T> {
   /// stays the backstop for that degenerate case).
   #[cfg(target_env = "ohos")]
   fn ohos_is_ui_ability_main(&self, window_id: WindowId) -> bool {
-    self
-      .ohos_main_window_registry
-      .lock()
-      .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .get(&window_id)
-      .copied()
-      .unwrap_or(false)
+    ohos_registry_is_main(&self.ohos_main_window_registry, &window_id)
+  }
+
+  /// OHOS: remove a window's registry entry (issue
+  /// Eulogizethesun/tauri#247). Symmetric to [`Self::ohos_record_main_window`]:
+  /// that fn writes the entry before any creation reply is sent, so a creation
+  /// that fails after the record (`create_webview` erroring inside
+  /// `create_window`) must drop it on the Err path -- the store-based cleaner
+  /// (`on_window_close_ohos`) only runs for windows that entered the store.
+  #[cfg(target_env = "ohos")]
+  fn ohos_remove_main_window(&self, window_id: &WindowId) {
+    ohos_registry_remove(&self.ohos_main_window_registry, window_id);
   }
 }
 
@@ -3203,7 +3222,9 @@ pub struct WebviewWrapper {
   webview_event_listeners: WebviewEventListeners,
   // the key of the WebContext if it's not shared
   context_key: Option<PathBuf>,
-  bounds: Arc<Mutex<Option<WebviewBounds>>>,
+  // OHOS auto-resize machinery: armed/parked rates + bounds-cache realness
+  // (issue Eulogizethesun/tauri#244). Desktop only reads/writes `rates`.
+  bounds: Arc<Mutex<WebviewAutoResizeState>>,
 }
 
 impl Deref for WebviewWrapper {
@@ -3618,6 +3639,8 @@ impl<T: UserEvent> Wry<T> {
       webview_runtime_installed: wry::webview_version().is_ok(),
       #[cfg(target_env = "ohos")]
       ohos_main_window_registry: Default::default(),
+      #[cfg(target_env = "ohos")]
+      ohos_pending_close: Default::default(),
     };
 
     Ok(Self {
@@ -3990,9 +4013,12 @@ where
 
   // OHOS: the close path drops the window's UIAbility-main registry entry
   // (issue Eulogizethesun/tauri#241); thread the shared map through the
-  // iteration context.
+  // iteration context. The pending-close set (design D2 in-flight guard)
+  // rides along.
   #[cfg(target_env = "ohos")]
   let ohos_main_window_registry = runtime.context.ohos_main_window_registry.clone();
+  #[cfg(target_env = "ohos")]
+  let ohos_pending_close = runtime.context.ohos_pending_close.clone();
 
   move |event, event_loop, control_flow| {
     for p in plugins.lock().unwrap().iter_mut() {
@@ -4008,6 +4034,8 @@ where
           exit_state: exit_state.clone(),
           #[cfg(target_env = "ohos")]
           ohos_main_window_registry: ohos_main_window_registry.clone(),
+          #[cfg(target_env = "ohos")]
+          ohos_pending_close: ohos_pending_close.clone(),
           #[cfg(feature = "tracing")]
           active_tracing_spans: active_tracing_spans.clone(),
         },
@@ -4028,6 +4056,8 @@ where
         exit_state: exit_state.clone(),
         #[cfg(target_env = "ohos")]
         ohos_main_window_registry: ohos_main_window_registry.clone(),
+        #[cfg(target_env = "ohos")]
+        ohos_pending_close: ohos_pending_close.clone(),
         #[cfg(feature = "tracing")]
         active_tracing_spans: active_tracing_spans.clone(),
       },
@@ -4050,6 +4080,10 @@ pub struct EventLoopIterationContext<'a, T: UserEvent> {
   /// Eulogizethesun/tauri#241).
   #[cfg(target_env = "ohos")]
   pub ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
+  /// OHOS: windows with an unconfirmed destroy in flight (design D2 in-flight
+  /// guard), threaded to the close path like the registry above.
+  #[cfg(target_env = "ohos")]
+  pub ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
   #[cfg(feature = "tracing")]
   pub active_tracing_spans: ActiveTraceSpanStore,
 }
@@ -4607,15 +4641,30 @@ fn handle_user_message<T: UserEvent>(
             let bounds: RectWrapper = bounds.into();
             let bounds = bounds.0;
 
-            if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+            {
               let scale_factor = window.scale_factor();
               let size = bounds.size.to_logical::<f32>(scale_factor);
               let position = bounds.position.to_logical::<f32>(scale_factor);
               let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-              b.width_rate = size.width / window_size.width;
-              b.height_rate = size.height / window_size.height;
-              b.x_rate = position.x / window_size.width;
-              b.y_rate = position.y / window_size.height;
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // A full set_bounds carries all-real components: the whole wry
+              // bounds cache becomes real geometry (issue
+              // Eulogizethesun/tauri#244).
+              auto_state.explicit = BoundsExplicitness::Full;
+              // Armed → refresh the live rates; disarmed with parked rates →
+              // mirror the update so a later enable restores the geometry this
+              // call established, not the stale pre-disable one.
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
+                b.width_rate = size.width / window_size.width;
+                b.height_rate = size.height / window_size.height;
+                b.x_rate = position.x / window_size.width;
+                b.y_rate = position.y / window_size.height;
+              }
             }
 
             if let Err(e) = webview.set_bounds(bounds) {
@@ -4640,11 +4689,24 @@ fn handle_user_message<T: UserEvent>(
               let scale_factor = window.scale_factor();
               let logical_size = size.to_logical::<f32>(scale_factor);
 
-              if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // The size axis becomes real; the position axis keeps its
+              // previous realness (the sentinel never enters the wry cache)
+              // (issue Eulogizethesun/tauri#244).
+              if auto_state.explicit == BoundsExplicitness::Natural {
+                auto_state.explicit = BoundsExplicitness::Partial;
+              }
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                 b.width_rate = logical_size.width / window_size.width;
                 b.height_rate = logical_size.height / window_size.height;
               }
+              drop(auto_state);
 
               if let Err(e) = webview.set_bounds(wry::Rect {
                 position: ohos_unspecified_position(),
@@ -4661,7 +4723,7 @@ fn handle_user_message<T: UserEvent>(
                 let scale_factor = window.scale_factor();
                 let size = size.to_logical::<f32>(scale_factor);
 
-                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                if let Some(b) = webview.bounds.lock().unwrap().rates.as_mut() {
                   let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                   b.width_rate = size.width / window_size.width;
                   b.height_rate = size.height / window_size.height;
@@ -4693,11 +4755,24 @@ fn handle_user_message<T: UserEvent>(
               let scale_factor = window.scale_factor();
               let logical_position = position.to_logical::<f32>(scale_factor);
 
-              if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+              let mut auto_state = webview.bounds.lock().unwrap();
+              // The position axis becomes real; the size axis keeps its
+              // previous realness (the sentinel never enters the wry cache)
+              // (issue Eulogizethesun/tauri#244).
+              if auto_state.explicit == BoundsExplicitness::Natural {
+                auto_state.explicit = BoundsExplicitness::Partial;
+              }
+              let rate_target = if auto_state.rates.is_some() {
+                auto_state.rates.as_mut()
+              } else {
+                auto_state.parked.as_mut()
+              };
+              if let Some(b) = rate_target {
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                 b.x_rate = logical_position.x / window_size.width;
                 b.y_rate = logical_position.y / window_size.height;
               }
+              drop(auto_state);
 
               if let Err(e) = webview.set_bounds(wry::Rect {
                 position,
@@ -4714,7 +4789,7 @@ fn handle_user_message<T: UserEvent>(
                 let scale_factor = window.scale_factor();
                 let position = position.to_logical::<f32>(scale_factor);
 
-                if let Some(b) = &mut *webview.bounds.lock().unwrap() {
+                if let Some(b) = webview.bounds.lock().unwrap().rates.as_mut() {
                   let window_size = window.inner_size().to_logical::<f32>(scale_factor);
                   b.x_rate = position.x / window_size.width;
                   b.y_rate = position.y / window_size.height;
@@ -4840,32 +4915,67 @@ fn handle_user_message<T: UserEvent>(
           WebviewMessage::SetAutoResize(auto_resize) => {
             #[cfg(target_env = "ohos")]
             {
-              // Disabling always clears the runtime rates. Enabling does NOT
-              // source the base rect from `webview.bounds()`: that cache holds
-              // the `WebViewAttributes` default (200x200) for a natural-layout
-              // webview and sentinel components after a partial
-              // set_size/set_position, so rates derived from it would pin or
-              // shrink the webview on the next window resize (issue
-              // Eulogizethesun/tauri#241). A webview already armed keeps its
-              // live rates (maintained by the SetBounds/SetSize/SetPosition
-              // handlers); a natural-layout webview needs none -- it follows
-              // the window through container layout -- and the auto-resize
-              // base for a webview armed after creation is read from the
-              // actual layout by the ArkTS render layer (cross-repo contract,
-              // openharmony-ability WebviewPlugin.ets).
-              //
-              // KNOWN LIMITATION (issue Eulogizethesun/tauri#241): a disable
-              // followed by an enable permanently de-arms an explicit-bounds
-              // webview on OHOS. The disable clears the rate cache below, the
-              // enable leg stays a no-op (deliberately, see above), and the
-              // Resized handler only re-fires while the cache is `Some`, so
-              // the webview stops following window resizes for good. Desktop
-              // re-arms (its enable leg re-derives the rates from the live
-              // bounds). Re-arming would need a rate re-derivation from the
-              // live layout or an ArkTS-side re-derive; both are out of scope
-              // for this fix wave and are disclosed rather than fixed here.
+              // OHOS auto-resize contract (issue Eulogizethesun/tauri#244):
+              // the rates are Rust-side state on the handle. Disabling parks
+              // them (the Resized handler stops re-firing while `rates` is
+              // None); enabling re-arms by restoring the parked rates, or --
+              // for a webview never armed before -- by deriving them from the
+              // wry bounds cache when the geometry is fully explicit (the
+              // cache then holds real values on every component, including
+              // for a webview created with explicit bounds and armed only at
+              // runtime). A natural-layout webview stays un-armed and keeps
+              // following its ArkTS container through container layout. The
+              // ArkTS render layer is render-truth only: it applies the last
+              // explicit set_bounds and lets natural webviews track the
+              // container -- it performs no rate re-derivation of its own
+              // (openharmony-ability WebviewPlugin.ets). A partially-explicit
+              // webview (one axis still holding the natural-layout
+              // placeholder, no parked rates) cannot be derived from the
+              // cache, and the dispatch channel is fire-and-forget -- so the
+              // only honest report is a loud log naming the webview and the
+              // remedy (issue a full set_bounds first).
+              let mut state = webview.bounds.lock().unwrap();
               if !auto_resize {
-                *webview.bounds.lock().unwrap() = None;
+                state.parked = state.rates.take();
+              } else {
+                match ohos_auto_resize_enable_decision(&state) {
+                  OhosAutoResizeEnableDecision::Restore(parked) => {
+                    state.rates = Some(parked);
+                    state.parked = None;
+                  }
+                  OhosAutoResizeEnableDecision::DeriveFromCache => match webview.bounds() {
+                    Ok(cache_bounds) => {
+                      let scale_factor = window.scale_factor();
+                      let position = cache_bounds.position.to_logical::<f32>(scale_factor);
+                      let size = cache_bounds.size.to_logical::<f32>(scale_factor);
+                      let window_size = window.inner_size().to_logical::<f32>(scale_factor);
+                      state.rates = Some(WebviewBounds {
+                        x_rate: position.x / window_size.width,
+                        y_rate: position.y / window_size.height,
+                        width_rate: size.width / window_size.width,
+                        height_rate: size.height / window_size.height,
+                      });
+                    }
+                    Err(e) => {
+                      log::error!(
+                        "set_auto_resize(true) cannot re-arm webview `{}`: failed to read the bounds cache: {e}",
+                        webview.label
+                      );
+                    }
+                  },
+                  OhosAutoResizeEnableDecision::FollowContainer => {
+                    // Natural-layout webview: rates stay None on purpose; the
+                    // ArkTS container keeps it following window resizes.
+                  }
+                  OhosAutoResizeEnableDecision::LoudError => {
+                    log::error!(
+                      "set_auto_resize(true) cannot re-arm webview `{}`: its geometry is only partially explicit (a partial set_size/set_position made one axis explicit while the other still holds the natural-layout placeholder) and no rates are parked from a previous arm; it would pin or shrink on the next window resize. Issue a full set_bounds first, then re-enable auto-resize (issue Eulogizethesun/tauri#244)",
+                      webview.label
+                    );
+                    // rates stay None: the webview is left un-armed rather
+                    // than armed on an underivable base.
+                  }
+                }
               }
             }
             #[cfg(not(target_env = "ohos"))]
@@ -4873,18 +4983,22 @@ fn handle_user_message<T: UserEvent>(
               Ok(bounds) => {
                 let scale_factor = window.scale_factor();
                 let window_size = window.inner_size().to_logical::<f32>(scale_factor);
-                *webview.bounds.lock().unwrap() = if auto_resize {
+                let mut state = webview.bounds.lock().unwrap();
+                if auto_resize {
                   let size = bounds.size.to_logical::<f32>(scale_factor);
                   let position = bounds.position.to_logical::<f32>(scale_factor);
-                  Some(WebviewBounds {
+                  state.rates = Some(WebviewBounds {
                     x_rate: position.x / window_size.width,
                     y_rate: position.y / window_size.height,
                     width_rate: size.width / window_size.width,
                     height_rate: size.height / window_size.height,
-                  })
+                  });
                 } else {
-                  None
-                };
+                  // Park (never read back on desktop -- the enable leg above
+                  // re-derives live; keeping the parked copy is OHOS-only
+                  // semantics and behavior-neutral here).
+                  state.parked = state.rates.take();
+                }
               }
               Err(e) => {
                 log::error!("failed to get webview bounds: {e}");
@@ -5091,6 +5205,8 @@ fn handle_event_loop<T: UserEvent>(
     exit_state,
     #[cfg(target_env = "ohos")]
     ohos_main_window_registry,
+    #[cfg(target_env = "ohos")]
+    ohos_pending_close,
     #[cfg(feature = "tracing")]
     active_tracing_spans,
   } = context;
@@ -5300,17 +5416,21 @@ fn handle_event_loop<T: UserEvent>(
           TaoWindowEvent::CloseRequested => {
             #[cfg(not(target_env = "ohos"))]
             on_close_requested(callback, window_id, windows);
-            // OHOS: on_close_requested_ohos drives destruction + exit checks
-            // itself; loop exit is driven by the system (LoopDestroyed), so its
-            // return value is intentionally ignored.
+            // OHOS: the close dispatcher (design D2) drives the destruction
+            // initiation, the in-flight guard and the main-window exit gate;
+            // it sets `ControlFlow::Exit` itself when the exit request passes.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_close_requested_ohos(
-                callback,
+              on_close_requested_ohos(
+                OhosCloseCtx {
+                  callback,
+                  windows: windows.clone(),
+                  exit_state: exit_state.clone(),
+                  ohos_main_window_registry: ohos_main_window_registry.clone(),
+                  ohos_pending_close: ohos_pending_close.clone(),
+                  control_flow,
+                },
                 window_id,
-                windows,
-                exit_state,
-                ohos_main_window_registry.clone(),
               );
             }
           }
@@ -5333,17 +5453,22 @@ fn handle_event_loop<T: UserEvent>(
                 }
               }
             }
-            // OHOS: the store entry is removed by the window-close path
-            // (on_window_close_ohos, idempotent); this arm is a safety net for
-            // any Destroyed event that arrives without a prior close.
+            // OHOS: destruction-confirmation executor (design D2) -- the
+            // landing point for tao's Destroyed (MainEvent::WindowDestroy
+            // pairing and the Ok-resolve re-emission). Idempotent against the
+            // close-path removal.
             #[cfg(target_env = "ohos")]
             {
-              let _ = on_window_close_ohos(
-                callback,
+              on_window_close_ohos(
+                OhosCloseCtx {
+                  callback,
+                  windows: windows.clone(),
+                  exit_state: exit_state.clone(),
+                  ohos_main_window_registry: ohos_main_window_registry.clone(),
+                  ohos_pending_close: ohos_pending_close.clone(),
+                  control_flow,
+                },
                 window_id,
-                windows,
-                exit_state,
-                ohos_main_window_registry.clone(),
               );
             }
           }
@@ -5355,15 +5480,14 @@ fn handle_event_loop<T: UserEvent>(
               .map(|w| (w.inner.clone(), w.webviews.clone()))
             {
               let size = size.to_logical::<f32>(window.scale_factor());
-              // This leg only re-fires for webviews that still hold a rate
-              // cache. On OHOS a SetAutoResize(false) then (true) cycle never
-              // re-arms an explicit-bounds webview: the disable clears the
-              // cache and the enable leg deliberately does not re-derive it
-              // (see the SetAutoResize handler), so this loop skips it for
-              // good. Irreversible de-arm, not a transient drop (issue
-              // Eulogizethesun/tauri#241).
+              // This leg only re-fires for webviews that still hold armed
+              // rates. A disable parks the rates (un-arming the webview), and
+              // a later enable re-arms by restoring the parked rates or
+              // re-deriving them from the wry bounds cache for fully-explicit
+              // geometry (issue Eulogizethesun/tauri#244) -- de-arming is
+              // reversible, not a permanent drop.
               for webview in webviews {
-                if let Some(b) = &*webview.bounds.lock().unwrap() {
+                if let Some(b) = &webview.bounds.lock().unwrap().rates {
                   if let Err(e) = webview.set_bounds(wry::Rect {
                     position: LogicalPosition::new(size.width * b.x_rate, size.height * b.y_rate)
                       .into(),
@@ -5412,30 +5536,41 @@ fn handle_event_loop<T: UserEvent>(
       Message::Window(id, WindowMessage::Close) => {
         #[cfg(not(target_env = "ohos"))]
         on_close_requested(callback, id, windows);
+        // OHOS: same dispatcher as the CloseRequested event arm (design D2):
+        // app-facing veto dispatch, then initiate/gate by window kind.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_close_requested_ohos(
-            callback,
+          on_close_requested_ohos(
+            OhosCloseCtx {
+              callback,
+              windows: windows.clone(),
+              exit_state: exit_state.clone(),
+              ohos_main_window_registry: ohos_main_window_registry.clone(),
+              ohos_pending_close: ohos_pending_close.clone(),
+              control_flow,
+            },
             id,
-            windows,
-            exit_state,
-            ohos_main_window_registry.clone(),
           );
         }
       }
       Message::Window(id, WindowMessage::Destroy) => {
         #[cfg(not(target_env = "ohos"))]
         on_window_close(id, windows);
-        // OHOS: call the full close handler directly, skipping CloseRequested
-        // to avoid recursion.
+        // OHOS: initiator without a CloseRequested dispatch (design D4) --
+        // upstream `destroy()` semantics skip the veto event; the removal
+        // moves to the destruction confirmation.
         #[cfg(target_env = "ohos")]
         {
-          let _ = on_window_close_ohos(
-            callback,
+          ohos_destroy_message_ohos(
+            OhosCloseCtx {
+              callback,
+              windows: windows.clone(),
+              exit_state: exit_state.clone(),
+              ohos_main_window_registry: ohos_main_window_registry.clone(),
+              ohos_pending_close: ohos_pending_close.clone(),
+              control_flow,
+            },
             id,
-            windows,
-            exit_state,
-            ohos_main_window_registry.clone(),
           );
         }
       }
@@ -5522,131 +5657,317 @@ fn on_window_close(window_id: WindowId, windows: Arc<WindowsStore>) {
   }
 }
 
-/// OHOS variant of `on_close_requested`: forwards to `on_window_close_ohos`
-/// (which also drives OS window destruction and the exit check).
-/// Returns `true` if the loop should exit (unused on OHOS — the system drives
-/// teardown via LoopDestroyed).
+/// Shared context for the OHOS close path (design D1/D2 rework): everything
+/// the dispatch/initiate/confirm helpers need, bundled so each helper stays
+/// under its line budget. Built fresh per event-loop arm (the `&mut
+/// ControlFlow` reborrow ends with the arm).
 #[cfg(target_env = "ohos")]
-fn on_close_requested_ohos<'a, T: UserEvent>(
+struct OhosCloseCtx<'a, T: UserEvent> {
   callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
-  window_id: WindowId,
   windows: Arc<WindowsStore>,
   exit_state: Arc<ExitState>,
   ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
-) -> bool {
-  let (tx, rx) = channel();
-  let windows_ref = windows.0.borrow();
-  if let Some(w) = windows_ref.get(&window_id) {
-    let label = w.label.clone();
-    let window_event_listeners = w.window_event_listeners.clone();
-
-    drop(windows_ref);
-
-    let listeners = window_event_listeners.lock().unwrap();
-    let handlers = listeners.values();
-    for handler in handlers {
-      handler(&WindowEvent::CloseRequested {
-        signal_tx: tx.clone(),
-      });
-    }
-    callback(RunEvent::WindowEvent {
-      label,
-      event: WindowEvent::CloseRequested { signal_tx: tx },
-    });
-    if let Ok(true) = rx.try_recv() {
-      // User prevented close, do not call on_window_close
-    } else {
-      return on_window_close_ohos(
-        callback,
-        window_id,
-        windows,
-        exit_state,
-        ohos_main_window_registry,
-      );
-    }
-  }
-  false
+  ohos_pending_close: Arc<Mutex<HashSet<WindowId>>>,
+  control_flow: &'a mut ControlFlow,
 }
 
-/// OHOS variant of `on_window_close`: remove from store, fire events, check if
-/// event loop should exit. Returns `true` if all windows are closed and user
-/// did not prevent exit (callers on OHOS never act on it — teardown is
-/// system-driven).
 #[cfg(target_env = "ohos")]
-fn on_window_close_ohos<'a, T: UserEvent>(
-  callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
-  window_id: WindowId,
-  windows: Arc<WindowsStore>,
-  exit_state: Arc<ExitState>,
-  ohos_main_window_registry: Arc<Mutex<HashMap<WindowId, bool>>>,
-) -> bool {
-  // Remove window entry from WindowsStore (idempotent)
-  let removed = windows.0.borrow_mut().remove(&window_id);
-  // `mut` would only be needed by the Windows-only surface drop below, which
-  // never applies inside this OHOS-only function; the OHOS path only reads
-  // `inner` and moves `label`.
-  if let Some(window_wrapper) = removed {
-    // Drop the window's UIAbility-main record together with the store entry
-    // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
-    // live window count across repeated create/destroy cycles of the same
-    // label. Idempotent: the close paths can run more than once per window.
-    ohos_main_window_registry
-      .lock()
-      .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .remove(&window_id);
+fn ohos_pending_close_insert(set: &Mutex<HashSet<WindowId>>, id: &WindowId) {
+  set
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .insert(*id);
+}
 
-    // Destroy the OS window through tao (OHOS): sub-windows (SubWindow
-    // kind) call destroyWindow; the main (UIAbility) window is system-managed -- the
-    // bridge's destroy-window handler rejects window id 0, so for it this is
-    // a rejected fire-and-forget and the OS window remains until the system
-    // closes it. Without this call the OS sub-window stays on
-    // screen → ghost windows that diverge from Rust's records.
-    //
-    // Recursion safety: close -> ArkTS destroyWindow -> SubWindowPage
-    // aboutToDisappear → notifyWindowClose → on_close_requested → on_window_close.
-    // The second on_window_close call hits `removed == None` (this block already
-    // removed it) and returns early — the idempotent remove breaks the cycle.
-    use tao::platform::ohos::WindowExtOpenHarmony;
-    if let Some(ref inner) = window_wrapper.inner {
-      inner.close();
+/// Returns whether the window had an unconfirmed destroy in flight. Taking the
+/// registration here (not peeking) is what keeps a duplicate loopback
+/// (`notifyWindowClose` fires from both the SubWindowPage button and
+/// `aboutToDisappear`) from re-entering the executor twice.
+#[cfg(target_env = "ohos")]
+fn ohos_pending_close_take(set: &Mutex<HashSet<WindowId>>, id: &WindowId) -> bool {
+  set
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .remove(id)
+}
+
+/// OHOS variant of `on_close_requested`: the destruction INITIATOR side of the
+/// confirmation-driven rework (design D2).
+///
+/// A CloseRequested for a window whose destroy we already requested is the
+/// ArkTS destruction loopback (our own `inner.close()` -> destroyWindow ->
+/// `aboutToDisappear` -> `notifyWindowClose`): it is the (b) confirmation
+/// channel, NOT a fresh user close -- the app already answered once and a
+/// second dispatch would duplicate the event while its veto could not stop the
+/// in-flight destroy. Those go straight to the confirmation executor.
+///
+/// Everything else dispatches CloseRequested to the app (first veto level);
+/// on veto the close ends with all accounting intact. Unvetoed, the window is
+/// split by kind: the UIAbility root goes through the exit gate (design D1),
+/// any other window (sub-window or spawned UIAbility instance) only gets the
+/// destroy request dispatched -- the store/registry entries and the Destroyed
+/// event move to the confirmation executor, so a failed bridge call leaves the
+/// accounting matching the still-alive window (report zombie fix, D3).
+#[cfg(target_env = "ohos")]
+fn on_close_requested_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  // In-flight guard: this CloseRequested is the destruction loopback.
+  if ohos_pending_close_take(&ctx.ohos_pending_close, &window_id) {
+    log::info!("[wry] CloseRequested for in-flight window: destruction loopback (confirmation)");
+    on_window_close_ohos(ctx, window_id);
+    return;
+  }
+
+  let (label, window_event_listeners) = {
+    let windows_ref = ctx.windows.0.borrow();
+    match windows_ref.get(&window_id) {
+      Some(w) => (w.label.clone(), w.window_event_listeners.clone()),
+      None => return,
     }
+  };
 
-    let label = window_wrapper.label;
-
-    // Fire WindowEvent::Destroyed
-    callback(RunEvent::WindowEvent {
-      label,
-      event: WindowEvent::Destroyed,
+  let (tx, rx) = channel();
+  let listeners = window_event_listeners.lock().unwrap();
+  let handlers = listeners.values();
+  for handler in handlers {
+    handler(&WindowEvent::CloseRequested {
+      signal_tx: tx.clone(),
     });
+  }
+  (ctx.callback)(RunEvent::WindowEvent {
+    label,
+    event: WindowEvent::CloseRequested { signal_tx: tx },
+  });
+  if let Ok(true) = rx.try_recv() {
+    // User prevented close: no destroy request, no accounting change.
+    return;
+  }
+  ohos_dispatch_close_ohos(ctx, window_id);
+}
 
-    // Check if all windows are closed
-    let is_empty = windows.0.borrow().is_empty();
-    if is_empty {
-      // Guard against duplicate ExitRequested (LoopDestroyed path may also fire)
-      if !exit_state.0.load(Ordering::SeqCst) {
-        let (tx, rx) = channel();
-        callback(RunEvent::ExitRequested { code: None, tx });
+/// Reads the registry + the OS window id and routes an unvetoed close to the
+/// main-window gate or the sub-window initiator. Registry read strictly
+/// precedes any removal (design "先读后摘", coexists with the #247 Err-path
+/// removal). The registry alone is not sufficient as the root test:
+/// `ohos_record_main_window` writes `true` for EVERY UIAbility-kind window
+/// (spawned instances included), and only the id-0 root's destruction equals
+/// app termination -- gating on the registry alone would tear down the whole
+/// app when a secondary UIAbility window closes (multi-UIAbility regression).
+#[cfg(target_env = "ohos")]
+fn ohos_dispatch_close_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  use tao::platform::ohos::WindowExtOpenHarmony;
 
-        let recv = rx.try_recv();
-        let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
-        log::info!(
-          "[wry] ExitRequested (all windows closed) should_prevent: {}",
-          should_prevent
-        );
+  let registry_says_main = ohos_registry_is_main(&ctx.ohos_main_window_registry, &window_id);
+  let os_window_id = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.as_ref())
+    .and_then(|w| w.window_id());
 
-        // Mark ExitRequested as sent
-        exit_state.0.store(true, Ordering::SeqCst);
+  if registry_says_main && os_window_id == Some(0) {
+    let label = match ctx.windows.0.borrow().get(&window_id) {
+      Some(w) => w.label.clone(),
+      None => return,
+    };
+    ohos_main_window_close_gate(ctx, window_id, label);
+  } else {
+    ohos_initiate_destroy_ohos(ctx, window_id);
+  }
+}
 
-        if !should_prevent {
-          // On OHOS, the system has already started the destruction flow
-          // (LoopDestroyed), so we must not set ControlFlow::Exit.
-          // On other platforms, the caller must set ControlFlow::Exit.
-          return true;
-        }
+/// OHOS main-window (UIAbility root) close gate (design D1). The root window
+/// is the app root: its confirmed close must terminate the app through the
+/// `ExitRequested` veto and the #100 terminate chain
+/// (`ControlFlow::Exit` -> tao pending-exit -> `LoopDestroyed` -> app-control
+/// `terminate` -> `terminateSelf`) and must never dispatch the bridge's
+/// destroy-window (which rejects id 0 by design -- D5).
+#[cfg(target_env = "ohos")]
+fn ohos_main_window_close_gate<T: UserEvent>(
+  ctx: OhosCloseCtx<'_, T>,
+  window_id: WindowId,
+  label: String,
+) {
+  let OhosCloseCtx {
+    callback,
+    windows,
+    exit_state,
+    ohos_main_window_registry,
+    control_flow,
+    ..
+  } = ctx;
+
+  let exit_in_flight = exit_state.0.load(Ordering::SeqCst);
+  let should_prevent = if exit_in_flight {
+    // Teardown already in flight (RequestExit / pre-close probe / prior gate
+    // run): dedup, do not ask the app again.
+    false
+  } else {
+    let (tx, rx) = channel();
+    callback(RunEvent::ExitRequested { code: None, tx });
+    let prevent = matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent));
+    log::info!(
+      "[wry] ExitRequested (main window close) should_prevent: {}",
+      prevent
+    );
+    prevent
+  };
+
+  match ohos_exit_gate_decision(exit_in_flight, should_prevent) {
+    OhosExitGateAction::Cancel => {
+      // Close cancelled: store/registry untouched, window commands keep
+      // working (the report's zombie state is exactly what this arm avoids).
+      log::info!("[wry] main window close cancelled by ExitRequested veto (label {label})");
+    }
+    OhosExitGateAction::ProceedTeardown | OhosExitGateAction::TeardownAndExit => {
+      // Teardown first, then the exit request: Destroyed is truthful at this
+      // moment (the terminate is in flight and takes the window with it).
+      // Idempotent: a second gate run for the same window removes nothing.
+      let removed = windows.0.borrow_mut().remove(&window_id).is_some();
+      ohos_registry_remove(&ohos_main_window_registry, &window_id);
+      if removed {
+        callback(RunEvent::WindowEvent {
+          label,
+          event: WindowEvent::Destroyed,
+        });
       }
+      exit_state.0.store(true, Ordering::SeqCst);
+      *control_flow = ControlFlow::Exit;
     }
   }
-  false
+}
+
+/// OHOS destruction initiator (design D2): dispatch `inner.close()` WITHOUT
+/// removing the store/registry entries and without firing Destroyed. Registers
+/// the in-flight guard so the destruction loopback is recognized as the
+/// confirmation. Idempotent against a window whose wrapper holds no tao window
+/// (no request can be issued -> no registration -> no confirmation expected).
+///
+/// Known boundary: if tao's `close()` cannot dispatch (bridge client
+/// unavailable -- an app-wide degenerate state), the registration stays behind;
+/// the next real destruction loopback for that window then skips one app-facing
+/// dispatch. Accounting never diverges: the loopback only fires from a real
+/// destruction flow, so the executor's removal is truthful either way.
+#[cfg(target_env = "ohos")]
+fn ohos_initiate_destroy_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  let inner = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.clone());
+  let Some(inner) = inner else {
+    return;
+  };
+  ohos_pending_close_insert(&ctx.ohos_pending_close, &window_id);
+  use tao::platform::ohos::WindowExtOpenHarmony;
+  log::info!(
+    "[wry] on_window_close: dispatching destroy_window ohos_id={:?}",
+    inner.window_id()
+  );
+  inner.close();
+}
+
+/// OHOS core of the destruction confirmation (design D2): the landing point
+/// for both confirmation channels -- (b) the ArkTS destruction loopback
+/// arriving as an in-flight CloseRequested, and (a) tao's Ok-resolve
+/// Destroyed re-emission (plus the MainEvent::WindowDestroy pairing arm, whose
+/// CloseRequested leg always runs the initiator first). Removes the store
+/// entry, drops the registry record, fires `Destroyed` (now truthful), and
+/// runs the all-closed exit check with the SUB-WINDOW semantics of design D6
+/// (the main-window arm never reaches here with accounting still present).
+/// Idempotent: a window already removed early-exits, so duplicate
+/// confirmations dispatch nothing.
+#[cfg(target_env = "ohos")]
+fn on_window_close_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  let OhosCloseCtx {
+    callback,
+    windows,
+    exit_state,
+    ohos_main_window_registry,
+    ohos_pending_close,
+    control_flow,
+  } = ctx;
+
+  // Take the in-flight registration (idempotent no-op for window-destroy-pair
+  // or legacy confirmations that arrive without a prior initiate).
+  let _ = ohos_pending_close_take(&ohos_pending_close, &window_id);
+
+  // Remove window entry from WindowsStore (idempotent)
+  let removed = windows.0.borrow_mut().remove(&window_id);
+  let Some(window_wrapper) = removed else {
+    return;
+  };
+
+  // Drop the window's UIAbility-main record together with the store entry
+  // (issue Eulogizethesun/tauri#241) so the registry stays bounded by the
+  // live window count across repeated create/destroy cycles of the same
+  // label.
+  ohos_registry_remove(&ohos_main_window_registry, &window_id);
+
+  let label = window_wrapper.label;
+
+  // Fire WindowEvent::Destroyed -- only now is the OS window confirmed gone.
+  callback(RunEvent::WindowEvent {
+    label,
+    event: WindowEvent::Destroyed,
+  });
+
+  // All-closed exit check (design D6 sub-window semantics). Unlike the old
+  // code, `exit_state` is only marked when the exit request passes: a vetoed
+  // all-closed moment must leave the dedup guard clear for the next trigger.
+  let is_empty = windows.0.borrow().is_empty();
+  if ohos_all_closed_exit_predicate(is_empty, exit_state.0.load(Ordering::SeqCst))
+    == OhosAllClosedAction::SetExit
+  {
+    let (tx, rx) = channel();
+    callback(RunEvent::ExitRequested { code: None, tx });
+    let should_prevent = matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent));
+    log::info!(
+      "[wry] ExitRequested (all windows closed) should_prevent: {}",
+      should_prevent
+    );
+    if !should_prevent {
+      exit_state.0.store(true, Ordering::SeqCst);
+      // The #100 chain is the only process exit: propagate to tao's
+      // pending-exit check at the end of this MainEvent dispatch.
+      *control_flow = ControlFlow::Exit;
+    }
+  }
+}
+
+/// OHOS handler for `Message::Window(.., Destroy)`: the initiator side without
+/// a CloseRequested dispatch (upstream `destroy()` semantics skip the veto
+/// event). OHOS diverges from upstream's unconditional removal (design D4):
+/// real state first, so the removal moves to the confirmation executor. The
+/// root window still routes through the exit gate: destroying the ability root
+/// terminates the app, and that termination must stay subject to the app's
+/// exit veto.
+#[cfg(target_env = "ohos")]
+fn ohos_destroy_message_ohos<T: UserEvent>(ctx: OhosCloseCtx<'_, T>, window_id: WindowId) {
+  use tao::platform::ohos::WindowExtOpenHarmony;
+
+  let in_store = ctx.windows.0.borrow().contains_key(&window_id);
+  if !in_store {
+    return;
+  }
+  let registry_says_main = ohos_registry_is_main(&ctx.ohos_main_window_registry, &window_id);
+  let os_window_id = ctx
+    .windows
+    .0
+    .borrow()
+    .get(&window_id)
+    .and_then(|w| w.inner.as_ref())
+    .and_then(|w| w.window_id());
+  if registry_says_main && os_window_id == Some(0) {
+    let label = match ctx.windows.0.borrow().get(&window_id) {
+      Some(w) => w.label.clone(),
+      None => return,
+    };
+    ohos_main_window_close_gate(ctx, window_id, label);
+  } else {
+    ohos_initiate_destroy_ohos(ctx, window_id);
+  }
 }
 
 fn parse_proxy_url(url: &Url) -> Result<ProxyConfig> {
@@ -5663,6 +5984,90 @@ fn parse_proxy_url(url: &Url) -> Result<ProxyConfig> {
     Ok(config)
   } else {
     Err(Error::InvalidProxyUrl)
+  }
+}
+
+/// OHOS core of the registry removal, shared by
+/// `Context::ohos_remove_main_window` (the `create_window` Err path, issue
+/// Eulogizethesun/tauri#247). Split from the method so the lock discipline is
+/// exercisable by the registry UTs: tao's OHOS event loop requires the N-API
+/// app env and cannot be built in a test binary, so `Context` itself is out of
+/// reach there.
+#[cfg(target_env = "ohos")]
+fn ohos_registry_remove(registry: &Mutex<HashMap<WindowId, bool>>, window_id: &WindowId) {
+  registry
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .remove(window_id);
+}
+
+/// OHOS core of the registry read, split from
+/// `Context::ohos_is_ui_ability_main` for the same testability reason as
+/// [`ohos_registry_remove`]. Unknown ids read as sub-windows (`false`): the
+/// close path then falls back to the dispatch/confirm arm, and tao's own
+/// main-window gate stays the backstop for that degenerate case.
+#[cfg(target_env = "ohos")]
+fn ohos_registry_is_main(registry: &Mutex<HashMap<WindowId, bool>>, window_id: &WindowId) -> bool {
+  registry
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .get(window_id)
+    .copied()
+    .unwrap_or(false)
+}
+
+/// The main-window close gate's decision after the `ExitRequested` dispatch
+/// (design D1, pure). The OHOS capability window is the app root: "prevent
+/// exit but the main window is closed" is structurally unreachable, so an
+/// ExitRequested veto cancels the whole close.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OhosExitGateAction {
+  /// A teardown is already in flight (`exit_state` set by RequestExit / the
+  /// pre-close probe / a prior gate run): merge into it idempotently without
+  /// re-dispatching ExitRequested (the Message::Exit confluence).
+  ProceedTeardown,
+  /// The app vetoed this exit: cancel the close and touch no accounting.
+  Cancel,
+  /// ExitRequested dispatched and unprevented: tear down and drive the #100
+  /// terminate chain (ControlFlow::Exit -> tao pending-exit -> terminate).
+  TeardownAndExit,
+}
+
+/// Decision table (design D1): `(exit_state_set, should_prevent)`.
+#[cfg(target_env = "ohos")]
+fn ohos_exit_gate_decision(exit_state_set: bool, should_prevent: bool) -> OhosExitGateAction {
+  if exit_state_set {
+    OhosExitGateAction::ProceedTeardown
+  } else if should_prevent {
+    OhosExitGateAction::Cancel
+  } else {
+    OhosExitGateAction::TeardownAndExit
+  }
+}
+
+/// The sub-window destruction-confirmation executor's all-closed exit decision
+/// (design D6, pure). Deliberately consumed ONLY by the confirmation executor:
+/// the main-window arm unconditionally sets `ControlFlow::Exit` after its gate
+/// (capability window = app root; remaining sub-windows die with terminateSelf),
+/// so it never consults this predicate.
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OhosAllClosedAction {
+  /// Store empty and no exit requested yet: dispatch ExitRequested and, if
+  /// unprevented, mark `exit_state` and set `ControlFlow::Exit`.
+  SetExit,
+  /// Windows remain, or a teardown is already in flight: no-op.
+  Noop,
+}
+
+/// Decision table (design D6): `(store_empty, exit_state_set)`.
+#[cfg(target_env = "ohos")]
+fn ohos_all_closed_exit_predicate(store_empty: bool, exit_state_set: bool) -> OhosAllClosedAction {
+  if store_empty && !exit_state_set {
+    OhosAllClosedAction::SetExit
+  } else {
+    OhosAllClosedAction::Noop
   }
 }
 
@@ -5877,7 +6282,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     // Using WindowChild would set explicit pixel dimensions via WebViewStyle,
     // causing layout differences on high-DPI devices. Child webviews created via
     // add_child still use WindowChild with explicit bounds.
-    webviews.push(create_webview(
+    let created_webview = match create_webview(
       #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
       WebviewKind::WindowChild,
       #[cfg(any(not(feature = "unstable"), target_env = "ohos"))]
@@ -5888,7 +6293,25 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
       context,
       webview,
       focused_webview.clone(),
-    )?);
+    ) {
+      Ok(webview) => webview,
+      Err(e) => {
+        // Issue Eulogizethesun/tauri#247 (OHOS): the registry entry recorded
+        // above (`ohos_record_main_window`) must not outlive this window when
+        // creation fails. The store-based cleaner (`on_window_close_ohos`)
+        // only runs for windows that entered the store, so the Err path
+        // removes the entry itself before the error escapes. The record point
+        // deliberately stays where it is: the user-thread dispatcher
+        // constructor reads the registry during creation (see
+        // `ohos_record_main_window`), so the record must precede the creation
+        // reply on every path, success or failure.
+        #[cfg(target_env = "ohos")]
+        context.ohos_remove_main_window(&window_id);
+        return Err(e);
+      }
+    };
+
+    webviews.push(created_webview);
   }
 
   let window = Arc::new(window);
@@ -5934,12 +6357,84 @@ enum WebviewKind {
   WindowChild,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct WebviewBounds {
   x_rate: f32,
   y_rate: f32,
   width_rate: f32,
   height_rate: f32,
+}
+
+// --- OHOS auto-resize re-arm state (issue Eulogizethesun/tauri#244) ----------
+
+/// Whether a webview's wry bounds cache holds fully real geometry.
+///
+/// Sentinels never enter the wry cache (`merge_bounds_into_cache` screens
+/// them out), so realness is a per-axis property that only the *unset* axis
+/// of a partial write can regress: a natural-layout (bounds-less) webview's
+/// cache holds the upstream 200x200 placeholder on both axes (`Natural`);
+/// a runtime `set_size`/`set_position` makes one axis real and leaves the
+/// other at the placeholder (`Partial`); explicit creation bounds or a full
+/// `set_bounds` make every component real (`Full`).
+// `Partial` is only constructed by the OHOS partial-write arms; the type must
+// still exist on every target for the handle state and the host UT.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+enum BoundsExplicitness {
+  /// Created bounds-less: the cache holds the 200x200 placeholder.
+  #[default]
+  Natural,
+  /// One axis explicit (runtime partial write), the other still placeholder.
+  Partial,
+  /// Explicit creation bounds or a full set_bounds: the cache is all-real.
+  Full,
+}
+
+/// Per-webview auto-resize state carried on the handle (replaces the old
+/// single-slot `Option<WebviewBounds>` rate cache).
+#[derive(Default, Debug)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+struct WebviewAutoResizeState {
+  /// Armed rates — `Some` ⇒ the `Resized` handler re-fires `set_bounds`.
+  rates: Option<WebviewBounds>,
+  /// Rates parked at the last disable; restored by a later enable.
+  parked: Option<WebviewBounds>,
+  /// Whether the wry bounds cache for this webview is fully real.
+  explicit: BoundsExplicitness,
+}
+
+/// The OHOS `SetAutoResize(true)` enable decision, extracted from the handler
+/// as a pure function so the decision table is host-testable (issue
+/// Eulogizethesun/tauri#244).
+#[derive(Debug, PartialEq)]
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+enum OhosAutoResizeEnableDecision {
+  /// Restore the rates parked at the last disable (disable → enable cycle).
+  Restore(WebviewBounds),
+  /// Derive rates from the wry bounds cache — legal only for fully-explicit
+  /// geometry, where every cache component is real.
+  DeriveFromCache,
+  /// Natural-layout webview: stays un-armed and keeps following its ArkTS
+  /// container through container layout — correct-by-construction.
+  FollowContainer,
+  /// Non-derivable corner: partially-explicit geometry with no parked rates.
+  /// The caller logs a loud error naming the webview and the remedy — the
+  /// dispatch channel is fire-and-forget, so no synchronous `Err` exists.
+  LoudError,
+}
+
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+fn ohos_auto_resize_enable_decision(
+  state: &WebviewAutoResizeState,
+) -> OhosAutoResizeEnableDecision {
+  if let Some(parked) = &state.parked {
+    return OhosAutoResizeEnableDecision::Restore(parked.clone());
+  }
+  match state.explicit {
+    BoundsExplicitness::Full => OhosAutoResizeEnableDecision::DeriveFromCache,
+    BoundsExplicitness::Natural => OhosAutoResizeEnableDecision::FollowContainer,
+    BoundsExplicitness::Partial => OhosAutoResizeEnableDecision::LoudError,
+  }
 }
 
 // --- OHOS partial-bounds sentinel (issue Eulogizethesun/tauri#241) -----------
@@ -6245,7 +6740,11 @@ You may have it installed on another user account, but it is not available for t
 
     let window_size = window.inner_size().to_logical::<f32>(scale_factor);
 
-    if webview_attributes.auto_resize {
+    // Explicit creation bounds: the wry cache is seeded with the requested
+    // rect, so the geometry is fully real whether or not auto-resize arms at
+    // creation (a runtime enable can derive from it, issue
+    // Eulogizethesun/tauri#244).
+    let rates = if webview_attributes.auto_resize {
       Some(WebviewBounds {
         x_rate: position.x / window_size.width,
         y_rate: position.y / window_size.height,
@@ -6254,6 +6753,11 @@ You may have it installed on another user account, but it is not available for t
       })
     } else {
       None
+    };
+    WebviewAutoResizeState {
+      rates,
+      parked: None,
+      explicit: BoundsExplicitness::Full,
     }
   } else {
     #[cfg(all(feature = "unstable", not(target_env = "ohos")))]
@@ -6262,16 +6766,20 @@ You may have it installed on another user account, but it is not available for t
         position: LogicalPosition::new(0i32, 0i32).into(),
         size: window.inner_size().into(),
       });
-      Some(WebviewBounds {
-        x_rate: 0.,
-        y_rate: 0.,
-        width_rate: 1.,
-        height_rate: 1.,
-      })
+      WebviewAutoResizeState {
+        rates: Some(WebviewBounds {
+          x_rate: 0.,
+          y_rate: 0.,
+          width_rate: 1.,
+          height_rate: 1.,
+        }),
+        parked: None,
+        explicit: BoundsExplicitness::Full,
+      }
     }
     #[cfg(all(not(feature = "unstable"), not(target_env = "ohos")))]
     {
-      None
+      WebviewAutoResizeState::default()
     }
     // On OHOS, a webview created without explicit bounds must stay bounds-less:
     // wry marks it natural-layout in WebViewStyle (no width/height -> the ArkTS
@@ -6280,8 +6788,11 @@ You may have it installed on another user account, but it is not available for t
     // layer as the rendered geometry (create-time style.width/height drive the
     // wrapper Stack; a runtime set_bounds applies the full geometry and flips a
     // natural webview to explicit sizing -- openspec ohos-webview-sizing).
+    // Natural creation: the bounds cache holds the upstream 200x200
+    // placeholder, so a runtime enable must NOT derive from it -- the webview
+    // keeps following its ArkTS container (issue Eulogizethesun/tauri#244).
     #[cfg(target_env = "ohos")]
-    None
+    WebviewAutoResizeState::default()
   };
 
   if let Some(download_handler) = pending.download_handler {
@@ -7074,5 +7585,276 @@ mod mapping_tests {
     };
     let dd = WindowEventWrapper::from(SynthesizedWindowEvent::DragDrop(drop_event));
     assert!(matches!(dd.0, Some(WindowEvent::DragDrop(_))));
+  }
+}
+
+/// OHOS SetAutoResize enable-decision table, host-tested as a pure function
+/// (issue Eulogizethesun/tauri#244): restore / derive-from-cache / follow-
+/// container / loud-error, one row each, plus the parked-beats-derive
+/// precedence. A regression in any arm (e.g. re-silencing the partial corner
+/// or dropping the park) fails here without needing an OHOS device.
+#[cfg(test)]
+mod auto_resize_enable_decision_tests {
+  use super::*;
+
+  fn rates(x: f32, y: f32, w: f32, h: f32) -> WebviewBounds {
+    WebviewBounds {
+      x_rate: x,
+      y_rate: y,
+      width_rate: w,
+      height_rate: h,
+    }
+  }
+
+  // Row 1: parked rates present → restore (the disable → enable re-arm), and
+  // parked takes precedence over a derivable (Full) cache.
+  #[test]
+  fn enable_restores_parked_rates_and_parked_beats_derive() {
+    let parked = rates(0.1, 0.2, 0.3, 0.4);
+    let mut state = WebviewAutoResizeState {
+      rates: None,
+      parked: Some(parked.clone()),
+      explicit: BoundsExplicitness::Full,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::Restore(parked)
+    );
+
+    // Precedence holds even when the webview was never fully explicit: a
+    // parked rate set is the geometry the previous arm actually used.
+    state.explicit = BoundsExplicitness::Partial;
+    let parked2 = rates(0.5, 0.6, 0.7, 0.8);
+    state.parked = Some(parked2.clone());
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::Restore(parked2)
+    );
+  }
+
+  // Row 2: no parked rates, fully-explicit geometry → derive from the cache
+  // (covers "created with explicit bounds, armed only at runtime").
+  #[test]
+  fn enable_derives_for_fully_explicit_geometry() {
+    let state = WebviewAutoResizeState {
+      rates: None,
+      parked: None,
+      explicit: BoundsExplicitness::Full,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::DeriveFromCache
+    );
+  }
+
+  // Row 3: natural-layout webview → stays un-armed, follows the ArkTS
+  // container; must NOT read as an error (it is correct-by-construction).
+  #[test]
+  fn enable_keeps_natural_webview_un_armed_without_error() {
+    let state = WebviewAutoResizeState::default();
+    assert_eq!(state.explicit, BoundsExplicitness::Natural);
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::FollowContainer
+    );
+  }
+
+  // Row 4: partially-explicit geometry with no parked rates → loud error, so
+  // enable can never silently arm on the underivable 200x200 placeholder axis
+  // (the old behavior silently left rates unset while returning Ok).
+  #[test]
+  fn enable_loud_errors_on_partial_geometry_without_parked_rates() {
+    let state = WebviewAutoResizeState {
+      rates: None,
+      parked: None,
+      explicit: BoundsExplicitness::Partial,
+    };
+    assert_eq!(
+      ohos_auto_resize_enable_decision(&state),
+      OhosAutoResizeEnableDecision::LoudError
+    );
+  }
+}
+
+/// Issue Eulogizethesun/tauri#247: registry-level UTs for the failed-creation
+/// cleanup. Scope note: the full `create_window` path is not drivable from any
+/// test binary -- tao's OHOS `EventLoopBuilder::build` panics without the
+/// N-API app env, so `EventLoop`/`Context` cannot be constructed outside the
+/// app process. These UTs therefore exercise the real removal implementation
+/// (`ohos_registry_remove`, the exact function the `create_window` Err arm
+/// reaches through `Context::ohos_remove_main_window`) against a standalone
+/// registry; the Err-arm wiring itself is review-verified and the residual gap
+/// is disclosed in the issue reply.
+#[cfg(all(test, target_env = "ohos"))]
+mod ohos_main_window_registry_tests {
+  use super::*;
+
+  fn registry() -> Arc<Mutex<HashMap<WindowId, bool>>> {
+    Arc::new(Mutex::new(HashMap::new()))
+  }
+
+  fn contains_entry(registry: &Arc<Mutex<HashMap<WindowId, bool>>>, id: WindowId) -> bool {
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .contains_key(&id)
+  }
+
+  // The create_webview Err arm must drop the recorded entry for the failed
+  // window only -- a sibling window that created successfully keeps its entry
+  // (its own dispatcher still reads it).
+  #[test]
+  fn remove_drops_only_the_failed_window_entry() {
+    let registry = registry();
+    // create_window's record point: the entry exists before any creation reply.
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(7), true);
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(9), false);
+
+    ohos_registry_remove(&registry, &WindowId::from(7));
+
+    assert!(!contains_entry(&registry, WindowId::from(7)));
+    assert!(contains_entry(&registry, WindowId::from(9)));
+  }
+
+  // Reaching the Err arm twice (or removing an id that never got recorded)
+  // must be a no-op, mirroring on_window_close_ohos's idempotent remove.
+  #[test]
+  fn remove_is_idempotent_on_unknown_id() {
+    let registry = registry();
+    ohos_registry_remove(&registry, &WindowId::from(404));
+    ohos_registry_remove(&registry, &WindowId::from(404));
+    assert!(registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .is_empty());
+  }
+
+  // A panicking event-loop thread poisons the lock; the Err-path cleanup must
+  // still land (same recovery discipline as the record/remove close paths).
+  #[test]
+  fn remove_recovers_from_poisoned_registry_lock() {
+    let registry = registry();
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(3), true);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let _guard = registry.lock().unwrap();
+      panic!("poison the registry lock");
+    }));
+
+    ohos_registry_remove(&registry, &WindowId::from(3));
+
+    assert!(!contains_entry(&registry, WindowId::from(3)));
+  }
+
+  // The registry read side must keep the unknown-id fallback: an id that never
+  // got recorded (or whose record was already dropped) reads as a sub-window so
+  // the close path falls back to the dispatch/confirm arm instead of the
+  // main-window exit gate (lib.rs `ohos_is_ui_ability_main` contract).
+  #[test]
+  fn is_main_reads_unknown_id_as_false() {
+    let registry = registry();
+    assert!(!ohos_registry_is_main(&registry, &WindowId::from(404)));
+  }
+
+  // A recorded UIAbility-kind window reads true; a recorded sub-window reads
+  // false -- the exact values `ohos_record_main_window` writes.
+  #[test]
+  fn is_main_reads_recorded_kinds() {
+    let registry = registry();
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(0), true);
+    registry
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .insert(WindowId::from(5), false);
+    assert!(ohos_registry_is_main(&registry, &WindowId::from(0)));
+    assert!(!ohos_registry_is_main(&registry, &WindowId::from(5)));
+  }
+}
+
+/// Design D1/D6 pure decision helpers: the main-window exit gate and the
+/// sub-window all-closed predicate, extracted so the decision tables are
+/// exercisable by host/device UTs (the full executor needs the N-API app env
+/// and cannot be built in a test binary -- see `ohos_main_window_registry_tests`).
+#[cfg(all(test, target_env = "ohos"))]
+mod ohos_exit_gate_tests {
+  use super::*;
+
+  // Decision table (design D1): exit already in flight always merges into the
+  // in-flight teardown (Message::Exit idempotent confluence), whatever the
+  // (not-even-asked) veto answer would be.
+  #[test]
+  fn exit_gate_in_flight_always_proceeds_to_teardown() {
+    assert_eq!(
+      ohos_exit_gate_decision(true, false),
+      OhosExitGateAction::ProceedTeardown
+    );
+    assert_eq!(
+      ohos_exit_gate_decision(true, true),
+      OhosExitGateAction::ProceedTeardown
+    );
+  }
+
+  // First exit request vetoed: the close is cancelled and NO accounting is
+  // touched (store/registry entries stay; the window stays fully usable --
+  // the report's zombie state is exactly what this arm prevents).
+  #[test]
+  fn exit_gate_vetoed_cancels_without_teardown() {
+    assert_eq!(
+      ohos_exit_gate_decision(false, true),
+      OhosExitGateAction::Cancel
+    );
+  }
+
+  // First exit request passes: tear down and drive the #100 terminate chain.
+  #[test]
+  fn exit_gate_unprevented_tears_down_and_exits() {
+    assert_eq!(
+      ohos_exit_gate_decision(false, false),
+      OhosExitGateAction::TeardownAndExit
+    );
+  }
+
+  // Decision table (design D6): last confirmed removal empties the store and
+  // no exit was requested yet -> request the exit.
+  #[test]
+  fn all_closed_empty_and_unrequested_sets_exit() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(true, false),
+      OhosAllClosedAction::SetExit
+    );
+  }
+
+  // Store empty but a teardown is already in flight (exit_state set by the
+  // main-window gate / RequestExit / pre-close probe): no second exit request.
+  #[test]
+  fn all_closed_empty_but_exit_in_flight_is_noop() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(true, true),
+      OhosAllClosedAction::Noop
+    );
+  }
+
+  // Windows remain: never exit, whatever the exit state.
+  #[test]
+  fn all_closed_nonempty_is_noop_regardless_of_exit_state() {
+    assert_eq!(
+      ohos_all_closed_exit_predicate(false, false),
+      OhosAllClosedAction::Noop
+    );
+    assert_eq!(
+      ohos_all_closed_exit_predicate(false, true),
+      OhosAllClosedAction::Noop
+    );
   }
 }
