@@ -284,6 +284,25 @@ to:   openharmony-ability-plugin-window = { path = "../openharmony-ability/crate
 
 > ⚠️ 仓内自引用（`examples/tauri/src-tauri/Cargo.toml` 的 `window-vibrancy = { path = "../../../" }`）保留不动。
 
+#### 2.14 CLI 脚手架模板 ArkTS 身份（切回 path 模式时一并核对）
+
+> [NEW 2026-11-06] 模板身份是**分支持有**的差异：ohdev-git 分支的 tauri-cli 模板消费 OHPM 注册表的 `@ylong-rs/ohrs-ability`（分支特殊性，背景与坑见 dep-switch-to-git skill §2.14）；ohdev 分支的模板用 `file: + @ohos-rs/ability`。正常 `git switch` 会各自带对形态，**无需手工干预**。仅当 ohdev 工作区里出现 ohdev-git 形态的模板（误携提交、移植 patch 等）时，才须把 4 个文件翻回：
+
+```
+crates/tauri-cli/templates/mobile/open-harmony/entry_{desktop,mobile}/oh-package.json5:
+from: "@ylong-rs/ohrs-ability": "1.0.0-beta.2",
+to:   "@ohos-rs/ability": "file:{{{ability-har-rel}}}",
+
+crates/tauri-cli/templates/mobile/open-harmony/entry_{desktop,mobile}/src/main/ets/entryability/EntryAbility.ets.hbs:
+from: } from '@ylong-rs/ohrs-ability'
+to:   } from '@ohos-rs/ability'
+
+from: // `allBridgePlugins` is exported by `@ylong-rs/ohrs-ability` and covers every bridge
+to:   // `allBridgePlugins` is exported by `@ohos-rs/ability` and covers every bridge
+```
+
+> 包名=导入名必须同步翻回；本地 `file:` 模式直连 dev HAR，不受 OHPM 上架版本约束（无 beta.2 前置）。
+
 ### Step 3: 验证
 
 ```bash

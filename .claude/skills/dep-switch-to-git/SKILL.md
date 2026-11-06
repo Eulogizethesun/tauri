@@ -17,6 +17,8 @@ description: 将 Tauri OHOS 项目的本地 path 依赖替换为 Eulogizethesun/
 >
 > ℹ️ **2026-11-05 重校准**：ohdev-git 分支基于当前 ohdev 重建（dep 提交见各仓 `chore(deps): replace cross-repo path deps with git deps`），本 skill 的条目数与逐文件 from/to 已按重建时的实际依赖图核对。以 Step 1 的扫描结果为唯一事实源——扫描出的条目数若与本文不符，以扫描为准并先核对差异再动手。
 >
+> ⚠️ **2026-11-06 补充：CLI 脚手架模板 ArkTS 身份也是分支差异**。ohdev-git 的 tauri-cli 模板消费 OHPM 注册表的 `@ylong-rs/ohrs-ability`（发布身份），而 ohdev 的模板用 `file: + @ohos-rs/ability`（源码身份）——这是本分支的**分支特殊性**。Cargo 迁移（§2.1–2.13）不覆盖模板文件，模板翻转见 §2.14。
+>
 > ⚠️ **plugins-workspace 的 `[patch.crates-io]` 已扩展**：原版 skill 只列了 `openharmony-ability` + `openharmony-ability-derive`。当前 ohdev 已把 tauri 核心 crate（`tauri`、`tauri-build`、`tauri-utils`、`tauri-runtime`、`tauri-runtime-wry`、`tauri-plugin`）以及 `wry`、`tao`、`muda`、`tray-icon`、`window-vibrancy` 也加入 `[patch.crates-io]` 作为 path 依赖。原版注释"不要修改 `tauri-plugin` 行（已是 git 依赖）"**已过时**——`tauri-plugin` 现在是 path 依赖，必须迁移。
 
 ## 执行流程
@@ -527,6 +529,34 @@ to:   openharmony-ability-plugin-window = { git = "https://github.com/Eulogizeth
 ```
 
 > ⚠️ 仓内自引用（`examples/tauri/src-tauri/Cargo.toml` 的 `window-vibrancy = { path = "../../../" }`）保留不动。
+
+#### 2.14 CLI 脚手架模板 ArkTS 身份切换（ohdev-git 分支特殊性）
+
+> [NEW 2026-11-06] 2026-11-05 重建的 dep 提交只迁移了各仓 Cargo.toml；模板翻转是 11-06 的**独立一笔提交**（tauri 仓）。**双身份模型**：`@ohos-rs/ability` = 源码身份（dev HAR `ability.har`，`file:` 本地消费，内部工作区链路用）；`@ylong-rs/ohrs-ability` = 发布身份（pack-publish.ps1 打在发布 HAR 上，经 OHPM 注册表消费）。ohdev-git 模板必须用发布身份——外部消费者没有本地 `file:` 路径可指，且 OHPM 上只有发布身份。
+
+涉及 4 个文件，均在 `crates/tauri-cli/templates/mobile/open-harmony/` 下（entry_desktop 与 entry_mobile 同构，**两份都要改**）：
+
+```
+entry_desktop/oh-package.json5 + entry_mobile/oh-package.json5:
+from: "@ohos-rs/ability": "file:{{{ability-har-rel}}}",
+to:   "@ylong-rs/ohrs-ability": "1.0.0-beta.2",
+
+entry_desktop/src/main/ets/entryability/EntryAbility.ets.hbs
+  + entry_mobile/src/main/ets/entryability/EntryAbility.ets.hbs:
+from: } from '@ohos-rs/ability'
+to:   } from '@ylong-rs/ohrs-ability'
+
+from: // `allBridgePlugins` is exported by `@ohos-rs/ability` and covers every bridge
+to:   // `allBridgePlugins` is exported by `@ylong-rs/ohrs-ability` and covers every bridge
+```
+
+关键约束与坑：
+
+- **包名=导入名**：ArkTS 按包名解析 import——oh-package.json5 的依赖键与 EntryAbility 的 import 来源必须同名且**同步翻转**，只改一边 = ArkTS 编译失败。
+- **版本必须钉 OHPM 已上架版本，且 ≥ beta.2**：当前模板 import `allBridgePlugins` 聚合导出（openharmony-ability `package/index.ets` → `src/main/ets/plugins/all.ets`），该导出 9 月的 beta.1 **没有**。旧 ohdev-git tip（46a19d8d）模板用 17 个逐插件符号+beta.1 成立；模板形态已演化成聚合式，钉 beta.1 会编译失败。因此**发布 `@ylong-rs/ohrs-ability@1.0.0-beta.2` 到 OHPM 是本模板形态的硬前置**（流程见 tauri-ohos-publish skill）；beta.2 过审上架前（约 1-3 工作日），fresh init 工程的 `ohpm install` 会因版本不存在而失败。
+- **不动的东西**：两份模板的 `oh-package-lock.json5`（stale lock 随发布，旧 tip 先例）；`crates/tauri-cli/src/mobile/open_harmony/plugins.rs` 里的 8+ 处 `'@ohos-rs/ability'` 字符串——那是 "predates 旧工程" 回填通道的定位器，只服务缺 import/bridgePlugins 数组的历史工程，新脚手架经 `allBridgePlugins` 自注册不走它（1106 真机 demo 已证该 warn 路径无害）；`"@tauri/app": "file:../tauri"` 行——该目录由 CLI 构建期生成（`.tauri/` 运行时 HAR），不是模板变量指向的本地路径。
+- **翻转后 `{{{ability-har-rel}}}` 模板变量不再被消费**：`project.rs`（L97/L113）仍计算并注入 map，handlebars 忽略未用变量，无害，不需要改 CLI。
+- **反向切换**（回 ohdev / path 模式）须将 4 文件原样翻回 `file: + @ohos-rs/ability`，见 dep-switch-to-path skill 同名节。
 
 ### Step 3: 验证
 
