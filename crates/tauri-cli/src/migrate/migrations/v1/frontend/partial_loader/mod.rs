@@ -50,17 +50,17 @@ impl PartialLoader {
 /// Find closing angle for situations where there is another `>` in between.
 /// e.g. `<script generic="T extends Record<string, string>">`
 fn find_script_closing_angle(source_text: &str, pointer: usize) -> Option<usize> {
-  let mut numbers_of_open_angle = 0;
+  let mut numbers_of_open_angle = 0i32;
   for (offset, c) in source_text[pointer..].char_indices() {
     match c {
       '>' => {
-        if numbers_of_open_angle == 0 {
+        if numbers_of_open_angle == 0i32 {
           return Some(offset);
         }
-        numbers_of_open_angle -= 1;
+        numbers_of_open_angle -= 1i32;
       }
       '<' => {
-        numbers_of_open_angle += 1;
+        numbers_of_open_angle += 1i32;
       }
       _ => {}
     }

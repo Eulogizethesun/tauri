@@ -4,25 +4,38 @@
 
 use std::{fmt::Display, path::PathBuf};
 
+/// The error type used across the CLI.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
+  /// An error with additional context about what operation failed.
   #[error("{0}: {1}")]
   Context(String, Box<dyn std::error::Error + Send + Sync + 'static>),
+  /// A generic error with a free-form message.
   #[error("{0}")]
   GenericError(String),
+  /// A bundling error.
   #[error("failed to bundle project {0}")]
   Bundler(#[from] Box<tauri_bundler::Error>),
+  /// A filesystem operation failed.
   #[error("{context} {path}: {error}")]
   Fs {
+    /// What operation failed.
     context: &'static str,
+    /// The path the operation was on.
     path: PathBuf,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
+  /// A command could not be spawned or exited with an error status.
   #[error("failed to run command {command}: {error}")]
   CommandFailed {
+    /// The command that failed.
     command: String,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
+  /// A macOS signing error.
   #[cfg(target_os = "macos")]
   #[error(transparent)]
   MacosSign(#[from] Box<tauri_macos_sign::Error>),
@@ -76,7 +89,9 @@ impl<T> Context<T> for Option<T> {
   }
 }
 
+/// Extension trait adding filesystem-context errors to results.
 pub trait ErrorExt<T> {
+  /// Wraps an I/O error with the given context and path.
   fn fs_context(self, context: &'static str, path: impl Into<PathBuf>) -> Result<T>;
 }
 

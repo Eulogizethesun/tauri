@@ -89,7 +89,7 @@ impl std::hash::Hasher for IdentHash {
   }
 
   fn write_u8(&mut self, i: u8) {
-    self.0 = (self.0 << 8) | (i as u64);
+    self.0 = (self.0 << 8i32) | (i as u64);
   }
 
   fn write_u64(&mut self, i: u64) {
@@ -255,7 +255,7 @@ mod tests {
   fn many_puts_only_one_succeeds() {
     let state = Arc::new(StateManager::new());
     let mut threads = vec![];
-    for _ in 0..1000 {
+    for _ in 0i32..1000i32 {
       let state_ = Arc::clone(&state);
       threads.push(thread::spawn(move || state_.set(10i64)))
     }

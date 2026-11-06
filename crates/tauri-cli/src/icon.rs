@@ -914,15 +914,15 @@ fn resize_asset(img: &DynamicImage, target_size: u32, scale_percent: f32) -> Dyn
   let mut canvas = ImageBuffer::from_pixel(target_size, target_size, Rgba([0, 0, 0, 0]));
   let offset_x = if new_w > target_size {
     // Image wider than canvas → start at negative offset
-    -((new_w - target_size) as i32 / 2)
+    -((new_w - target_size) as i32 / 2i32)
   } else {
-    (target_size - new_w) as i32 / 2
+    (target_size - new_w) as i32 / 2i32
   };
 
   let offset_y = if new_h > target_size {
-    -((new_h - target_size) as i32 / 2)
+    -((new_h - target_size) as i32 / 2i32)
   } else {
-    (target_size - new_h) as i32 / 2
+    (target_size - new_h) as i32 / 2i32
   };
 
   image::imageops::overlay(&mut canvas, &resized, offset_x.into(), offset_y.into());

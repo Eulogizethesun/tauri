@@ -43,7 +43,7 @@
 
 - **tauri api demo 默认 API 版本为 12**（最低支持版本），使用 > 12 的 API 必须加版本守卫，否则低版本设备崩溃
 - 版本隔离是底层仓（tao/wry/muda/openharmony-ability）内部职责，不是应用开发者的
-- 静默跳过是默认降级策略（与 Windows/macOS 一致）
+- 公开接口统一 Err 是默认策略（2026-09 定稿）：OHOS 无实现/版本不足的命令返回 Err 并指明原因或所需 API 版本（`{op} is not supported on OpenHarmony` / `{op} requires API level {N}+ on OpenHarmony (current: {M})`）；静默降级仅限不构成接口契约的内部增强行为（视觉效果等）
 - 三个版本检测 API：`sdk_api_version()`（OpenHarmony 底座）/ `distribution_api_version()`（HarmonyOS 发行版）/ `can_i_use()`（硬件能力）
 - 组合检查时先硬件能力后软件版本
 

@@ -268,16 +268,16 @@ pub fn command(mut options: Options) -> Result<()> {
     .unwrap();
     if option_env!("TARGET") == Some("node") {
       let mut dir = current_dir().expect("failed to read cwd");
-      let mut count = 0;
+      let mut count = 0i32;
       let mut cli_node_module_path = None;
       let cli_path = "node_modules/@tauri-apps/cli";
 
       // only go up three folders max
-      while count <= 2 {
+      while count <= 2i32 {
         let test_path = dir.join(cli_path);
         if test_path.exists() {
           let mut node_module_path = PathBuf::from("..");
-          for _ in 0..count {
+          for _ in 0i32..count {
             node_module_path.push("..");
           }
           node_module_path.push(cli_path);
@@ -285,7 +285,7 @@ pub fn command(mut options: Options) -> Result<()> {
           cli_node_module_path.replace(node_module_path);
           break;
         }
-        count += 1;
+        count += 1i32;
         match dir.parent() {
           Some(parent) => {
             dir = parent.to_path_buf();

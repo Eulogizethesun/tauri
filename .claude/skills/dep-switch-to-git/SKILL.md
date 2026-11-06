@@ -13,7 +13,9 @@ description: 将 Tauri OHOS 项目的本地 path 依赖替换为 Eulogizethesun/
 >
 > ⚠️ **`cargo-mobile2` 需要迁移**：`ohdev` 将 `cargo-mobile2` 收回本地工作区（`path = "../cargo-mobile2"`）以加入 `app::build (assembleApp)` 等改动，而 `tauri-apps/cargo-mobile2#feat/ohos` 没有这些改动。因此 `cargo-mobile2` 必须迁移到 `Eulogizethesun/cargo-mobile2#ohdev-git`（与其他依赖一致），不能保留 path、也不能用旧的 `tauri-apps` 目标。
 >
-> ⚠️ **ohdev 新增大量 `openharmony-ability-plugin-*` 子 crate**：原版 skill 只处理 `openharmony-ability` 和 `openharmony-ability-derive` 两个 crate。ohdev 后续将各仓对 `openharmony-ability` 的直接依赖拆分成了 plugin-specific 子 crate（如 `openharmony-ability-plugin-menu`、`openharmony-ability-plugin-window`、`openharmony-ability-plugin-url`、`openharmony-ability-plugin-webview`、`openharmony-ability-plugin-statusbar`、`openharmony-ability-plugin-screenshot`、`openharmony-ability-plugin-accessibility`、`openharmony-ability-plugin-autostart`、`openharmony-ability-plugin-clipboard`、`openharmony-ability-plugin-continuation`、`openharmony-ability-plugin-deep-link`、`openharmony-ability-plugin-global-shortcut` 等）。这些子 crate 全部指向 `Eulogizethesun/openharmony-ability` 仓（与 ability/derive 同一 git URL）。
+> ⚠️ **ohdev 新增大量 `openharmony-ability-plugin-*` 子 crate**：原版 skill 只处理 `openharmony-ability` 和 `openharmony-ability-derive` 两个 crate。ohdev 后续将各仓对 `openharmony-ability` 的直接依赖拆分成了 plugin-specific 子 crate（如 `openharmony-ability-plugin-menu`、`openharmony-ability-plugin-window`、`openharmony-ability-plugin-url`、`openharmony-ability-plugin-webview`、`openharmony-ability-plugin-statusbar`、`openharmony-ability-plugin-screenshot`、`openharmony-ability-plugin-accessibility`、`openharmony-ability-plugin-autostart`、`openharmony-ability-plugin-clipboard`、`openharmony-ability-plugin-continuation`、`openharmony-ability-plugin-deep-link`、`openharmony-ability-plugin-global-shortcut`、`openharmony-ability-plugin-app-control` 等）。这些子 crate 全部指向 `Eulogizethesun/openharmony-ability` 仓（与 ability/derive 同一 git URL）。
+>
+> ℹ️ **2026-11-05 重校准**：ohdev-git 分支基于当前 ohdev 重建（dep 提交见各仓 `chore(deps): replace cross-repo path deps with git deps`），本 skill 的条目数与逐文件 from/to 已按重建时的实际依赖图核对。以 Step 1 的扫描结果为唯一事实源——扫描出的条目数若与本文不符，以扫描为准并先核对差异再动手。
 >
 > ⚠️ **plugins-workspace 的 `[patch.crates-io]` 已扩展**：原版 skill 只列了 `openharmony-ability` + `openharmony-ability-derive`。当前 ohdev 已把 tauri 核心 crate（`tauri`、`tauri-build`、`tauri-utils`、`tauri-runtime`、`tauri-runtime-wry`、`tauri-plugin`）以及 `wry`、`tao`、`muda`、`tray-icon`、`window-vibrancy` 也加入 `[patch.crates-io]` 作为 path 依赖。原版注释"不要修改 `tauri-plugin` 行（已是 git 依赖）"**已过时**——`tauri-plugin` 现在是 path 依赖，必须迁移。
 
@@ -25,12 +27,12 @@ description: 将 Tauri OHOS 项目的本地 path 依赖替换为 Eulogizethesun/
 
 | 仓库 | 目录 | 跨仓依赖条目数 |
 |------|------|--------------|
-| tauri | `$WS_ROOT/tauri/` | 64 |
-| tao | `$WS_ROOT/tao/` | 3 |
+| tauri | `$WS_ROOT/tauri/` | 63 |
+| tao | `$WS_ROOT/tao/` | 4 |
 | wry | `$WS_ROOT/wry/` | 3 |
 | muda | `$WS_ROOT/muda/` | 1 |
-| tray-icon | `$WS_ROOT/tray-icon/` | 4 |
-| plugins-workspace | `$WS_ROOT/plugins-workspace/` | 23 |
+| tray-icon | `$WS_ROOT/tray-icon/` | 3 |
+| plugins-workspace | `$WS_ROOT/plugins-workspace/` | 25 |
 | window-vibrancy | `$WS_ROOT/window-vibrancy/` | 2 |
 | openharmony-ability | `$WS_ROOT/openharmony-ability/`（叶子节点，无需改动） | 0 |
 | cargo-mobile2 | `$WS_ROOT/cargo-mobile2/`（叶子节点，无跨仓依赖；但被 tauri 引用） | 0 |
@@ -98,59 +100,32 @@ from: cargo-mobile2 = { path = "../../../cargo-mobile2", default-features = fals
 to:   cargo-mobile2 = { git = "https://github.com/Eulogizethesun/cargo-mobile2", branch = "ohdev-git", default-features = false }
 ```
 
-#### 2.2 tauri/crates/tauri/Cargo.toml — desktop deps (cfg not ohos)
+#### 2.2 tauri/crates/tauri/Cargo.toml — muda/tray-icon（无需处理）
 
-```
-from: muda = { path = "../../../muda", default-features = false, features = [
-        "serde",
-        "gtk",
-      ] }
-to:   muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git", default-features = false, features = [
-        "serde",
-        "gtk",
-      ] }
-
-from: tray-icon = { path = "../../../tray-icon", default-features = false, features = [
-        "serde",
-      ], optional = true }
-to:   tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git", default-features = false, features = [
-        "serde",
-      ], optional = true }
-```
+> [OBSOLETE 2026-11-05] 原版 skill 在此处（以及 §2.3）列有 `muda`/`tray-icon` 的 `path = "../../../muda"` / `path = "../../../tray-icon"` 条目。当前 ohdev 的 `crates/tauri` 已把它们改回**纯 version 依赖**（`muda = { version = "0.19", ... }`、`tray-icon = { version = "0.24", ... }`，由 `[patch.crates-io]` 重定向，见 §2.1），本文件内**没有** muda/tray-icon 的 path 条目可替换。桌面段的 version 依赖位于 L92/L96 附近，勿动。
 
 #### 2.3 tauri/crates/tauri/Cargo.toml — ohos deps
 
 ```
-from: muda = { path = "../../../muda", default-features = false, features = [
-        "serde",
-      ] }
-to:   muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git", default-features = false, features = [
-        "serde",
-      ] }
-
-from: tray-icon = { path = "../../../tray-icon", default-features = false, features = [
-        "serde",
-      ], optional = true }
-to:   tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git", default-features = false, features = [
-        "serde",
-      ], optional = true }
-
 # derive 必须在 ability 之前！
 from: openharmony-ability-derive = { path = "../../../openharmony-ability/crates/derive" }
 to:   openharmony-ability-derive = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 
-from: openharmony-ability = { path = "../../../openharmony-ability/crates/ability", features = ["menu"] }
-to:   openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git", features = ["menu"] }
+# [CHANGED 2026-11-05] 不带 features（原版 skill 的 features = ["menu"] 已过时，menu 能力现由 plugin-menu 子 crate 承载）
+from: openharmony-ability = { path = "../../../openharmony-ability/crates/ability" }
+to:   openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 
-# [NEW] openharmony-ability-plugin-menu: ohdev 后续新增的 plugin 子 crate
+# [NEW] openharmony-ability-plugin-menu
 from: openharmony-ability-plugin-menu = { path = "../../../openharmony-ability/crates/plugin-menu" }
 to:   openharmony-ability-plugin-menu = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+
+# [NEW 2026-11-05] openharmony-ability-plugin-app-control（exit/restart 链，见 crates/tauri 内注释）
+from: openharmony-ability-plugin-app-control = { path = "../../../openharmony-ability/crates/plugin-app-control" }
+to:   openharmony-ability-plugin-app-control = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 ```
 
-> ⚠️ 注意 §2.2 和 §2.3 中的 `muda`/`tray-icon` 行**文本相同**（`path = "../../../muda"` 和 `path = "../../../tray-icon"`），但 features 不同。替换时必须连同 features 数组一起匹配，确保精确命中目标行。可用 Edit 工具的上下文匹配（含 features 数组的多行 old_string）区分。
->
-> ⚠️ **不要修改** L188 `tauri-build = { path = "../tauri-build/", ... }`、L189 `tauri-utils = { path = "../tauri-utils/", ... }`（仓内自引用）。
-> ⚠️ **不要修改** L255-292 的 `path = "../../examples/..."` 行（仓内 example 路径，非依赖）。
+> ⚠️ **不要修改** L203 `tauri-build = { path = "../tauri-build/", ... }`、L204 `tauri-utils = { path = "../tauri-utils/", ... }`（仓内自引用）。
+> ⚠️ **不要修改** L270-306 的 `path = "../../examples/..."` 行（仓内 example 路径，非依赖）。
 
 #### 2.4 tauri/crates/tauri-runtime/Cargo.toml
 
@@ -204,8 +179,12 @@ to:   tauri-plugin-http = { git = "https://github.com/Eulogizethesun/plugins-wor
 from: tauri-plugin-os = { path = "../../../../plugins-workspace/plugins/os" }
 to:   tauri-plugin-os = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
-from: tauri-plugin-fs = { path = "../../../../plugins-workspace/plugins/fs" }
-to:   tauri-plugin-fs = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+from: tauri-plugin-fs = { path = "../../../../plugins-workspace/plugins/fs", features = [
+  "watch",
+] }
+to:   tauri-plugin-fs = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git", features = [
+  "watch",
+] }
 
 from: tauri-plugin-shell = { path = "../../../../plugins-workspace/plugins/shell" }
 to:   tauri-plugin-shell = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
@@ -228,7 +207,7 @@ to:   tauri-plugin-log = { git = "https://github.com/Eulogizethesun/plugins-work
 from: tauri-plugin-notification = { path = "../../../../plugins-workspace/plugins/notification" }
 to:   tauri-plugin-notification = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
-# dialog 出现两次 (L49 non-OHOS + L65 OHOS)，使用 replace_all: true
+# dialog 出现两次 (L51 non-OHOS + L66 OHOS)，使用 replace_all: true
 from: tauri-plugin-dialog = { path = "../../../../plugins-workspace/plugins/dialog" }
 to:   tauri-plugin-dialog = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
@@ -252,7 +231,7 @@ to:   tauri-plugin-persisted-scope = { git = "https://github.com/Eulogizethesun/
 from: tauri-plugin-window-state = { path = "../../../../plugins-workspace/plugins/window-state" }
 to:   tauri-plugin-window-state = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
-# deep-link 出现两次 (L54 non-OHOS + L68 OHOS)，使用 replace_all: true
+# deep-link 出现两次 (L55 non-OHOS + L69 OHOS)，使用 replace_all: true
 from: tauri-plugin-deep-link = { path = "../../../../plugins-workspace/plugins/deep-link" }
 to:   tauri-plugin-deep-link = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 
@@ -306,6 +285,10 @@ to:   tauri-plugin-screenshot = { git = "https://github.com/Eulogizethesun/plugi
 
 from: tauri-plugin-continuation = { path = "../../../../plugins-workspace/plugins/continuation" }
 to:   tauri-plugin-continuation = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+
+# [NEW 2026-11-05] stronghold（OHOS-only，纯 Rust 插件无桥接；ohos 构建需 SODIUM_LIB_DIR 预编译 libsodium）
+from: tauri-plugin-stronghold = { path = "../../../../plugins-workspace/plugins/stronghold" }
+to:   tauri-plugin-stronghold = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 ```
 
 **[NEW] openharmony-ability 子 crate + muda/tray-icon 直接依赖（OHOS 段）：**
@@ -329,7 +312,7 @@ to:   tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch 
 
 > ⚠️ **不要修改** L14 `tauri-build = { path = "../../../crates/tauri-build", ... }`（仓内自引用）。
 > ⚠️ **不要修改** L25 `tauri-plugin-sample = { path = "./tauri-plugin-sample/" }`（仓内自引用）。
-> ⚠️ **不要修改** L96/L109 `path = "../../../crates/tauri"`（`[dependencies.tauri]` / `[dev-dependencies.tauri]` 表内的仓内 path，非跨仓依赖）。
+> ⚠️ **不要修改** L101/L114 `path = "../../../crates/tauri"`（`[dependencies.tauri]` / `[dev-dependencies.tauri]` 表内的仓内 path，非跨仓依赖）。
 
 #### 2.6b tauri/examples/huawei-account/src-tauri/Cargo.toml
 
@@ -358,6 +341,10 @@ to:   openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmo
 # [NEW] openharmony-ability-plugin-window
 from: openharmony-ability-plugin-window = { path = "../openharmony-ability/crates/plugin-window" }
 to:   openharmony-ability-plugin-window = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+
+# [NEW 2026-11-05] openharmony-ability-plugin-app-control
+from: openharmony-ability-plugin-app-control = { path = "../openharmony-ability/crates/plugin-app-control" }
+to:   openharmony-ability-plugin-app-control = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 ```
 
 > ⚠️ **不要修改** L109 `tao-macros = { version = "0.1.0", path = "./tao-macros" }`（仓内自引用）。
@@ -395,10 +382,6 @@ to:   openharmony-ability-plugin-menu = { git = "https://github.com/Eulogizethes
 > [CHANGED] 原版 skill 的 `openharmony-ability = { path = "...", features = ["menu", "statusbar"] }` 已被重构：`openharmony-ability` 保留但**移除了 features**（裸 path），同时新增 `openharmony-ability-plugin-statusbar` 和 `openharmony-ability-plugin-menu` 子 crate 依赖。
 
 ```
-# muda 在 [patch.crates-io] 段
-from: muda = { path = "../muda" }
-to:   muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git" }
-
 # [CHANGED] features 已移除
 from: openharmony-ability = { path = "../openharmony-ability/crates/ability" }
 to:   openharmony-ability = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
@@ -506,6 +489,11 @@ plugins/opener/Cargo.toml:
 from: openharmony-ability-plugin-url = { path = "../../../openharmony-ability/crates/plugin-url" }
 to:   openharmony-ability-plugin-url = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
 
+# [NEW 2026-11-05] shell
+plugins/shell/Cargo.toml:
+from: openharmony-ability-plugin-url = { path = "../../../openharmony-ability/crates/plugin-url" }
+to:   openharmony-ability-plugin-url = { git = "https://github.com/Eulogizethesun/openharmony-ability", branch = "ohdev-git" }
+
 # [NEW] screenshot
 plugins/screenshot/Cargo.toml:
 from: openharmony-ability-plugin-screenshot = { path = "../../../openharmony-ability/crates/plugin-screenshot" }
@@ -565,13 +553,13 @@ done
 
 输出替换总结：
 ```
-✅ 已替换 100 处跨仓 path 依赖
-- tauri: 64 处
-- tao: 3 处
+✅ 已替换 101 处跨仓 path 依赖
+- tauri: 63 处
+- tao: 4 处
 - wry: 3 处
 - muda: 1 处
-- tray-icon: 4 处
-- plugins-workspace: 23 处 (root 12 + plugins 11)
+- tray-icon: 3 处
+- plugins-workspace: 25 处 (root 13 + plugins 12)
 - window-vibrancy: 2 处
 - openharmony-ability: 0 (叶子节点)
 - cargo-mobile2: 0 (叶子节点)

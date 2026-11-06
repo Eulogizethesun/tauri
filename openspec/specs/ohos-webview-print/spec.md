@@ -3,7 +3,7 @@
 ## Purpose
 为 wry OHOS 的 `print()` 提供真实实现，替换当前的空 `Ok(())` no-op。`print()` SHALL 调用 OHOS 打印服务（`@kit.PrintKit` / `@ohos.print`）打印当前 webview 内容；若打印服务在当前设备/SDK 不可用，SHALL 降级为复用已有 `create_pdf` 生成 PDF 并返回路径提示。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: wry print() SHALL invoke the OHOS print service
 `wry` OHOS `InnerWebView::print()` SHALL NOT be a no-op. It SHALL delegate to `openharmony-ability` `Webview::print()`, which SHALL call the ArkTS `print()` method on the JsHelper. The ArkTS `print()` SHALL use OHOS `@kit.PrintKit` (`@ohos.print`) to launch the system print flow for the current webview content.
@@ -56,8 +56,6 @@ The `print()` OHOS implementation SHALL be isolated under `cfg(target_env = "oho
 - **THEN** the existing platform-specific `print()` implementation SHALL run unchanged
 - **AND** no OHOS code path SHALL be compiled in
 
-## MODIFIED Requirements
-
 ### Requirement: openharmony-ability Webview SHALL expose print()
 `openharmony-ability` `Webview` SHALL add a `print(&self) -> Result<()>` method that calls the ArkTS `print` named property on the JsHelper inner object, mirroring the pattern of `set_background_color`/`clear_all_browsing_data`. The `WebViewInitData` need not change (print is a runtime action, not a build-time attribute).
 
@@ -65,3 +63,19 @@ The `print()` OHOS implementation SHALL be isolated under `cfg(target_env = "oho
 - **WHEN** `wry` calls `self.webview.print()`
 - **THEN** `openharmony-ability` SHALL look up the `print` property on the inner ObjectRef and call it with no arguments
 - **AND** SHALL propagate ArkTS errors as `Error::from_reason`
+
+### Requirement: createPdf SHALL forward the requested scale
+The ArkTS PDF construction path SHALL forward the caller-provided `scale` value from `WebviewPdfConfig` into the system `PdfConfiguration` object passed to `controller.createPdf()`, instead of silently dropping it (system default applied).
+
+#### Scenario: Explicit scale reaches createPdf
+- **WHEN** `create_pdf` is called with a configuration whose `scale` is defined (e.g. `2.0`)
+- **THEN** the `PdfConfiguration` handed to `controller.createPdf()` carries `scale = 2.0`
+
+#### Scenario: Scale omitted keeps system default
+- **WHEN** `create_pdf` is called without a `scale` value
+- **THEN** the `PdfConfiguration` handed to `controller.createPdf()` does not set a `scale` field and the system default applies
+
+#### Scenario: wry comment matches the implemented capability
+- **WHEN** the wry OHOS source comment describing the ArkTS PDF configuration is read
+- **THEN** it no longer claims that `PdfConfiguration` has no `scale` field
+- **AND** it states that scale is forwarded via `WebviewPdfConfig`

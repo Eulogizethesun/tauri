@@ -26,6 +26,7 @@
     "allow-probe-webview-reparent",
     "allow-echo",
     "allow-spam",
+    "allow-set-content-protection",
     "allow-clear-test-report",
     "allow-append-test-result",
     "allow-console-log",
@@ -38,6 +39,8 @@
     "allow-test-reload",
     "allow-cookie-test",
     "allow-cookie-manual-test",
+    "allow-cookie-test-main-thread-set",
+    "allow-cookie-test-main-thread-read",
     "allow-devtools-test",
     "allow-devtools-open-only",
     "allow-devtools-close-only",
@@ -50,8 +53,12 @@
     "allow-create-decorated-window",
     "allow-create-transparent-borderless-window",
     "allow-create-ui-ability-window",
+    "allow-create-ui-ability-window-racy-attrs",
+    "allow-create-float-window-racy-attrs",
     "allow-create-ui-ability-windows-x3",
     "allow-create-transparent-ui-ability-window",
+    "allow-get-current-window-id",
+    "allow-get-device-form",
     "allow-set-ime-position-test",
     "allow-get-ime-position-result",
     "core:window:allow-request-user-attention",
@@ -65,6 +72,7 @@
     "allow-get-last-new-window-url",
     "allow-test-web-page-snapshot",
     "allow-test-create-pdf",
+    "allow-set-exit-confirmation",
     "allow-set-download-test-mode",
     "allow-count-webview-windows",
     "allow-close-all-test-windows",
@@ -75,6 +83,8 @@
     "allow-get-tracked-menu-events",
     "allow-get-tracked-run-events",
     "allow-clear-tracked-events",
+    "allow-track-webview-viewport-probe",
+    "allow-get-tracked-webview-viewport-probes",
     "allow-emit-test-event",
     "allow-setup-app-listener",
     "allow-test-async-spawn",
@@ -159,8 +169,32 @@
     "fs:allow-read-dir",
     "fs:allow-remove",
     "fs:scope-appcache-recursive",
+    "fs:allow-resource-read-recursive",
+    "fs:allow-watch",
     "shell:default",
     "shell:allow-open",
+    "shell:allow-stdin-write",
+    "shell:allow-kill",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "sh",
+          "cmd": "/system/bin/sh",
+          "args": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "sh",
+          "cmd": "/system/bin/sh",
+          "args": true
+        }
+      ]
+    },
     "log:default",
     "http:default",
     "http:allow-fetch",
@@ -207,6 +241,7 @@
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "dialog:default",
+    "dialog:allow-ask",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
@@ -220,6 +255,13 @@
     "allow-sentry-test-panic",
     "allow-fault-injection-set-rule",
     "allow-fault-injection-clear",
+    "allow-get-webview-url",
+    "allow-navigate-webview-hash",
+    "allow-create-incognito-webview",
+    "allow-incognito-cookie-set",
+    "allow-incognito-cookie-isolation",
+    "allow-set-title-on",
+    "allow-tracked-reject-probe",
     "core:window:allow-destroy",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-badge-label",
@@ -230,7 +272,6 @@
     "core:webview:allow-set-webview-focus",
     "fs:allow-write-text-file",
     "fs:allow-read-text-file",
-    "shell:allow-spawn",
     "fs:allow-write",
     "fs:allow-read-text-file-lines",
     "fs:allow-read-text-file-lines-next"

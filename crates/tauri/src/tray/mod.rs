@@ -16,10 +16,9 @@ use crate::{
 use crate::{ResourceId, UnsafeSend};
 use serde::Serialize;
 use std::path::Path;
-#[cfg(not(target_env = "ohos"))]
-pub use tray_icon::TrayIconId;
 #[cfg(target_env = "ohos")]
-pub use tray_icon::{QuickOperationConfig, TrayIconId};
+pub use tray_icon::QuickOperationConfig;
+pub use tray_icon::TrayIconId;
 
 /// Describes the mouse button state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Serialize)]
@@ -309,6 +308,11 @@ impl<R: Runtime> TrayIconBuilder<R> {
   ///
   /// On Linux, we need to write the icon to the disk and usually it will
   /// be `$XDG_RUNTIME_DIR/tray-icon` or `$TEMP/tray-icon`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **OHOS:** no-op — icons are transferred through the bridge, not
+  ///   written to disk.
   pub fn temp_dir_path<P: AsRef<Path>>(mut self, s: P) -> Self {
     self.inner = self.inner.with_temp_dir_path(s);
     self
@@ -331,6 +335,8 @@ impl<R: Runtime> TrayIconBuilder<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux:** Unsupported.
+  /// - **OHOS**: Stored without runtime effect — left-click presentation is system-controlled
+  ///   (a QuickOperation popup; see `quick_operation`).
   #[deprecated(
     since = "2.2.0",
     note = "Use `TrayIconBuilder::show_menu_on_left_click` instead."
@@ -345,18 +351,19 @@ impl<R: Runtime> TrayIconBuilder<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux:** Unsupported.
+  /// - **OHOS**: Stored without runtime effect — left-click presentation is system-controlled
+  ///   (a QuickOperation popup; see `quick_operation`).
   pub fn show_menu_on_left_click(mut self, enable: bool) -> Self {
     self.inner = self.inner.with_menu_on_left_click(enable);
     self
   }
 
-  /// Set QuickOperation for left-click popup. **OHOS only**.
+  /// Set QuickOperation for left-click popup. **OHOS only** — this method does
+  /// not exist on other platforms.
   ///
   /// On OHOS, configures the system popup panel shown when the user left-clicks
   /// the tray icon. The popup is rendered by a `StatusBarViewExtensionAbility`
   /// that the application registers in `module.json5`.
-  ///
-  /// On other platforms, this is silently ignored.
   #[cfg(target_env = "ohos")]
   pub fn quick_operation(mut self, config: QuickOperationConfig) -> Self {
     self.inner = self.inner.with_quick_operation(config);
@@ -396,9 +403,45 @@ impl<R: Runtime> TrayIconBuilder<R> {
   ) -> crate::Result<(TrayIcon<R>, ResourceId)> {
     let id = self.id().clone();
 
+    // OHOS allows a single status-bar tray per ability: the tray-icon backend
+    // rejects a second *visible* tray ("only one statusbar tray per ability").
+    // Tauri's cross-platform API still lets apps create several TrayIcons
+    // (they coexist on Windows/macOS), so map that contract onto the OHOS
+    // reality at this layer: hide every tray this manager knows about before
+    // adding the new one. The previous trays keep their objects (and can be
+    // made visible again later); exactly one is registered with the system at
+    // any time. set_visible(false) also works when other handles keep the
+    // previous tray alive, which plain removal would not.
+    #[cfg(target_env = "ohos")]
+    for existing_id in app_handle.manager.tray.tray_ids() {
+      if let Some(existing) = app_handle.manager.tray.tray_by_id(app_handle, &existing_id) {
+        let _ = existing.set_visible(false);
+      }
+    }
+
+    // OHOS: tray-icon's own QuickOperation defaults are deliberately neutral
+    // (empty title falls back to the app name on the ArkTS side, `None`
+    // module uses the system default). Tauri apps know better — the product
+    // name for the panel title and the `entry` module where the templates
+    // register abilities — so layer those Tauri-specific defaults here unless
+    // the app configured a panel itself.
+    #[cfg(target_env = "ohos")]
+    let mut inner = self.inner;
+    #[cfg(target_env = "ohos")]
+    if inner.quick_operation_config().is_none() {
+      inner = inner.with_quick_operation(QuickOperationConfig {
+        title: app_handle.package_info().name.clone(),
+        module_name: Some("entry".to_string()),
+        ..Default::default()
+      });
+    }
+
     // SAFETY:
     // the menu within this builder was created on main thread
     // and will be accessed on the main thread
+    #[cfg(target_env = "ohos")]
+    let unsafe_builder = UnsafeSend(inner);
+    #[cfg(not(target_env = "ohos"))]
     let unsafe_builder = UnsafeSend(self.inner);
 
     #[cfg(target_env = "ohos")]
@@ -473,6 +516,25 @@ impl<R: Runtime> Clone for TrayIcon<R> {
 /// which handles thread safety for NAPI calls.
 unsafe impl<R: Runtime> Sync for TrayIcon<R> {}
 unsafe impl<R: Runtime> Send for TrayIcon<R> {}
+
+// The OHOS status-bar click behavior is system-fixed (right click always
+// opens the registered menu, left click opens the QuickOperation popup), so
+// the JS-facing click setters are no-ops there. tray-icon warns once for its
+// own Rust surface; this crate keeps a separate once-flag because the static
+// cannot be shared across crates.
+#[cfg(target_env = "ohos")]
+static WARNED_MENU_CLICK_CONFIG: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_env = "ohos")]
+fn warn_menu_click_config_once() {
+  use std::sync::atomic::Ordering;
+  if !WARNED_MENU_CLICK_CONFIG.swap(true, Ordering::Relaxed) {
+    log::warn!(
+      "[TrayIcon] set_show_menu_on_left_click is a no-op on OHOS — status-bar click behavior is system-controlled; see set_quick_operation"
+    );
+  }
+}
 
 impl<R: Runtime> TrayIcon<R> {
   fn register(
@@ -600,14 +662,18 @@ impl<R: Runtime> TrayIcon<R> {
 
   /// Show or hide this tray icon.
   pub fn set_visible(&self, visible: bool) -> crate::Result<()> {
-    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?
-      .map_err(Into::into)
+    run_item_main_thread!(self, |self_: Self| self_.inner.set_visible(visible))?.map_err(Into::into)
   }
 
   /// Sets the tray icon temp dir path. **Linux only**.
   ///
   /// On Linux, we need to write the icon to the disk and usually it will
   /// be `$XDG_RUNTIME_DIR/tray-icon` or `$TEMP/tray-icon`.
+  ///
+  /// ## Platform-specific:
+  ///
+  /// - **OHOS:** no-op — icons are transferred through the bridge, not
+  ///   written to disk.
   pub fn set_temp_dir_path<P: AsRef<Path>>(&self, path: Option<P>) -> crate::Result<()> {
     #[allow(unused)]
     let p = path.map(|p| p.as_ref().to_path_buf());
@@ -639,25 +705,27 @@ impl<R: Runtime> TrayIcon<R> {
   /// ## Platform-specific:
   ///
   /// - **Linux**: Unsupported.
+  /// - **OHOS**: No-op — the value is never forwarded to the platform; left-click presentation
+  ///   is system-controlled (a QuickOperation popup; see `quick_operation`).
   pub fn set_show_menu_on_left_click(&self, #[allow(unused)] enable: bool) -> crate::Result<()> {
     #[cfg(any(target_os = "macos", windows))]
     run_item_main_thread!(self, |self_: Self| {
       self_.inner.set_show_menu_on_left_click(enable)
     })?;
+    #[cfg(target_env = "ohos")]
+    {
+      warn_menu_click_config_once();
+    }
     Ok(())
   }
 
-  /// Set QuickOperation for left-click popup. **OHOS only**.
+  /// Set QuickOperation for left-click popup. **OHOS only** — this method does
+  /// not exist on other platforms.
   ///
   /// On OHOS, configures the system popup panel shown when the user left-clicks
   /// the tray icon. Pass `None` to disable the popup (left-click will only fire events).
-  ///
-  /// On other platforms, this is silently ignored.
   #[cfg(target_env = "ohos")]
-  pub fn set_quick_operation(
-    &self,
-    config: Option<QuickOperationConfig>,
-  ) -> crate::Result<()> {
+  pub fn set_quick_operation(&self, config: Option<QuickOperationConfig>) -> crate::Result<()> {
     self.inner.set_quick_operation(config);
     Ok(())
   }
@@ -732,20 +800,20 @@ mod tests {
           "buttonState": "Down",
           "id": "id",
           "position": {
-              "x": 0.0,
-              "y": 0.0,
+              "x": 0.0f64,
+              "y": 0.0f64,
           },
           "rect": {
               "size": {
                   "Physical": {
-                      "width": 0,
-                      "height": 0,
+                      "width": 0i32,
+                      "height": 0i32,
                   }
               },
               "position": {
                   "Physical": {
-                      "x": 0,
-                      "y": 0,
+                      "x": 0i32,
+                      "y": 0i32,
                   }
               },
           }
@@ -755,9 +823,10 @@ mod tests {
 
   #[test]
   fn tray_icon_event_from_fallback_no_panic() {
+    use super::*;
     let tray_event = tray_icon::TrayIconEvent::Click {
       id: tray_icon::TrayIconId::new("test"),
-      position: tray_icon::dpi::PhysicalPosition::new(10.0, 20.0),
+      position: tray_icon::dpi::PhysicalPosition::new(10.0f64, 20.0f64),
       rect: tray_icon::Rect::default(),
       button: tray_icon::MouseButton::Left,
       button_state: tray_icon::MouseButtonState::Up,
@@ -772,7 +841,7 @@ mod tests {
         ..
       } => {
         assert_eq!(id.0, "test");
-        assert_eq!(position.x, 10.0);
+        assert_eq!(position.x, 10.0f64);
         assert_eq!(button, MouseButton::Left);
         assert_eq!(button_state, MouseButtonState::Up);
       }

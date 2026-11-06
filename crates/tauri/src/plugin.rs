@@ -892,7 +892,37 @@ impl<R: Runtime> PluginStore<R> {
     len != self.store.len()
   }
 
+  /// Initializes the given plugin and adds it to the store.
+  ///
+  /// The caller is expected to hold the plugins lock: on non-OHOS platforms
+  /// initialization runs while the lock is held (upstream ordering). OHOS
+  /// initializes outside the lock instead — see `AppHandle::plugin_boxed` —
+  /// so it cannot use this wrapper.
+  #[cfg(not(target_env = "ohos"))]
+  pub(crate) fn initialize(
+    &mut self,
+    mut plugin: Box<dyn Plugin<R>>,
+    app: &AppHandle<R>,
+    config: &PluginConfig,
+  ) -> crate::Result<()> {
+    initialize(&mut plugin, app, config)?;
+    self.register(plugin);
+    Ok(())
+  }
+
+  /// Takes all plugins out of the store, leaving it empty.
+  ///
+  /// OHOS lock discipline: plugins are taken out under a short lock,
+  /// initialized outside the lock (a plugin's initialize may round-trip the
+  /// ArkTS bridge, which pumps the event loop), and re-registered under
+  /// another short lock — see `AppManager::initialize_plugins`.
+  #[cfg(target_env = "ohos")]
+  pub(crate) fn take_all(&mut self) -> Vec<Box<dyn Plugin<R>>> {
+    std::mem::take(&mut self.store)
+  }
+
   /// Initializes all plugins in the store.
+  #[cfg(not(target_env = "ohos"))]
   pub(crate) fn initialize_all(
     &mut self,
     app: &AppHandle<R>,

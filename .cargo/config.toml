@@ -2,3 +2,62 @@
 # workaround needed to prevent `STATUS_ENTRYPOINT_NOT_FOUND` error in tests
 # see https://github.com/tauri-apps/tauri/pull/4383#issuecomment-1212221864
 __TAURI_WORKSPACE__ = "true"
+
+# OpenHarmony Artifactory cargo registry (virtual repo: locally published
+# adapted crates take priority over the crates.io remote fallback; downloads
+# need no authentication).
+#
+# Replacing crates.io makes every registry dependency of this workspace
+# resolve through the artifactory. In particular stronghold-runtime 2.0.1:
+# its OHOS adaptation (nix excluded from the OHOS dependency graph +
+# upstream DirectAlloc misaligned-offset fix) is published there under the
+# same version number with an adapted checksum, so the normal version
+# requirement resolves to the adapted build without any patch entry.
+#
+# Why source replacement instead of a
+# [patch.crates-io] stronghold-runtime = { version = "2.0.1", registry = "..." }:
+# a registry patch moves the patched crate's own dependency subtree to that
+# registry while its dependents (iota_stronghold) stay on crates.io - the
+# same crate then exists twice from two sources and shared trait types
+# (zeroize) stop unifying across the boundary, breaking the build. A path
+# patch is avoided because patch entries are validated during dependency
+# resolution even when the patched crate is not in the graph, which would
+# force the fork to be present as a sibling checkout in every environment
+# (review checkouts, CI, external contributors).
+#
+# The [patch.crates-io] path entries in the root Cargo.toml override their
+# crates regardless of this replacement and are unaffected.
+#
+# Reference source of the adaptation: ohos branch of the public fork
+# https://gitcode.com/dragonswordy/stronghold.rs. Remove this replacement
+# once upstream stronghold.rs ships an OHOS-compatible release.
+#
+# ─── Scope of this replacement (review T166C-N4) ─────────────────────────────
+# Cargo source replacement CANNOT be narrowed to a target, platform, or
+# directory: [source.crates-io] in a workspace-level config applies to every
+# cargo invocation run inside this repository — host builds (Windows/macOS/
+# Linux), `cargo clippy`/`test`/`doc`/`udeps`/`audit`, and every GitHub
+# workflow that resolves this workspace's dependency graph (lint rust, test
+# `tauri-cli`, check generated files, Udeps, audit, bench, docker, covector,
+# publish `tauri-cli`, test android, OHOS PR Review). A mirror outage or an
+# unreachable network path therefore breaks ALL of them, including jobs that
+# need no OHOS bits.
+#
+# Bypass when the artifactory is unreachable: comment out or delete BOTH
+# [source] tables below (git restore .cargo/config.toml also works — the
+# file is committed). Resolution then falls back to crates.io directly.
+# Consequence: stronghold-runtime resolves to the upstream build, which does
+# NOT carry the OHOS adaptation — fine for host-side checks (lint/test of
+# non-OHOS targets), wrong for an OHOS device build of the stronghold
+# example (that needs the mirror). Cargo's "same source, same build" rule is
+# the reason this must be all-or-nothing rather than per-target.
+#
+# For flaky/slow mirror downloads (sparse-index h2 stalls), a local
+# mitigation that avoids the bypass entirely: CARGO_HTTP_TIMEOUT=90 and
+# CARGO_NET_RETRY=10 in the invoking shell (the CI workflows do not set
+# these; they are a developer-side knob).
+[source.crates-io]
+replace-with = "ohos-mirror"
+
+[source.ohos-mirror]
+registry = "sparse+https://crates.repo.openharmony.cn/artifactory/api/cargo/openharmony-cargo/index/"

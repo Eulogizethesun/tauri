@@ -76,6 +76,20 @@ impl<R: Runtime> TrayManager<R> {
     })
   }
 
+  /// IDs of every tray icon currently registered with this manager. Internal
+  /// helper for the OHOS tray build path, which must hide previous trays
+  /// before adding a new one (OHOS allows a single status-bar tray).
+  #[cfg(target_env = "ohos")]
+  pub(crate) fn tray_ids(&self) -> Vec<TrayIconId> {
+    self
+      .icons
+      .lock()
+      .unwrap()
+      .iter()
+      .map(|(id, _)| id.clone())
+      .collect()
+  }
+
   pub fn remove_tray_by_id<'a, I>(&self, app: &AppHandle<R>, id: &'a I) -> Option<TrayIcon<R>>
   where
     I: ?Sized,

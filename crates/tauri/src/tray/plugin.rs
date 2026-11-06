@@ -18,10 +18,9 @@ use crate::{
   AppHandle, Manager, Runtime, Webview,
 };
 
-#[cfg(not(target_env = "ohos"))]
-use super::{TrayIcon, TrayIconEvent};
 #[cfg(target_env = "ohos")]
-use super::{QuickOperationConfig, TrayIcon, TrayIconEvent};
+use super::QuickOperationConfig;
+use super::{TrayIcon, TrayIconEvent};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

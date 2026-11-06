@@ -32,9 +32,13 @@ use tauri_utils::{
 
 /// Necessary data needed by [`context_codegen`] to generate code for a Tauri application context.
 pub struct ContextData {
+  /// Whether the application is being built in dev mode.
   pub dev: bool,
+  /// The Tauri configuration.
   pub config: Config,
+  /// The parent directory of the configuration file.
   pub config_parent: PathBuf,
+  /// The root token stream the generated code is appended to.
   pub root: TokenStream,
   /// Additional capabilities to include.
   pub capabilities: Option<Vec<PathBuf>>,
@@ -286,7 +290,15 @@ pub fn context_codegen(data: ContextData) -> EmbeddedAssetsResult<TokenStream> {
     }
   );
 
-  let with_tray_icon_code = if target.is_desktop() {
+  // `Target::is_desktop()` cannot distinguish the OpenHarmony device forms —
+  // the same target triple builds both — so consult `OHOS_DEVICE_TYPE` here.
+  // Codegen runs inside the app's build script, where cargo propagates the
+  // variable set by the CLI's `ohos dev`/`ohos build` commands; unset or
+  // invalid values fall back to the mobile form (see `ohos_is_desktop`).
+  let is_desktop = target.is_desktop()
+    || (target == Target::OpenHarmony && tauri_utils::platform::ohos_is_desktop());
+
+  let with_tray_icon_code = if is_desktop {
     if let Some(tray) = &config.app.tray_icon {
       let tray_icon_icon_path = config_parent.join(&tray.icon_path);
       let icon = CachedIcon::new(&root, &tray_icon_icon_path)?;

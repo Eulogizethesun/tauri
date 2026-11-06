@@ -15,7 +15,7 @@ const TEST_ICON =
  *   1. `ohos::BASE_PATH.set` / `MODULE_NAME.set`
  *   2. `tray_icon::set_ohos_app`  (transitively calls `muda::set_menu_client`)
  *   3. `window_vibrancy::set_ohos_app`
- *   4. `tauri_runtime_wry::set_ohos_window_client` (registers WebviewBridgePlugin
+ *   4. `tauri_runtime_wry::set_ohos_app` (registers WebviewBridgePlugin
  *      + WindowBridgePlugin)
  *   5. `with_openharmony_app`
  *
@@ -54,7 +54,7 @@ export const ohosInitTests: TestCase[] = [
       const failures: string[] = [];
 
       // ── Leg 1: window client ──
-      // Exercises tauri_runtime_wry::set_ohos_window_client → registered
+      // Exercises tauri_runtime_wry::set_ohos_app → registered
       // WebviewBridgePlugin + WindowBridgePlugin. If dropped, scaleFactor /
       // innerPosition reject with "not initialized" / "Unknown OS sub-window".
       try {

@@ -4,15 +4,30 @@ use std::sync::{Mutex, OnceLock};
 pub use openharmony_ability_derive;
 pub use tauri_runtime::OHOSWindowKind;
 
+/// OHOS entry-point attribute -- re-export of
+/// [`tauri_macros::ohos_entry_point`](../tauri_macros/attr.ohos_entry_point.html)
+/// (issue Eulogizethesun/tauri#242).
+///
+/// Expands to the same glue as [`crate::mobile_entry_point`]; exists so the
+/// two-line form names the actual platform model on every device form (the
+/// Ability/NAPI entry is required on the 2in1 desktop form too, where
+/// `cfg(mobile)` is false). See the macro docs for the full contract:
+///
+/// ```rust,ignore
+/// #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// #[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
+/// pub fn run() { /* ... */ }
+/// ```
+pub use tauri_macros::ohos_entry_point as entry_point;
+
 /// Explicit re-export of the `openharmony-ability` types used by tauri and its macros.
 ///
 /// Converged from a blanket `pub use openharmony_ability;` to an explicit list
 /// so the coupling surface is visible and auditable.
 pub mod openharmony_ability {
-  pub use ::openharmony_ability::OpenHarmonyApp;
   pub use ::openharmony_ability::get_main_thread_env;
   pub use ::openharmony_ability::version;
-  pub use ::openharmony_ability::menu;
+  pub use ::openharmony_ability::OpenHarmonyApp;
 }
 
 pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(None);
@@ -20,6 +35,11 @@ pub static APP: Mutex<Option<openharmony_ability::OpenHarmonyApp>> = Mutex::new(
 pub static BASE_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 pub static MODULE_NAME: OnceLock<Option<String>> = OnceLock::new();
+
+/// HAP module name from the ability init context (`currentHapModuleInfo.name`,
+/// e.g. `entry_desktop`). Distinct from [`MODULE_NAME`], which carries the
+/// `.so` library name (e.g. `api_lib`).
+pub static HAP_MODULE_NAME: OnceLock<Option<String>> = OnceLock::new();
 
 pub static PLUGIN_MANAGER: Mutex<Option<napi_ohos::bindgen_prelude::ObjectRef>> = Mutex::new(None);
 
@@ -46,6 +66,46 @@ pub type RunCommandTsfn =
 pub static RUN_COMMAND_TSFN: OnceLock<RunCommandTsfn> = OnceLock::new();
 
 pub static RUN_COMMAND_QUEUE: Mutex<VecDeque<RunCommandArgs>> = Mutex::new(VecDeque::new());
+
+/// Initializes the OHOS runtime singletons from the global [`APP`] instance
+/// and returns the app handle.
+///
+/// Called once by `Builder::build` before the runtime is created. Panics when
+/// the app instance is missing: the entry-point macro must run first to
+/// install it (see the panic message for the correct attribute on OHOS).
+pub fn init() -> openharmony_ability::OpenHarmonyApp {
+  let ohos_app = APP.lock().unwrap().clone().expect(
+    "OpenHarmony app instance not initialized -- the entry-point macro must run before Builder::build. Use #[cfg_attr(target_env = \"ohos\", tauri::ohos::entry_point)] (all device forms): on the 2in1/desktop form cfg(mobile) is always false, so a lone #[cfg_attr(mobile, tauri::mobile_entry_point)] never expands",
+  );
+  BASE_PATH.set(ohos_app.base_path()).ok();
+  MODULE_NAME.set(ohos_app.module_name()).ok();
+  HAP_MODULE_NAME.set(ohos_app.hap_module_name()).ok();
+  #[cfg(feature = "tray-icon")]
+  {
+    tray_icon::set_ohos_app(ohos_app.clone());
+  }
+  // Initialize vibrancy WindowClient (no feature gate — window-vibrancy is always a dep).
+  window_vibrancy::set_ohos_app(&ohos_app);
+  // Initialize runtime-wry's OHOS bridge plugins for window/webview/url
+  // operations (gated like tray-icon above: tauri-runtime-wry is an optional
+  // dep behind the `wry` feature; consumers building tauri with
+  // default-features=false and no `wry` feature must still compile on OHOS).
+  #[cfg(feature = "wry")]
+  tauri_runtime_wry::set_ohos_app(&ohos_app);
+  // Register the Rust-side app-control bridge plugin (id="ohos.app-control").
+  // tao's exit chain (ControlFlow::Exit → LoopDestroyed → terminate →
+  // ProcessManager.exit) and process::restart (ApplicationContext.restartApp)
+  // both call it through the MainThreadSync bridge; without this Rust-side
+  // declaration the ArkTS configurePlugins flow never installs it and every
+  // terminate/restart fails with "Bridge plugin 'ohos.app-control' is not
+  // installed for '<module>'" (found during issue #100 device verification).
+  if let Err(e) =
+    ohos_app.register_plugin(openharmony_ability_plugin_app_control::AppControlBridgePlugin)
+  {
+    log::error!("[tauri] failed to register AppControlBridgePlugin: {e}");
+  }
+  ohos_app
+}
 
 pub fn dispatch_run_command(args: RunCommandArgs) {
   RUN_COMMAND_QUEUE

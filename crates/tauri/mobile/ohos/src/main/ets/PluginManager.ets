@@ -4,14 +4,16 @@ import { common } from '@kit.AbilityKit';
 interface PluginInstance {
   name: string;
   instance: Plugin;
+  // Serialized JSON config from tauri.conf.json's `plugins` section for this
+  // plugin — the ArkTS counterpart of Android's PluginHandle.config.
+  config: string;
 }
 
 interface ErrorResponse {
   message: string;
-}
-
-export interface TauriGlobal {
-  pluginManager: PluginManager;
+  // Machine-readable error code (e.g. biometric's 'userCancel'). Optional —
+  // matches the Rust-side ErrorResponse's optional `code` field.
+  code?: string;
 }
 
 type ResponseHandler = (id: number, success: number, payload: string) => void;
@@ -37,8 +39,11 @@ class InvokeImpl implements Invoke {
     handleResponseGlobal(this.id, true, result);
   }
 
-  reject(error: string): void {
+  reject(error: string, code?: string): void {
     const errorResponse: ErrorResponse = { message: error };
+    if (code != null) {
+      errorResponse.code = code;
+    }
     handleResponseGlobal(this.id, false, JSON.stringify(errorResponse));
   }
 }
@@ -54,7 +59,6 @@ function handleResponseGlobal(id: number, success: boolean, payload: string): vo
 }
 
 export class PluginManager {
-  private plugins: Map<string, PluginInstance> = globalPlugins;
   public handlePluginResponse: ResponseHandler | null = null;
 
   setContext(context: common.UIAbilityContext): void {
@@ -63,9 +67,14 @@ export class PluginManager {
 
   load(pluginName: string, plugin: Plugin, config: string): void {
     plugin.context = globalContext;
+    // Hand the config to the plugin too — Plugin.getConfig<T>() reads it
+    // without needing a back-reference to the manager (avoiding an ArkTS
+    // import cycle).
+    plugin.config = config;
     globalPlugins.set(pluginName, {
       name: pluginName,
       instance: plugin,
+      config: config,
     });
     console.info('[PluginManager] Loaded: ' + pluginName);
   }
@@ -118,7 +127,16 @@ export class PluginManager {
 
     if (handler) {
       const invoke = new InvokeImpl(payload, id);
-      handler(invoke);
+      // The handler is user/plugin code — if it throws, the exception would
+      // propagate back into the Rust TSFN callback and this call would never
+      // resolve or reject, leaving the frontend promise pending forever.
+      // Mirrors the Android PluginManager: catch and surface via reject.
+      try {
+        handler(invoke);
+      } catch (e) {
+        console.error('[PluginManager] Command handler threw: ' + e);
+        invoke.reject(String(e));
+      }
     } else {
       console.error('[PluginManager] Command not found: ' + command);
       const errorResponse: ErrorResponse = { message: 'Command not found: ' + command };

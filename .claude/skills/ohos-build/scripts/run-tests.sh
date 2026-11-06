@@ -185,6 +185,21 @@ if [ ! -f "$REPORT_LOCAL" ]; then
     exit 1
 fi
 
+# Step 6b: Stamp provenance into the pulled report (tauri#166 T166D-N4, second
+# round): every report must identify the tree it was generated from. HEAD alone
+# is not enough when the tree carries uncommitted work (the tested HAP is built
+# from the working tree), so we also record the dirty-file count and a sha256
+# prefix of `git diff` — after the batch is committed, a report can be matched
+# to its commit by re-running `git diff <prev-head> <commit> | sha256sum`.
+PROV_HEAD=$(git -C "$PROJECT_ROOT" rev-parse --short=9 HEAD 2>/dev/null || echo unknown)
+PROV_DIRTY=$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null | grep -cv '^??' || echo 0)
+PROV_DIFF=$(git -C "$PROJECT_ROOT" diff 2>/dev/null | sha256sum | cut -c1-16)
+{
+    echo ""
+    echo "---"
+    echo "*Provenance: head \`$PROV_HEAD\`, $PROV_DIRTY uncommitted tracked file(s), diff-sha256 \`$PROV_DIFF\`, device $DEVICE_SN, device-type ${OHOS_DEVICE_TYPE:-desktop}, pulled $(date -u +%Y-%m-%dT%H:%M:%SZ)*"
+} >> "$REPORT_LOCAL"
+
 # Step 7: Analyze report
 echo ""
 echo "=== Test Report ==="

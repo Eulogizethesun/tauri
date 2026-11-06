@@ -4,24 +4,14 @@ use napi_derive_ohos::napi;
 use napi_ohos::bindgen_prelude::{FnArgs, Function, JsObjectValue, ObjectRef};
 use napi_ohos::Env;
 
-#[napi]
-pub fn tauri_set_plugin_manager(_env: &Env, manager: ObjectRef) -> napi_ohos::Result<()> {
-  PLUGIN_MANAGER
-    .lock()
-    .unwrap_or_else(|e| e.into_inner())
-    .replace(manager);
-  println!("[Tauri] PluginManager set from ArkTS");
-  Ok(())
-}
-
 fn create_run_command_tsfn(env: &Env) -> napi_ohos::Result<()> {
   let callback: Function<'_, (), ()> =
     env.create_function_from_closure("run_command_callback", move |_ctx| {
       let env_rc = crate::ohos::openharmony_ability::get_main_thread_env();
       if let Some(env_ref) = env_rc.borrow().as_ref() {
-        let manager_guard = PLUGIN_MANAGER
-          .lock()
-          .map_err(|e| napi_ohos::Error::from_reason(format!("PLUGIN_MANAGER lock poisoned: {e}")))?;
+        let manager_guard = PLUGIN_MANAGER.lock().map_err(|e| {
+          napi_ohos::Error::from_reason(format!("PLUGIN_MANAGER lock poisoned: {e}"))
+        })?;
         if let Some(manager_ref) = manager_guard.as_ref() {
           let manager_obj = manager_ref.get_value(env_ref)?;
           let run_command_fn = manager_obj.get_named_property::<Function<
@@ -30,9 +20,9 @@ fn create_run_command_tsfn(env: &Env) -> napi_ohos::Result<()> {
             (),
           >>("runCommand")?;
 
-          let mut queue = RUN_COMMAND_QUEUE
-            .lock()
-            .map_err(|e| napi_ohos::Error::from_reason(format!("RUN_COMMAND_QUEUE lock poisoned: {e}")))?;
+          let mut queue = RUN_COMMAND_QUEUE.lock().map_err(|e| {
+            napi_ohos::Error::from_reason(format!("RUN_COMMAND_QUEUE lock poisoned: {e}"))
+          })?;
           while let Some(args) = queue.pop_front() {
             run_command_fn.call((args.id, args.plugin_name, args.command, args.payload).into())?;
           }
@@ -48,7 +38,7 @@ fn create_run_command_tsfn(env: &Env) -> napi_ohos::Result<()> {
 
   RUN_COMMAND_TSFN.set(tsfn).ok();
 
-  println!("[Tauri] run_command TSFN created");
+  log::debug!("[Tauri] run_command TSFN created");
   Ok(())
 }
 
@@ -59,7 +49,7 @@ pub fn tauri_init_plugins(env: &Env, manager: ObjectRef) -> napi_ohos::Result<St
     .unwrap_or_else(|e| e.into_inner());
   let count = plugins.len();
 
-  println!(
+  log::debug!(
     "[Tauri] tauri_init_plugins called, {} plugins to register",
     count
   );
@@ -89,7 +79,12 @@ pub fn tauri_init_plugins(env: &Env, manager: ObjectRef) -> napi_ohos::Result<St
     "[]".to_string()
   });
 
-  println!("[Tauri] Plugins JSON: {}", plugins_json);
+  // The full config JSON is returned to ArkTS (and serialized below) — never
+  // log it; plugin configs may embed secrets. Log the plugin names only.
+  log::debug!(
+    "[Tauri] plugins to register: {:?}",
+    plugins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>()
+  );
 
   Ok(plugins_json)
 }
@@ -114,14 +109,11 @@ pub fn tauri_handle_plugin_response(id: i32, success: bool, payload: String) {
 pub fn tauri_send_channel_data(channel_id: u32, data: String) {
   if let Some(channels) = CHANNELS.get() {
     let channel = {
-      let guard = channels
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+      let guard = channels.lock().unwrap_or_else(|e| e.into_inner());
       guard.get(&channel_id).cloned()
     };
     if let Some(channel) = channel {
-      let json: serde_json::Value =
-        serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
+      let json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::Value::Null);
       let _ = channel.send(json);
     } else {
       log::warn!(

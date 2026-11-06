@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! A Cloudflare Worker that serves the Tauri permission schemas over HTTP.
+
 use axum::{routing::get, Router};
 use tower_service::Service;
 use worker::*;

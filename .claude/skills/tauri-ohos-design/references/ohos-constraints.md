@@ -41,6 +41,8 @@
 | Tray 仅在 desktop 模式可用 | mobile 设备无 tray 功能 |
 | Tray `rect()` 始终返回 None | StatusBar API 不提供图标位置/尺寸。`AvoidArea.topRect` 返回整个状态栏区域, 不是单个图标 |
 | Tray 事件数据有限 | 只有 `iconClickType` ("leftClick"/"rightClick") 和 `menuCode`。无坐标、无双击、无 hover、无中键 |
+| Tray 菜单项无法禁用 | StatusBar API 的 `StatusBarMenuItem` 无 enabled 字段，禁用标志被忽略、禁用项仍可点仍触发命令（tray-icon 侧每进程 warn 一次）。menubar/弹窗菜单路径不受限 |
+| Tray 右键菜单子菜单封顶一层 | StatusBar API 的 `StatusBarSubMenuItem` 无嵌套字段（`@hms.pcService.statusBarManager.d.ts`），二层以上子菜单子项被丢弃（tray-icon 侧有一次 warn 提示）、嵌套标题降级为可点叶子项。muda menubar 路径（`MenuBarComponent` 递归渲染）多层不受限 |
 
 ### 1.5 tao OHOS 层 ExternalError 错误转换限制
 
@@ -149,7 +151,7 @@
 |------|------|
 | Rust 创建窗口可能早于 ArkTS controller 就绪 | 必须用 `ProxyJsHelper` 代理模式: 缓存操作 → controller 就绪后回放。`WindowManager` 三级队列: `pendingInits` / `pendingJsHelperProxies` / `pendingUrls` |
 | `setColorMode` 必须异步调用 | `setColorMode` 同步触发 `onConfigurationUpdate` 回调 → 回调 Rust → 主线程死锁。必须 `setTimeout(() => setColorMode(), 0)` 延迟到下一事件循环 |
-| 多窗口状态隔离: `AppStorage` 是全局的 | `MainPage` 用 `@StorageProp`（全局 `AppStorage`）, `FloatPage` 用 `@LocalStorageProp`（per-window 隔离）。全局状态（如菜单 JSON）必须带 `windowId` 键 |
+| 多窗口状态隔离: `AppStorage` 是全局的 | `MainPage` 用 `@StorageProp`（全局 `AppStorage`）, `SubWindowPage` 用 `@LocalStorageProp`（per-window 隔离）。全局状态（如菜单 JSON）必须带 `windowId` 键 |
 
 ---
 
@@ -221,9 +223,10 @@ version::can_i_use("SystemCapability.xxx")  // 设备硬件能力检测
 
 | 模式 | 说明 | 示例 |
 |------|------|------|
-| 静默跳过 | 版本不满足时直接跳过，不写 else，不打日志 | 视觉效果、增强功能 |
+| 统一 Err（接口契约面默认） | 公开 API/命令在 OHOS 无实现或版本不足时**返回 Err**，错误信息指明不支持或所需 API 版本（见 6.4） | `deep-link register`、`global-shortcut`(<API14) |
+| 静默跳过（仅内部增强行为） | 纯内部视觉效果/增强动作不满足条件时直接跳过，不写 else，不打日志 | 窗口装饰微调、非契约的视觉增强 |
 | 函数降级 | 新旧 API 都有实现 | `activate_v2()` vs `activate()` |
-| 强制回退值 | 返回安全的默认值 | 主题回退为 Light |
+| 强制回退值 | 返回安全的默认值 | 主题回退为 Light、`clipboard read_text`（READ_PASTEBOARD 缺失时回退空串） |
 | 参数覆写 | 修改参数使功能安全降级 | 低版本强制不透明 |
 | canIUse + 版本号 | 先硬件能力，后软件版本 | 定位服务 |
 
@@ -233,10 +236,10 @@ version::can_i_use("SystemCapability.xxx")  // 设备硬件能力检测
 |------|------|
 | **tauri api demo 默认 API 版本为 12** | 应用 `compileSdkVersion` / `compatibleSdkVersion` 配置为 API 12（最低版本）。使用 > 12 的 API 必须加版本守卫，否则低版本设备崩溃 |
 | **版本隔离是底层仓的职责** | 给 tao/wry/muda/openharmony-ability 内部使用，不是给应用开发者用的 |
-| **静默跳过是默认策略** | 与 Windows/macOS 一致：不满足条件时直接跳过，不写 else 分支，不打日志 |
+| **公开接口统一 Err（2026-09 定稿策略）** | 对应用开发者暴露的命令/API 在 OHOS 无实现或版本不足时返回 Err，**不静默 no-op、不返回假默认值**（两条均仅指无实现/版本不足场景；运行时权限受限的回退值——如 `clipboard read_text` 缺 READ_PASTEBOARD 回退空串——见 6.3 强制回退值）。错误信息两种规范：平台不支持 `"{op} is not supported on OpenHarmony"`（可带简短原因后缀，op 为 camelCase JS API 名）；版本不足 `"{op} requires API level {N}+ on OpenHarmony (current: {M})"`（M 动态读 `sdk_api_version()`）。静默降级仅用于不构成接口契约的内部增强行为（视觉效果等） |
 | **区分版本体系** | OpenHarmony 接口用 `sdk_api_version()`，HarmonyOS 专有用 `distribution_api_version()`，不要混用 |
 | **组合检查先硬件后软件** | 先 `can_i_use()`，后版本号 |
-| **ArkTS 侧也有版本守卫** | `deviceInfo.sdkApiVersion` / `deviceInfo.distributionOSApiVersion` / `canIUse()` |
+| **ArkTS 侧也有版本守卫** | `deviceInfo.sdkApiVersion` / `deviceInfo.distributionOSApiVersion` / `canIUse()`；ArkTS 侧版本不足同样走统一 Err 文案（如 statusbar add/remove 低于 API14） |
 
 ### 6.5 完整参考
 

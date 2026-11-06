@@ -67,7 +67,12 @@ impl<R: Runtime> MenuManager<R> {
     #[cfg(target_os = "macos")]
     return None;
 
-    #[cfg_attr(target_os = "macos", allow(unused_variables, unreachable_code))]
+    // On OHOS the menubar is driven through the OHOS menu bridge, so neither
+    // the cloned menu nor the `raw` window handle is used in the closure below.
+    #[cfg_attr(
+      any(target_os = "macos", target_env = "ohos"),
+      allow(unused_variables, unreachable_code)
+    )]
     if let Some(menu) = &window_menu {
       let menu = menu.menu.clone();
       Some(move |raw: tauri_runtime::window::RawWindow<'_>| {

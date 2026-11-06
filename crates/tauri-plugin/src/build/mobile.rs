@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use super::{build_var, cfg_alias};
+use super::build_var;
 
 #[cfg(target_os = "macos")]
 pub fn update_entitlements<F: FnOnce(&mut plist::Dictionary)>(f: F) -> Result<()> {
@@ -125,16 +125,7 @@ pub(crate) fn setup(
   #[allow(unused_variables)] ohos_path: Option<PathBuf>,
 ) -> Result<()> {
   let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-  let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-  let mobile = if target_env == "ohos" {
-    println!("cargo:rerun-if-env-changed=OHOS_DEVICE_TYPE");
-    let device_type = std::env::var("OHOS_DEVICE_TYPE").unwrap_or_else(|_| "mobile".to_string());
-    device_type != "desktop"
-  } else {
-    target_os == "ios" || target_os == "android"
-  };
-  cfg_alias("desktop", !mobile);
-  cfg_alias("mobile", mobile);
+  super::cfg_aliases();
 
   match target_os.as_str() {
     "android" => {
@@ -181,7 +172,7 @@ pub(crate) fn setup(
       }
     }
     _ => {
-      if target_env == "ohos" {
+      if std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "ohos" {
         if let Some(path) = ohos_path {
           let manifest_dir = build_var("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
           let source = manifest_dir.join(path);

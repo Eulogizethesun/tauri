@@ -25,7 +25,9 @@ anyhow = "1"
 tauri-plugin-sample = { path = "./tauri-plugin-sample/" }
 tauri-plugin-http = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 tauri-plugin-os = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
-tauri-plugin-fs = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+tauri-plugin-fs = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git", features = [
+  "watch",
+] }
 tauri-plugin-persisted-scope = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 tauri-plugin-shell = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 tauri-plugin-clipboard-manager = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
@@ -89,6 +91,9 @@ tauri-plugin-accessibility = { git = "https://github.com/Eulogizethesun/plugins-
 tauri-plugin-screenshot = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 # OHOS-only: passive app-continuation restore queries
 tauri-plugin-continuation = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
+# OHOS-only: IOTA Stronghold secret management (pure-Rust plugin, no bridge;
+# ohos builds need a prebuilt libsodium via SODIUM_LIB_DIR — see plugin README)
+tauri-plugin-stronghold = { git = "https://github.com/Eulogizethesun/plugins-workspace", branch = "ohdev-git" }
 muda = { git = "https://github.com/Eulogizethesun/muda", branch = "ohdev-git" }
 tray-icon = { git = "https://github.com/Eulogizethesun/tray-icon", branch = "ohdev-git" }
 
@@ -118,11 +123,3 @@ cov-dump = []
 # Fault injection commands (OHOS only). Enables invoke('fault_injection_set_rule')
 # and invoke('fault_injection_clear') to inject bridge call failures for coverage.
 fault-injection = ["openharmony-ability/fault-injection"]
-
-[profile.release]
-# Enable debug info (most important for OHOS panic/crash debugging)
-debug = true
-
-# Optional: preserve line numbers and variable names for gdb/lldb/backtrace
-strip = false
-opt-level = 0  # Disable optimization for clearest debug experience

@@ -75,6 +75,12 @@
 **备选**：用 tao `WindowId`（ZST）作 key——否决，ZST 无法区分窗口。用 ArkTS window.Window 实例
 句柄——否决，跨 NAPI 边界不稳定且与 Rust window_id 体系脱节。
 
+（2026-09-16 扩展注记：[multi-uiability-windows](../multi-uiability-windows/design.md)
+落地后，本 key 体系自然延伸覆盖 UIAbility 实例窗——`start_ui_ability` 预分配 id 同样取自
+`NEXT_WINDOW_ID`（tao `Window::new` UIAbility 分支经 `next_window_id()`），即主窗口=0、
+Float 子窗与 UIAbility 实例窗共用同一递增命名空间（1+），per-window rect HashMap 键域
+无需任何改动即服务全部三类窗口；D1 的"零新 id 体系"结论在新架构下依然成立。）
+
 ### D2. windowId 透传路径：ArkTS 包装 options，Rust 闭包读取
 
 **选择**：在 ArkTS 侧将原生 `window.RectChangeOptions`（仅含 `rect`/`reason`，经华为官方确认**不含**

@@ -126,3 +126,14 @@ export OHOS_DEVICE_TYPE="${OHOS_DEVICE_TYPE:-desktop}"
 export OHOS_NDK_HOME="$DEV_ECO_STUDIO_INSTALL_PATH\\sdk\\default\\openharmony"
 # hvigorw expects DEVECO_SDK_HOME
 export DEVECO_SDK_HOME="$DEV_ECO_STUDIO_INSTALL_PATH"
+
+# ─── Stronghold 交叉编译 libsodium 预编译库 ───
+# libsodium-sys-stable 的 build script 在 Windows 宿主上无法跑 ./configure 产出
+# aarch64-unknown-linux-ohos 工件（os error 193），必须指向预编译库。工作区约定位置
+# $PROJECT_ROOT/../libsodium-ohos/lib。注意：该默认仅适用 aarch64 真机构建；x86_64
+# 模拟器构建须显式 export SODIUM_LIB_DIR 指向 libsodium-ohos-x86_64/lib（显式值优先
+# 于本默认，避免误用 aarch64 库拖到链接期才报错）。
+# 已设值优先；目录不存在则不设，保留 build.rs 原报错指引（无预编译库的项目不受影响）。
+if [ -z "$SODIUM_LIB_DIR" ] && [ -d "$PROJECT_ROOT/../libsodium-ohos/lib" ]; then
+    export SODIUM_LIB_DIR="$(cd "$PROJECT_ROOT/../libsodium-ohos/lib" && pwd -W)"
+fi

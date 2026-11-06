@@ -410,8 +410,13 @@ impl<R: Runtime> WebviewManager<R> {
     InitJavascript {
       pattern_script,
       ipc_script,
+      // core.js uses os_name only in convertFileSrc, where the checked names
+      // are `windows`/`android`: both `linux` (the previous value here) and
+      // `ohos` take the generic `protocol://localhost/...` branch, so the
+      // consolidation is output-neutral. The app loading its own assets
+      // through the protocol layer exercises this path on device.
       core_script: &CoreJavascript {
-        os_name: std::env::consts::OS,
+        os_name: crate::os_name(),
         protocol_scheme: if use_https_scheme { "https" } else { "http" },
         invoke_key: self.invoke_key(),
       }
@@ -572,7 +577,7 @@ impl<R: Runtime> WebviewManager<R> {
         .initialization_scripts
         .push(InitializationScript {
           script: HotkeyZoom {
-            os_name: std::env::consts::OS,
+            os_name: crate::os_name(),
           }
           .render_default(&Default::default())?
           .into_string(),

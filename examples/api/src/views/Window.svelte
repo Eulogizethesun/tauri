@@ -149,18 +149,31 @@
   }
 
   async function hide() {
-    let visible = await webviewMap[selectedWebview].isVisible()
-    onMessage('window is ' + (visible ? 'visible' : 'invisible'))
-    await webviewMap[selectedWebview].hide()
-
-    setTimeout(async () => {
-      visible = await webviewMap[selectedWebview].isVisible()
+    // The default target is the main window, whose hide() rejects on OHOS per
+    // the #238 contract (issue Eulogizethesun/tauri#246) — catch and report
+    // instead of leaking an unhandled promise rejection. The isVisible/show
+    // calls resolve but get the same guard (incl. the deferred 2s callback,
+    // which no outer try/catch can cover).
+    try {
+      let visible = await webviewMap[selectedWebview].isVisible()
       onMessage('window is ' + (visible ? 'visible' : 'invisible'))
+      await webviewMap[selectedWebview].hide()
 
-      await webviewMap[selectedWebview].show()
-      visible = await webviewMap[selectedWebview].isVisible()
-      onMessage('window is ' + (visible ? 'visible' : 'invisible'))
-    }, 2000)
+      setTimeout(async () => {
+        try {
+          visible = await webviewMap[selectedWebview].isVisible()
+          onMessage('window is ' + (visible ? 'visible' : 'invisible'))
+
+          await webviewMap[selectedWebview].show()
+          visible = await webviewMap[selectedWebview].isVisible()
+          onMessage('window is ' + (visible ? 'visible' : 'invisible'))
+        } catch (e) {
+          onMessage(`show/visibility check failed: ${e}`)
+        }
+      }, 2000)
+    } catch (e) {
+      onMessage(`hide failed: ${e}`)
+    }
   }
 
   async function disable() {
@@ -308,17 +321,27 @@
     loadWindowPosition()
     loadWindowSize()
   })
+  // The maximizable/minimizable/closable setters reject on the OHOS main
+  // window per the #238 contract (issue Eulogizethesun/tauri#246);
+  // setResizable resolves there but is guarded the same way (the issue
+  // bullet lists all four). The always-on effects are guarded too:
+  // setAlwaysOnBottom rejects unconditionally on OHOS (it produced an
+  // unhandled rejection on page open, which the #246 acceptance criterion
+  // forbids) and setAlwaysOnTop rejects below API 14. These effects are
+  // fire-and-forget (cannot await), so each reports its rejection through
+  // onMessage instead of leaking an unhandled promise rejection; the
+  // remaining setters on this page have no OHOS rejection path.
   $effect(() => {
-    webviewMap[selectedWebview]?.setResizable(resizable)
+    webviewMap[selectedWebview]?.setResizable(resizable)?.catch((e) => onMessage(`setResizable failed: ${e}`))
   })
   $effect(() => {
-    webviewMap[selectedWebview]?.setMaximizable(maximizable)
+    webviewMap[selectedWebview]?.setMaximizable(maximizable)?.catch((e) => onMessage(`setMaximizable failed: ${e}`))
   })
   $effect(() => {
-    webviewMap[selectedWebview]?.setMinimizable(minimizable)
+    webviewMap[selectedWebview]?.setMinimizable(minimizable)?.catch((e) => onMessage(`setMinimizable failed: ${e}`))
   })
   $effect(() => {
-    webviewMap[selectedWebview]?.setClosable(closable)
+    webviewMap[selectedWebview]?.setClosable(closable)?.catch((e) => onMessage(`setClosable failed: ${e}`))
   })
   $effect(() => {
     maximized
@@ -329,10 +352,10 @@
     webviewMap[selectedWebview]?.setDecorations(decorations)
   })
   $effect(() => {
-    webviewMap[selectedWebview]?.setAlwaysOnTop(alwaysOnTop)
+    webviewMap[selectedWebview]?.setAlwaysOnTop(alwaysOnTop)?.catch((e) => onMessage(`setAlwaysOnTop failed: ${e}`))
   })
   $effect(() => {
-    webviewMap[selectedWebview]?.setAlwaysOnBottom(alwaysOnBottom)
+    webviewMap[selectedWebview]?.setAlwaysOnBottom(alwaysOnBottom)?.catch((e) => onMessage(`setAlwaysOnBottom failed: ${e}`))
   })
   $effect(() => {
     webviewMap[selectedWebview]?.setContentProtected(contentProtected)

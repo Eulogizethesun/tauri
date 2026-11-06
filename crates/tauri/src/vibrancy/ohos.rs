@@ -16,24 +16,20 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
   } = effects;
 
   let window_id = match window.window.dispatcher.ohos_window_id() {
-    Ok(Some(id)) => {
-      eprintln!("[vibrancy::tauri] ohos_window_id OK id={}", id);
-      id
-    }
+    Ok(Some(id)) => id,
     Ok(None) => {
-      eprintln!("[vibrancy::tauri] ohos_window_id returned None — tao window_id not set (registration race?); skipping effects");
-      log::warn!("[vibrancy] ohos_window_id returned None — tao window_id not set; skipping effects");
+      log::warn!(
+        "[vibrancy] ohos_window_id returned None — tao window_id not set; skipping effects"
+      );
       return;
     }
     Err(e) => {
-      eprintln!("[vibrancy::tauri] ohos_window_id failed: {:?}", e);
       log::error!("[vibrancy] ohos_window_id failed: {:?}", e);
       return;
     }
   };
 
   let blur_radius = radius.unwrap_or(20.0);
-  eprintln!("[vibrancy::tauri] apply_effects: window_id={} blur_radius={}", window_id, blur_radius);
 
   // Pick the first effect; OHOS approximates Blur/Acrylic via blur + tint.
   // Mica/Tabbed series is unsupported (skipped); macOS-specific effects fall back to blur.
@@ -61,8 +57,17 @@ pub fn apply_effects<R: Runtime>(window: &Window<R>, effects: WindowEffectsConfi
     _ => window_vibrancy::apply_ohos_blur(window_id, blur_radius),
   };
   match result {
-    Ok(_) => log::info!("[vibrancy] applied effect {:?} to window_id {}", effect, window_id),
-    Err(e) => log::error!("[vibrancy] apply effect {:?} to window_id {} failed: {}", effect, window_id, e),
+    Ok(_) => log::info!(
+      "[vibrancy] applied effect {:?} to window_id {}",
+      effect,
+      window_id
+    ),
+    Err(e) => log::error!(
+      "[vibrancy] apply effect {:?} to window_id {} failed: {}",
+      effect,
+      window_id,
+      e
+    ),
   }
 }
 

@@ -59,29 +59,54 @@ jobs:
 
       - name: Checkout sibling repos for [patch] resolution
         shell: bash
+        env:
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
         run: |
-          # Cargo.toml [patch] references local paths to sibling repos
-          # Need to checkout these repos to the correct location
+          # The root Cargo.toml [patch.crates-io] path entries (wry, tao, muda,
+          # tray-icon, openharmony-ability, cargo-mobile2, window-vibrancy) and
+          # the examples' path dependencies into plugins-workspace and
+          # sentry-tauri must exist as sibling checkouts — cargo validates
+          # patch paths during resolution even when the patched crate is not
+          # in the graph, and it loads every workspace member's path
+          # dependencies (examples/api is a member), so a missing sibling
+          # fails with an error that looks nothing like the actual cause.
+          # Clone failures are therefore fatal, not "skipped".
+          #
+          # Branch selection: a coordinated PR set (tauri + tao + wry + muda +
+          # tray-icon + openharmony-ability + plugins-workspace) lands its
+          # cross-repo contract in each repo's PR head before any single repo
+          # merges, so try the PR head's owner/ref first (the set shares the
+          # fork owner and branch name); otherwise fall back to this
+          # organization's `ohdev` branch. The forks' default branches (dev /
+          # v2 / master) do NOT carry the OHOS adaptation or the OHOS-only
+          # plugins.
           SIBLINGS=(
-            "Eulogizethesun/wry"
-            "Eulogizethesun/tao"
-            "Eulogizethesun/muda"
-            "Eulogizethesun/tray-icon"
-            "Eulogizethesun/openharmony-ability"
+            "wry"
+            "tao"
+            "muda"
+            "tray-icon"
+            "openharmony-ability"
+            "cargo-mobile2"
+            "window-vibrancy"
+            "plugins-workspace"
+            "sentry-tauri"
           )
-          for repo in "${SIBLINGS[@]}"; do
-            name=$(basename "$repo")
-            echo "::group::Checkout $repo"
-            git clone --depth 1 "https://github.com/${repo}.git" "../${name}" 2>/dev/null || \
-              echo "⚠️ Failed to clone $repo, skipping"
+          for name in "${SIBLINGS[@]}"; do
+            echo "::group::Checkout $name"
+            if [ -n "$PR_HEAD_OWNER" ] && [ -n "$PR_HEAD_REF" ] && \
+               git clone --depth 1 --branch "$PR_HEAD_REF" \
+                 "https://github.com/${PR_HEAD_OWNER}/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out ${PR_HEAD_OWNER}/${name}@${PR_HEAD_REF} (coordinated PR head)"
+            elif git clone --depth 1 --branch ohdev \
+                 "https://github.com/Eulogizethesun/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out Eulogizethesun/${name}@ohdev (fallback)"
+            else
+              echo "::error::Failed to clone sibling ${name} (tried ${PR_HEAD_OWNER:-?}/${name}@${PR_HEAD_REF:-?}, then Eulogizethesun/${name}@ohdev) — [patch]/path dependencies cannot resolve without it"
+              exit 1
+            fi
             echo "::endgroup::"
           done
-
-          # plugins-workspace (required by examples/api)
-          echo "::group::Checkout plugins-workspace"
-          git clone --depth 1 --branch v2 "https://github.com/Eulogizethesun/plugins-workspace.git" "../plugins-workspace" 2>/dev/null || \
-            echo "⚠️ Failed to clone plugins-workspace, skipping"
-          echo "::endgroup::"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -114,21 +139,42 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Checkout sibling repos for [patch] resolution
+        shell: bash
+        env:
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
         run: |
+          # Same sibling set and branch-selection rule as the host-compile-check
+          # job above: full [patch] path set + plugins-workspace and
+          # sentry-tauri (examples' path deps), coordinated PR head first,
+          # Eulogizethesun@ohdev fallback, fatal on failure (a missing sibling
+          # breaks dependency resolution with a misleading error).
           SIBLINGS=(
-            "Eulogizethesun/wry"
-            "Eulogizethesun/tao"
-            "Eulogizethesun/muda"
-            "Eulogizethesun/tray-icon"
-            "Eulogizethesun/openharmony-ability"
+            "wry"
+            "tao"
+            "muda"
+            "tray-icon"
+            "openharmony-ability"
+            "cargo-mobile2"
+            "window-vibrancy"
+            "plugins-workspace"
+            "sentry-tauri"
           )
-          for repo in "${SIBLINGS[@]}"; do
-            name=$(basename "$repo")
-            git clone --depth 1 "https://github.com/${repo}.git" "../${name}" 2>/dev/null || \
-              echo "⚠️ Failed to clone $repo, skipping"
+          for name in "${SIBLINGS[@]}"; do
+            echo "::group::Checkout $name"
+            if [ -n "$PR_HEAD_OWNER" ] && [ -n "$PR_HEAD_REF" ] && \
+               git clone --depth 1 --branch "$PR_HEAD_REF" \
+                 "https://github.com/${PR_HEAD_OWNER}/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out ${PR_HEAD_OWNER}/${name}@${PR_HEAD_REF} (coordinated PR head)"
+            elif git clone --depth 1 --branch ohdev \
+                 "https://github.com/Eulogizethesun/${name}.git" "../${name}" 2>/dev/null; then
+              echo "checked out Eulogizethesun/${name}@ohdev (fallback)"
+            else
+              echo "::error::Failed to clone sibling ${name} (tried ${PR_HEAD_OWNER:-?}/${name}@${PR_HEAD_REF:-?}, then Eulogizethesun/${name}@ohdev) — [patch]/path dependencies cannot resolve without it"
+              exit 1
+            fi
+            echo "::endgroup::"
           done
-          git clone --depth 1 --branch v2 "https://github.com/Eulogizethesun/plugins-workspace.git" "../plugins-workspace" 2>/dev/null || \
-            echo "⚠️ Failed to clone plugins-workspace, skipping"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -273,6 +319,48 @@ jobs:
           LINT_BODY: ${{ steps.lint.outputs.body }}
 
   # ═══════════════════════════════════════════════════
+  # JsImage variant sync check
+  # The OHOS JsImage (crates/tauri/src/image/mod.rs) duplicates upstream's
+  # enum + a DataUri variant. Fails when the two variant sets drift, so the
+  # OHOS copy must be re-synced (see the MAINTENANCE CONTRACT comment there).
+  # ═══════════════════════════════════════════════════
+  jsimage-sync-check:
+    name: JsImage Variant Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check OHOS JsImage variants match upstream + DataUri
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=crates/tauri/src/image/mod.rs
+
+          extract_variants() {
+            # $1: file path, $2: ordinal of the `pub enum JsImage` block
+            # (1 = upstream enum, 2 = the OHOS cfg'd copy)
+            local start end
+            start=$(grep -n "^pub enum JsImage" "$1" | sed -n "$2p" | cut -d: -f1)
+            if [ -z "$start" ]; then echo ""; return; fi
+            end=$(awk -v s="$start" 'NR>s && /^}/{print NR; exit}' "$1")
+            sed -n "${start},${end}p" "$1" | grep -oE '^  [A-Z][A-Za-z0-9]*' | tr -d ' ' | sort | tr '\n' ' ' | sed 's/ $//'
+          }
+
+          curl -fsSL https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri/src/image/mod.rs -o /tmp/upstream-image.rs
+          UPSTREAM=$(extract_variants /tmp/upstream-image.rs 1)
+          OHOS=$(extract_variants "$FILE" 2)
+
+          echo "upstream variants: ${UPSTREAM:-<none>}"
+          echo "ohos variants:     ${OHOS:-<none>}"
+
+          # Expected = upstream's variant set + DataUri, compared as sorted sets
+          EXPECTED=$(printf '%s DataUri\n' "$UPSTREAM" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+          if [ -z "$UPSTREAM" ] || [ "$OHOS" != "$EXPECTED" ]; then
+            echo "::error::OHOS JsImage variants drifted from upstream — sync the OHOS enum and its Deserialize impl in $FILE (expected upstream variants + DataUri)"
+            exit 1
+          fi
+
+  # ═══════════════════════════════════════════════════
   # ⑥ Claude AI code review
   # Deep review based on OHOS constraints checklist
   # Runs independently of compile/tests; executes even if compile fails
@@ -344,7 +432,7 @@ jobs:
             - [ ] `@Builder` requiring `this` is inside `@Component` (module-level @Builder has no this)
             - [ ] `onLoadIntercept` return value is inverted `!ret` (semantics opposite to Tauri on_navigation)
             - [ ] WebView events pre-build registered inside `@Builder`
-            - [ ] Multi-window state uses `@LocalStorageProp` isolation (FloatPage), not global `@StorageProp`
+            - [ ] Multi-window state uses `@LocalStorageProp` isolation (SubWindowPage), not global `@StorageProp`
             - [ ] `setColorMode` called asynchronously (`setTimeout(..., 0)`) to avoid deadlock
 
             ### E. Platform Isolation
@@ -407,7 +495,7 @@ jobs:
   # ═══════════════════════════════════════════════════
   gate1-summary:
     name: Gate 1 Summary
-    needs: [host-compile-check, host-tests, ohos-pattern-lint, claude-review]
+    needs: [host-compile-check, host-tests, ohos-pattern-lint, jsimage-sync-check, claude-review]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -429,7 +517,7 @@ jobs:
             // Filter Gate 1 related jobs
             const gate1Prefixes = [
               'Host Compile', 'Host Tests',
-              'OHOS Pattern Lint', 'Claude Code Review'
+              'OHOS Pattern Lint', 'JsImage Variant Sync', 'Claude Code Review'
             ];
             const relevant = checks.check_runs.filter(c =>
               gate1Prefixes.some(p => c.name.startsWith(p))

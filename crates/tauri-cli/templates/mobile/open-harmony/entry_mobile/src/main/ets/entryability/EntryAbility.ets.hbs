@@ -1,27 +1,7 @@
 import {
   NativeAbility,
-  LazyPlugin,
-  AccessibilityPlugin,
-  AccountPlugin,
-  AppControlPlugin,
-  AutostartPlugin,
-  ClipboardPlugin,
-  DeepLinkPlugin,
-  FilesPlugin,
-  // Alias to avoid name collision with the JS-layer GlobalShortcutPlugin from
-  // '@tauri/plugin-global-shortcut' (a Tauri Plugin), which is imported below by the
-  // plugins loop and used in STATIC_PLUGINS. The bridge plugin id is declared in
-  // Rust (ApplicationLifecycle.bridgePlugins), so renaming the ArkTS import is safe.
-  GlobalShortcutPlugin as GlobalShortcutBridgePlugin,
-  MenuPlugin,
-  PermissionPlugin,
-  ResourcePlugin,
-  StatusbarPlugin,
-  UpdaterPlugin,
-  UrlPlugin,
-  WebviewPlugin,
-  WindowPlugin,
-} from '@ylong-rs/ohrs-ability'
+  allBridgePlugins,
+} from '@ohos-rs/ability'
 import Want from '@ohos.app.ability.Want'
 import { AbilityConstant } from '@kit.AbilityKit';
 import window from '@ohos.window';
@@ -61,34 +41,30 @@ export default class EntryAbility extends NativeAbility {
   public mode: 'xcomponent' | 'webview' = 'webview'
   // Stored for handleNotificationAction to dispatch action-click events.
   private pluginManager: PluginManager | null = null;
+  // Process-level guard (multi-UIAbility, single-runtime invariant): the
+  // PluginManager and the STATIC_PLUGINS JS singletons belong to the process —
+  // a spawned UIAbility instance must not re-load them into a second manager,
+  // which would rewire their transport to the spawned instance's context.
+  private static pluginsInitialized: boolean = false;
   // ArkTS-side BridgePlugin factories. These match the Rust-declared plugin ids in the
   // native module's ApplicationLifecycle.bridgePlugins; BridgeHostRegistry.prepare installs
   // them into every module host for this Ability session. Separate from the Tauri JS-layer
   // plugins below (PluginManager), which are a different transport (Rust<->JS).
-  public bridgePlugins = [
-    new LazyPlugin(() => new AccessibilityPlugin()),
-    new LazyPlugin(() => new PermissionPlugin()),
-    new LazyPlugin(() => new AppControlPlugin()),
-    new LazyPlugin(() => new FilesPlugin()),
-    new LazyPlugin(() => new ResourcePlugin()),
-    new LazyPlugin(() => new WindowPlugin()),
-    new LazyPlugin(() => new WebviewPlugin()),
-    new LazyPlugin(() => new UrlPlugin()),
-    new LazyPlugin(() => new ClipboardPlugin()),
-    new LazyPlugin(() => new GlobalShortcutBridgePlugin()),
-    new LazyPlugin(() => new DeepLinkPlugin()),
-    new LazyPlugin(() => new AutostartPlugin()),
-    new LazyPlugin(() => new MenuPlugin()),
-    new LazyPlugin(() => new StatusbarPlugin()),
-    new LazyPlugin(() => new AccountPlugin()),
-    new LazyPlugin(() => new UpdaterPlugin()),
-  ]
+  // `allBridgePlugins` is exported by `@ohos-rs/ability` and covers every bridge
+  // plugin it ships — new bridge plugins flow in with the package, without
+  // regenerating this file. The factories are stateless, so sharing the array
+  // across Ability instances is safe (each host calls create() for its own
+  // plugin instances).
+  public bridgePlugins = allBridgePlugins
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
     console.info('[Tauri] ===== EntryAbility onCreate =====');
     await super.onCreate(want, launchParam);
     console.info('[Tauri] ===== super.onCreate done =====');
-    await this.initTauriPlugins();
+    if (!EntryAbility.pluginsInitialized) {
+      await this.initTauriPlugins();
+      EntryAbility.pluginsInitialized = true;
+    }
     this.handleNotificationAction(want);
   }
 
@@ -203,28 +179,39 @@ export default class EntryAbility extends NativeAbility {
     await super.onWindowStageCreate(windowStage);
     console.info('[Tauri] ===== super.onWindowStageCreate done =====');
 
-    // Set window background AFTER super.onWindowStageCreate to avoid being overwritten
-    // by loadContentByName. OHOS default window background is black.
+    // Set window background AFTER super.onWindowStageCreate to avoid being
+    // overwritten by loadContentByName, and ONLY when tauri.conf's first
+    // `app.windows` background_color is explicitly configured (issue
+    // #224/C96) — setWindowBackgroundColor pins the window AND title-bar
+    // background, so an unconditional call (even the old hardcoded white)
+    // locks the bar in dark mode (white-on-white title text, device-verified);
+    // unconfigured apps keep the theme-following system default.
     // NOTE: OHOS requires #AARRGGBB format (8-digit hex), not #RRGGBB.
+    {{#if window-background-color-set}}
     try {
-      await win.setWindowBackgroundColor('#FFFFFFFF');
+      await win.setWindowBackgroundColor('{{window-background-color}}');
       // On API 20+, also set container color to cover the container layer default black
       if (deviceInfo.sdkApiVersion >= 20) {
         try {
-          await win.setWindowContainerColor('#FFFFFFFF', '#FFFFFFFF');
+          await win.setWindowContainerColor('{{window-background-color}}', '{{window-background-color}}');
         } catch (e) {
           console.warn('[Tauri] setWindowContainerColor failed (expected on non-2in1): ' + JSON.stringify(e));
         }
       }
+      console.info('[Tauri] Window background set to {{window-background-color}}');
+    } catch (e) {
+      console.error('[Tauri] Failed to set window background: ' + JSON.stringify(e));
+    }
+    {{/if}}
+    try {
       await win.setWindowSystemBarProperties({
         statusBarColor: '#00000000',
         statusBarContentColor: '#FF000000',
         navigationBarColor: '#00000000',
         navigationBarContentColor: '#FF000000'
       });
-      console.info('[Tauri] Window background and system bar set to white');
     } catch (e) {
-      console.error('[Tauri] Failed to set window background: ' + JSON.stringify(e));
+      console.error('[Tauri] Failed to set system bar properties: ' + JSON.stringify(e));
     }
   }
 }

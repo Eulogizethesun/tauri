@@ -131,7 +131,7 @@ pub fn run_dev<F: Fn(Option<i32>, ExitReason) + Send + Sync + 'static>(
 
       on_exit(
         status.code(),
-        if status.code() == Some(101) && is_cargo_compile_error {
+        if status.code() == Some(101i32) && is_cargo_compile_error {
           ExitReason::CompilationFailed
         } else if manually_killed_app_.load(Ordering::SeqCst) {
           ExitReason::TriggeredKill

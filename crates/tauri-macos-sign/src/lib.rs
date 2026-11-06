@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! macOS code signing and notarization helpers used by the bundler.
+
 use std::{
   ffi::{OsStr, OsString},
   path::{Path, PathBuf},
@@ -10,6 +12,7 @@ use std::{
 
 use serde::Deserialize;
 
+/// Certificate utilities for creating and parsing Apple signing certificates.
 pub mod certificate;
 mod keychain;
 mod provisioning_profile;
@@ -17,61 +20,104 @@ mod provisioning_profile;
 pub use keychain::{Keychain, Team};
 pub use provisioning_profile::ProvisioningProfile;
 
+/// The error type used by this crate.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
+  /// Failed to create a temporary directory.
   #[error("failed to create temp directory: {0}")]
   TempDir(std::io::Error),
+  /// Failed to resolve the current user home directory.
   #[error("failed to resolve home dir")]
   ResolveHomeDir,
+  /// Failed to resolve a valid codesigning identity.
   #[error("failed to resolve signing identity")]
   ResolveSigningIdentity,
+  /// Failed to decode a provisioning profile.
   #[error("failed to decode provisioning profile")]
   FailedToDecodeProvisioningProfile,
+  /// The provisioning profile has no UUID.
   #[error("could not find provisioning profile UUID")]
   FailedToFindProvisioningProfileUuid,
+  /// Failed to read or write a plist file.
   #[error("{context} {path}: {error}")]
   Plist {
+    /// What operation failed.
     context: &'static str,
+    /// The plist file path.
     path: PathBuf,
+    /// The underlying plist error.
     error: plist::Error,
   },
+  /// Failed to upload the app bundle to Apple's notarization servers.
   #[error("failed to upload app to Apple's notarization servers: {error}")]
-  FailedToUploadApp { error: std::io::Error },
+  FailedToUploadApp {
+    /// The underlying I/O error.
+    error: std::io::Error,
+  },
+  /// The app could not be notarized.
   #[error("failed to notarize app: {0}")]
   Notarize(String),
+  /// The `notarytool` output could not be parsed as JSON.
   #[error("failed to parse notarytool output as JSON: {output}")]
-  ParseNotarytoolOutput { output: String },
+  ParseNotarytoolOutput {
+    /// The raw output of the `notarytool` command.
+    output: String,
+  },
+  /// A command could not be spawned or exited with an error status.
   #[error("failed to run command {command}: {error}")]
   CommandFailed {
+    /// The command that failed.
     command: String,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
+  /// A filesystem operation failed.
   #[error("{context} {path}: {error}")]
   Fs {
+    /// What operation failed.
     context: &'static str,
+    /// The path of the file the operation was on.
     path: PathBuf,
+    /// The underlying I/O error.
     error: std::io::Error,
   },
+  /// Failed to parse an X509 certificate.
   #[error("failed to parse X509 certificate: {error}")]
   X509Certificate {
+    /// The underlying certificate parsing error.
     error: x509_certificate::X509CertificateError,
   },
+  /// Failed to create a PFX bundle from a self signed certificate.
   #[error("failed to create PFX from self signed certificate")]
   FailedToCreatePFX,
+  /// Failed to create a self signed certificate.
   #[error("failed to create self signed certificate: {error}")]
   FailedToCreateSelfSignedCertificate {
+    /// The underlying apple-codesign error.
     error: Box<apple_codesign::AppleCodesignError>,
   },
+  /// Failed to encode a DER structure.
   #[error("failed to encode DER: {error}")]
-  FailedToEncodeDER { error: std::io::Error },
+  FailedToEncodeDER {
+    /// The underlying I/O error.
+    error: std::io::Error,
+  },
+  /// Failed to decode a base64-encoded certificate.
   #[error("failed to decode base64 certificate: {0}")]
   Base64Decode(base64::DecodeError),
+  /// The certificate has no common name.
   #[error("certificate missing common name")]
   CertificateMissingCommonName,
+  /// The certificate has no organization unit for the given common name.
   #[error("certificate missing organization unit for common name {common_name}")]
-  CertificateMissingOrganizationUnit { common_name: String },
+  CertificateMissingOrganizationUnit {
+    /// The common name that lacks an organization unit.
+    common_name: String,
+  },
 }
 
+/// A result type with the crate's [`Error`] error type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 trait CommandExt {
@@ -92,20 +138,37 @@ impl CommandExt for Command {
   }
 }
 
+/// A reference to an App Store Connect API key, either a path to the key file
+/// or its raw content.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ApiKey {
+  /// The path to the `.p8` API key file.
   Path(PathBuf),
+  /// The raw content of the `.p8` API key file.
   Raw(Vec<u8>),
 }
 
+/// The credentials used to authenticate with Apple's notarization service.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum AppleNotarizationCredentials {
+  /// Authenticate with an Apple ID account and an app-specific password.
   AppleId {
+    /// The Apple ID email address.
     apple_id: OsString,
+    /// The app-specific password for the Apple ID.
     password: OsString,
+    /// The team the notarization is performed for.
     team_id: OsString,
   },
+  /// Authenticate with an App Store Connect API key.
   ApiKey {
+    /// The issuer id of the API key.
     issuer: OsString,
+    /// The key id of the API key.
     key_id: OsString,
+    /// The API key itself.
     key: ApiKey,
   },
 }
@@ -118,6 +181,8 @@ struct NotarytoolSubmitOutput {
   message: String,
 }
 
+/// Notarizes the given app bundle on Apple's notarization servers and staples
+/// the notarization ticket to it.
 pub fn notarize(
   keychain: &Keychain,
   app_bundle_path: &Path,
@@ -126,6 +191,8 @@ pub fn notarize(
   notarize_inner(keychain, app_bundle_path, auth, true)
 }
 
+/// Notarizes the given app bundle on Apple's notarization servers without
+/// stapling the notarization ticket to it.
 pub fn notarize_without_stapling(
   keychain: &Keychain,
   app_bundle_path: &Path,
@@ -271,7 +338,9 @@ fn staple_app(mut app_bundle_path: PathBuf) -> Result<()> {
   Ok(())
 }
 
+/// Extension trait adding `notarytool` authentication arguments to a `Command`.
 pub trait NotarytoolCmdExt {
+  /// Appends the `notarytool` authentication arguments for the given credentials.
   fn notarytool_args(
     &mut self,
     auth: &AppleNotarizationCredentials,

@@ -22,7 +22,7 @@
       },
       "csp": {
         "default-src": "'self' customprotocol: asset: myapp: myapp-async:",
-        "connect-src": "ipc: http://ipc.localhost myapp: myapp-async: http://127.0.0.1:3005 http://localhost:3005",
+        "connect-src": "ipc: http://ipc.localhost myapp: myapp-async: https://myapp.localhost https://myapp-async.localhost http://127.0.0.1:3005 http://localhost:3005",
         "font-src": ["https://fonts.gstatic.com"],
         "img-src": "'self' asset: http://asset.localhost blob: data: myapp: myapp-async:",
         "style-src": "'unsafe-inline' 'self' https://fonts.googleapis.com"

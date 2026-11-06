@@ -6,8 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "libentry.so": "file:./src/main/cpp/types/libentry",
-    "@ylong-rs/ohrs-ability": "1.0.0-beta.1",
+    "@ohos-rs/ability": "file:{{{ability-har-rel}}}",
     "@tauri/app": "file:../tauri"
   }
 }

@@ -102,7 +102,7 @@ fn compress(
     IV[2],
     IV[3],
     counter as u32,
-    (counter >> 32) as u32,
+    (counter >> 32i32) as u32,
     block_len,
     flags,
   ];
@@ -326,7 +326,7 @@ impl Hasher {
     // by the number of trailing 0-bits in the new total number of chunks.
     while total_chunks & 1 == 0 {
       new_cv = parent_cv(self.pop_stack(), new_cv, self.key_words, self.flags);
-      total_chunks >>= 1;
+      total_chunks >>= 1i32;
     }
     self.push_stack(new_cv);
   }

@@ -33,12 +33,12 @@ Tauri OHOS 适配采用四层架构，每层有独立的代码仓库：
 
 | 仓库 | 路径 | 职责 | 远端地址 | 默认分支 |
 |------|------|------|----------|----------|
-| **tauri** | `tauri` | 主框架 | github.com/Eulogizethesun/tauri.git | ohdev-git |
-| **tao** | `tao` | 窗口管理抽象 | github.com/Eulogizethesun/tao.git | ohdev-git |
-| **wry** | `wry` | WebView 渲染抽象 | github.com/Eulogizethesun/wry.git | ohdev-git |
-| **muda** | `muda` | 菜单系统 | github.com/Eulogizethesun/muda.git | ohdev-git |
-| **tray-icon** | `tray-icon` | 系统托盘 | github.com/Eulogizethesun/tray-icon.git | ohdev-git |
-| **openharmony-ability** | `openharmony-ability` | NAPI 桥接层（唯一 ArkTS 桥接仓） | github.com/Eulogizethesun/openharmony-ability.git | ohdev-git |
+| **tauri** | `tauri` | 主框架 | github.com/Eulogizethesun/tauri.git | ohdev |
+| **tao** | `tao` | 窗口管理抽象 | github.com/Eulogizethesun/tao.git | ohdev |
+| **wry** | `wry` | WebView 渲染抽象 | github.com/Eulogizethesun/wry.git | ohdev |
+| **muda** | `muda` | 菜单系统 | github.com/Eulogizethesun/muda.git | ohdev |
+| **tray-icon** | `tray-icon` | 系统托盘 | github.com/Eulogizethesun/tray-icon.git | ohdev |
+| **openharmony-ability** | `openharmony-ability` | NAPI 桥接层（唯一 ArkTS 桥接仓） | github.com/Eulogizethesun/openharmony-ability.git | ohdev |
 
 所有仓库通过 `tauri/Cargo.toml` 的 `[patch.crates-io]` 指向本地路径。
 

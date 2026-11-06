@@ -38,22 +38,6 @@ use tauri_runtime::{
 };
 use tauri_utils::{assets::AssetsIter, PackageInfo};
 
-/// Platform-specific restart implementation.
-/// Concentrates the `cfg` branching in one place so the rest of the code
-/// can call `do_restart(env)` without caring about the platform.
-#[cfg(target_env = "ohos")]
-fn do_restart(_env: &crate::Env) -> ! {
-  // OHOS restart: the legacy TSFN-based restart helper was removed during decoupling.
-  // Process exit triggers the OHOS ability lifecycle restart via the OS.
-  std::process::exit(0);
-}
-
-/// Platform-specific restart implementation.
-#[cfg(not(target_env = "ohos"))]
-fn do_restart(env: &crate::Env) -> ! {
-  crate::process::restart(env);
-}
-
 use std::{
   borrow::Cow,
   collections::HashMap,
@@ -103,6 +87,26 @@ impl ExitRequestApi {
   /// Prevents the app from exiting.
   ///
   /// **Note:** This is ignored when using [`AppHandle#method.restart`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** an `ExitRequested` event with `code: None` is
+  ///   preventable only through the PC/2-in-1 pre-close probe
+  ///   (`UIAbility.onPrepareToTerminateAsync`), which requires the app to
+  ///   declare `ohos.permission.PREPARE_APP_TERMINATE` (normal, system_grant;
+  ///   already included in the tauri-cli open-harmony template) in its entry
+  ///   `module.json5` -- older projects or custom `module.json5` files need to
+  ///   add it. The probe is an API 15+ (HarmonyOS 5.0.3+) interface: on
+  ///   older systems the framework has no such callback, so it is never
+  ///   invoked and the exit proceeds silently with no interception chance.
+  ///   On API 15-18 it only executes on PC and 2-in-1 devices (Tablet is
+  ///   additionally covered from API 19); when the permission is missing or
+  ///   the device form factor is not supported, the system skips the
+  ///   callback entirely, so the exit proceeds and `prevent_exit` is never
+  ///   invoked for it. The last-window teardown
+  ///   path also emits `code: None`, but by then the system has already
+  ///   committed to destroying the UIAbility window stage -- calling
+  ///   `prevent_exit` there cannot keep the app alive.
   pub fn prevent_exit(&self) {
     if self.code != Some(RESTART_EXIT_CODE) {
       self.tx.send(ExitRequestedEventAction::Prevent).unwrap();
@@ -215,6 +219,15 @@ pub enum RunEvent {
   /// Event loop is exiting.
   Exit,
   /// The app is about to exit
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** `code: None` events come from the PC/2-in-1
+  ///   pre-close probe -- the only preventable source, requiring
+  ///   `ohos.permission.PREPARE_APP_TERMINATE` -- and from last-window
+  ///   teardown, which is not preventable because the window stage
+  ///   destruction is already committed -- see
+  ///   [`ExitRequestApi::prevent_exit`] for details.
   #[non_exhaustive]
   ExitRequested {
     /// Exit code.
@@ -311,7 +324,7 @@ impl From<EventLoopMessage> for RunEvent {
   }
 }
 
-/// The asset resolver is a helper to access the [`tauri_utils::assets::Assets`] interface.
+/// The asset resolver is a helper to access the `tauri_utils::assets::Assets` interface.
 #[derive(Debug, Clone)]
 pub struct AssetResolver<R: Runtime> {
   manager: Arc<AppManager<R>>,
@@ -537,26 +550,25 @@ impl<R: Runtime> AppHandle<R> {
   /// This method is similar to [`Self::plugin`],
   /// but accepts a boxed trait object instead of a generic type.
   #[cfg_attr(feature = "tracing", tracing::instrument(name = "app::plugin::register", skip(plugin), fields(name = plugin.name())))]
-  pub fn plugin_boxed(&self, mut plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
-    // OHOS: initialize outside the plugins lock — a plugin's setup may round-trip
+  pub fn plugin_boxed(&self, plugin: Box<dyn Plugin<R>>) -> crate::Result<()> {
+    // OHOS: initialize outside the plugins lock -- a plugin's setup may round-trip
     // the ArkTS bridge, which pumps the event loop and would otherwise deadlock
     // against on_event_loop_event's lock below. Non-OHOS keeps the upstream
-    // in-lock ordering.
+    // in-lock ordering through the PluginStore::initialize wrapper.
     #[cfg(target_env = "ohos")]
     {
+      let mut plugin = plugin;
       crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
       let mut store = self.manager().plugins.lock().unwrap();
       store.register(plugin);
     }
     #[cfg(not(target_env = "ohos"))]
-    {
-      // Upstream ordering: initialize while holding the plugins lock (the
-      // removed PluginStore::initialize wrapper just forwarded to
-      // crate::plugin::initialize).
-      let mut store = self.manager().plugins.lock().unwrap();
-      crate::plugin::initialize(&mut plugin, self, &self.config().plugins)?;
-      store.register(plugin);
-    }
+    self
+      .manager()
+      .plugins
+      .lock()
+      .unwrap()
+      .initialize(plugin, self, &self.config().plugins)?;
 
     Ok(())
   }
@@ -591,6 +603,15 @@ impl<R: Runtime> AppHandle<R> {
   }
 
   /// Exits the app by triggering [`RunEvent::ExitRequested`] and [`RunEvent::Exit`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** `exit_code` is not propagated to the process exit
+  ///   status -- the teardown terminates the ability with a hardcoded `0`
+  ///   through the app-control bridge, so the process always exits with code
+  ///   0. The requested code is still delivered on the
+  ///   [`RunEvent::ExitRequested`] event, and `App::run_return` likewise
+  ///   always returns 0.
   pub fn exit(&self, exit_code: i32) {
     if let Err(e) = self.runtime_handle.request_exit(exit_code) {
       log::error!("failed to exit: {}", e);
@@ -605,11 +626,20 @@ impl<R: Runtime> AppHandle<R> {
   /// so we skip them and directly restart the process.
   ///
   /// If you want to trigger them reliably, use [`Self::request_restart`] instead
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** the actual restart is always performed on the main
+  ///   thread (directly, or through the event loop when triggered from another
+  ///   thread); see [`crate::process::restart`] for the platform semantics --
+  ///   the focus requirement (background restarts fail with 16000053 and end
+  ///   as exit-without-restart) and the park-without-timeout after a
+  ///   successful request.
   pub fn restart(&self) -> ! {
     if self.event_loop.lock().unwrap().main_thread_id == std::thread::current().id() {
       log::debug!("restart triggered on the main thread");
       self.cleanup_before_exit();
-      do_restart(&self.env());
+      crate::process::restart(&self.env());
     } else {
       log::debug!("restart triggered from a separate thread");
       // we're running on a separate thread, so we must trigger the exit request and wait for it to finish
@@ -625,13 +655,21 @@ impl<R: Runtime> AppHandle<R> {
         Err(e) => {
           log::error!("failed to request exit: {e}");
           self.cleanup_before_exit();
-          do_restart(&self.env());
+          crate::process::restart(&self.env());
         }
       }
     }
   }
 
   /// Restarts the app by triggering [`RunEvent::ExitRequested`] with code [`RESTART_EXIT_CODE`] and [`RunEvent::Exit`].
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **OpenHarmony:** the actual restart is performed on the main thread
+  ///   through the event loop; see [`crate::process::restart`] for the
+  ///   platform semantics -- the focus requirement (background restarts fail
+  ///   with 16000053 and end as exit-without-restart) and the
+  ///   park-without-timeout after a successful request.
   pub fn request_restart(&self) {
     self
       .manager
@@ -640,7 +678,7 @@ impl<R: Runtime> AppHandle<R> {
     // We'll be restarting when we receive the next `RuntimeRunEvent::Exit` event in `App::run` if this call succeed
     if self.runtime_handle.request_exit(RESTART_EXIT_CODE).is_err() {
       self.cleanup_before_exit();
-      do_restart(&self.env());
+      crate::process::restart(&self.env());
     }
   }
 
@@ -705,12 +743,6 @@ impl<R: Runtime> AppHandle<R> {
       tx.send(ui_application.supportsMultipleScenes()).unwrap();
     });
     rx.recv().unwrap()
-  }
-
-  /// Whether the application supports multiple windows.
-  #[cfg(target_env = "ohos")]
-  pub fn supports_multiple_windows(&self) -> bool {
-    cfg!(desktop)
   }
 }
 
@@ -1153,6 +1185,14 @@ macro_rules! shared_app_impl {
       }
 
       /// Whether the application supports multiple windows.
+      ///
+      /// On OHOS only the desktop form factor supports multiple windows.
+      #[cfg(target_env = "ohos")]
+      pub fn supports_multiple_windows(&self) -> bool {
+        cfg!(desktop)
+      }
+
+      /// Whether the application supports multiple windows.
       #[cfg(target_os = "android")]
       pub fn supports_multiple_windows(&self) -> bool {
         let runtime_handle = match self.runtime() {
@@ -1449,8 +1489,13 @@ impl<R: Runtime> App<R> {
         let event = on_event_loop_event(&app_handle, RuntimeRunEvent::Exit, &manager);
         callback(&app_handle, event);
         app_handle.cleanup_before_exit();
+        // OHOS: `crate::process::restart` drives the app-control bridge's
+        // `restartApp` (API 12+), which kills the app's processes and
+        // relaunches the current UIAbility. It parks forever on success
+        // while the system tears this process down; `exit(0)` (reported by
+        // appspawn as SIGABRT) remains only as the bridge-error fallback.
         if self.manager.restart_on_exit.load(atomic::Ordering::Relaxed) {
-          do_restart(&self.env());
+          crate::process::restart(&self.env());
         }
       }
       _ => {
@@ -1517,7 +1562,7 @@ impl<R: Runtime> App<R> {
 #[allow(clippy::type_complexity)]
 pub struct Builder<R: Runtime> {
   /// A flag indicating that the runtime must be started on an environment that supports the event loop not on the main thread.
-  #[cfg(any(windows, target_os = "linux"))]
+  #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
   runtime_any_thread: bool,
 
   /// The JS message handler.
@@ -1609,17 +1654,13 @@ impl<R: Runtime> Builder<R> {
     let invoke_key = crate::generate_invoke_key().unwrap();
 
     Self {
-      #[cfg(any(windows, target_os = "linux"))]
+      #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
       runtime_any_thread: false,
       setup: Box::new(|_| Ok(())),
       invoke_handler: Box::new(|_| false),
       invoke_initialization_script: InvokeInitializationScript {
         process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
-        os_name: if cfg!(target_env = "ohos") {
-          "ohos"
-        } else {
-          std::env::consts::OS
-        },
+        os_name: crate::os_name(),
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
         invoke_key: &invoke_key.clone(),
       }
@@ -1654,8 +1695,12 @@ impl<R: Runtime> Builder<R> {
   /// ## Platform-specific
   ///
   /// - **macOS:** on macOS the application *must* be executed on the main thread, so this function is not exposed.
-  #[cfg(any(windows, target_os = "linux"))]
-  #[cfg_attr(docsrs, doc(cfg(any(windows, target_os = "linux"))))]
+  /// - **OpenHarmony:** the event loop must live on the ArkTS main thread, so this function is not exposed.
+  #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
+  #[cfg_attr(
+    docsrs,
+    doc(cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos"))))
+  )]
   #[must_use]
   pub fn any_thread(mut self) -> Self {
     self.runtime_any_thread = true;
@@ -2329,7 +2374,7 @@ tauri::Builder::default()
             for menu in menus.lock().unwrap().values() {
               let translated =
                 TranslateAcceleratorW((*msg).hwnd, HACCEL(menu.inner().haccel() as _), msg);
-              if translated == 1 {
+              if translated == 1i32 {
                 return true;
               }
             }
@@ -2340,28 +2385,7 @@ tauri::Builder::default()
       },
 
       #[cfg(target_env = "ohos")]
-      app: {
-        let ohos_app = crate::ohos::APP
-          .lock()
-          .unwrap()
-          .clone()
-          .expect("OpenHarmony app instance not initialized");
-        crate::ohos::BASE_PATH.set(ohos_app.base_path()).ok();
-        crate::ohos::MODULE_NAME.set(ohos_app.module_name()).ok();
-        #[cfg(feature = "tray-icon")]
-        {
-          tray_icon::set_ohos_app(ohos_app.clone());
-        }
-        // Initialize vibrancy WindowClient (no feature gate — window-vibrancy is always a dep)
-        window_vibrancy::set_ohos_app(&ohos_app);
-        // Initialize runtime-wry WindowClient for OHOS window operations
-        // (gated like tray-icon above: tauri-runtime-wry is an optional dep behind
-        // the `wry` feature; consumers building tauri with default-features=false
-        // and no `wry` feature must still compile on OHOS)
-        #[cfg(feature = "wry")]
-        tauri_runtime_wry::set_ohos_window_client(&ohos_app);
-        ohos_app
-      },
+      app: crate::ohos::init(),
     };
 
     // The env var must be set before the Runtime is created so that GetAvailableBrowserVersionString picks it up.
@@ -2384,13 +2408,13 @@ tauri::Builder::default()
       }
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(all(any(windows, target_os = "linux"), not(target_env = "ohos")))]
     let mut runtime = if self.runtime_any_thread {
       R::new_any_thread(runtime_args)?
     } else {
       R::new(runtime_args)?
     };
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(all(any(windows, target_os = "linux"), not(target_env = "ohos"))))]
     let mut runtime = R::new(runtime_args)?;
 
     #[cfg(desktop)]
@@ -2464,12 +2488,37 @@ tauri::Builder::default()
     {
       let config = app.config();
       if let Some(tray_config) = &config.app.tray_icon {
-        #[allow(deprecated)]
         let mut tray =
           TrayIconBuilder::with_id(tray_config.id.clone().unwrap_or_else(|| "main".into()))
-            .icon_as_template(tray_config.icon_as_template)
-            .menu_on_left_click(tray_config.menu_on_left_click)
-            .show_menu_on_left_click(tray_config.show_menu_on_left_click);
+            .icon_as_template(tray_config.icon_as_template);
+        // The menu-on-left-click config keys have no OHOS counterpart (the
+        // status-bar click behavior is system-fixed). tray-icon warns at
+        // build time whenever these attrs are SET (Option semantics: any
+        // `Some` trips the warn), and both config fields are plain bools
+        // that serde materializes to `true` even when unset -- forwarding
+        // them unconditionally would warn for every app that merely has a
+        // tray config. Forward on OHOS only the values that deviate from
+        // the default: those are the configurations the warn is for, and
+        // default-config apps stay silent (the runtime setter warns per
+        // call via warn_menu_click_config_once).
+        #[allow(deprecated)]
+        {
+          #[cfg(not(target_env = "ohos"))]
+          {
+            tray = tray
+              .menu_on_left_click(tray_config.menu_on_left_click)
+              .show_menu_on_left_click(tray_config.show_menu_on_left_click);
+          }
+          #[cfg(target_env = "ohos")]
+          {
+            if !tray_config.menu_on_left_click {
+              tray = tray.menu_on_left_click(false);
+            }
+            if !tray_config.show_menu_on_left_click {
+              tray = tray.show_menu_on_left_click(false);
+            }
+          }
+        }
         if let Some(icon) = &app.manager.tray.icon {
           tray = tray.icon(icon.clone());
         }
@@ -2690,19 +2739,9 @@ fn on_event_loop_event<R: Runtime>(
     _ => unimplemented!(),
   };
 
-  // OHOS: the plugin store lock can be held across an ArkTS bridge round-trip
-  // (which pumps the event loop); a blocking lock here would freeze the main
-  // thread, so try_lock and skip instead. Non-OHOS keeps the upstream blocking
-  // lock.
-  #[cfg(target_env = "ohos")]
-  if let Ok(mut store) = manager.plugins.try_lock() {
-    store.on_event(app_handle, &event);
-  } else {
-    // lock contended (e.g. during plugin register); skip on_event to avoid blocking the main
-    // thread. Log so a dropped event (e.g. a deep-link RunEvent::Opened) is traceable.
-    log::warn!("[tauri] plugin store lock busy, skipping on_event (appfreeze try_lock)");
-  }
-  #[cfg(not(target_env = "ohos"))]
+  // The plugins lock is never held across an ArkTS bridge round-trip (see
+  // plugin_boxed / initialize_plugins), so the event loop can take the
+  // blocking lock like upstream -- plugin events are no longer dropped.
   manager
     .plugins
     .lock()
@@ -2726,7 +2765,7 @@ mod tests {
     }
   }
 
-  /// S7 pure-transform batch: runtime window events → public WindowEvent
+  /// S7 pure-transform batch: runtime window events -> public WindowEvent
   /// mapping. CloseRequested/Moved/ScaleFactorChanged/ThemeChanged never fire
   /// naturally on OHOS.
   #[test]
@@ -2736,11 +2775,15 @@ mod tests {
     use tauri_runtime::window::DragDropEvent;
 
     assert!(matches!(
-      WindowEvent::from(RuntimeWindowEvent::Resized(PhysicalSize::new(640u32, 480u32))),
+      WindowEvent::from(RuntimeWindowEvent::Resized(PhysicalSize::new(
+        640u32, 480u32
+      ))),
       WindowEvent::Resized(_)
     ));
     assert!(matches!(
-      WindowEvent::from(RuntimeWindowEvent::Moved(PhysicalPosition::new(10i32, 20i32))),
+      WindowEvent::from(RuntimeWindowEvent::Moved(PhysicalPosition::new(
+        10i32, 20i32
+      ))),
       WindowEvent::Moved(_)
     ));
     {
@@ -2760,7 +2803,7 @@ mod tests {
     ));
     assert!(matches!(
       WindowEvent::from(RuntimeWindowEvent::ScaleFactorChanged {
-        scale_factor: 2.0,
+        scale_factor: 2.0f64,
         new_inner_size: PhysicalSize::new(800u32, 600u32),
       }),
       WindowEvent::ScaleFactorChanged { .. }
@@ -2768,16 +2811,16 @@ mod tests {
     {
       let drop_event = DragDropEvent::Enter {
         paths: vec![std::path::PathBuf::from("/tmp/a.txt")],
-        position: PhysicalPosition::new(1.0, 2.0),
+        position: PhysicalPosition::new(1.0f64, 2.0f64),
       };
       assert!(matches!(
         WindowEvent::from(RuntimeWindowEvent::DragDrop(drop_event)),
         WindowEvent::DragDrop(_)
       ));
       assert!(matches!(
-        WebviewEvent::from(RuntimeWebviewEvent::DragDrop(
-          DragDropEvent::Over { position: PhysicalPosition::new(3.0, 4.0) }
-        )),
+        WebviewEvent::from(RuntimeWebviewEvent::DragDrop(DragDropEvent::Over {
+          position: PhysicalPosition::new(3.0f64, 4.0f64)
+        })),
         WebviewEvent::DragDrop(_)
       ));
     }

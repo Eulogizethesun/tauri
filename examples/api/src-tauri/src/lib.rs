@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
+//! Comprehensive example app exercising the Tauri API surface.
+
 mod cmd;
-mod probe_apis;
 #[cfg(desktop)]
 mod menu_plugin;
+mod probe_apis;
 #[cfg(desktop)]
 mod tray;
 
@@ -30,8 +32,11 @@ use tauri::ipc::Channel;
 use tauri::RunEvent;
 use tauri::{
   webview::{PageLoadEvent, WebviewWindowBuilder},
-  App, Emitter, EventTarget, Listener, Manager, Runtime, WebviewUrl,
+  App, Emitter, Listener, Manager, Runtime, WebviewUrl,
 };
+// Used by the desktop-only global menu-event handler below.
+#[cfg(all(desktop, not(test)))]
+use tauri::EventTarget;
 #[cfg(not(target_env = "ohos"))]
 use tauri_plugin_sample::{PingRequest, SampleExt};
 
@@ -41,15 +46,33 @@ struct Reply {
 }
 
 #[cfg(target_os = "macos")]
+/// Wrapper around the app-level menu held behind a mutex.
 pub struct AppMenu<R: Runtime>(pub std::sync::Mutex<Option<tauri::menu::Menu<R>>>);
 
+/// Wrapper around the desktop popup menu used by the example app.
 #[cfg(all(desktop, not(test)))]
 pub struct PopupMenu<R: Runtime>(tauri::menu::Menu<R>);
 
-#[cfg_attr(any(mobile, target_env = "ohos"), tauri::mobile_entry_point)]
+// Two-line entry-point form (issue Eulogizethesun/tauri#242): the OHOS
+// Ability/NAPI entry is required on the 2in1 desktop form too, where
+// cfg(mobile) is false -- a lone cfg_attr(mobile, mobile_entry_point) would
+// silently produce no entry there.
+/// Builds the example app runtime and runs it on the current thread.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg_attr(target_env = "ohos", tauri::ohos::entry_point)]
 pub fn run() {
   run_app(tauri::Builder::default(), |_app| {})
 }
+
+/// App-level "confirm before exit" switch (product feature on top of the
+/// #103 pre-close interception). When enabled, implicit closes (window X /
+/// taskbar) are prevented and the page receives a `confirm-exit-requested`
+/// event to show its "确认退出？" dialog; explicit exits (process.exit /
+/// app.exit, code == Some) pass through untouched. Toggled from the
+/// Welcome page via the `set_exit_confirmation` command.
+#[cfg(target_env = "ohos")]
+pub(crate) static EXIT_CONFIRM_MODE: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(false);
 
 fn init_sentry() -> sentry::ClientInitGuard {
   sentry::init((
@@ -62,6 +85,8 @@ fn init_sentry() -> sentry::ClientInitGuard {
   ))
 }
 
+/// Runs the provided builder with the shared setup used by the example
+/// app pages.
 pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   builder: tauri::Builder<R>,
   setup: F,
@@ -207,7 +232,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
   {
     // IMMEDIATE marker + log to verify this cfg block is reached.
     log::info!("[cov-dump] cfg block entered");
-    let _ = std::fs::write("/data/storage/el2/base/cache/cov-immediate.txt", "reached\n");
+    let _ = std::fs::write(
+      "/data/storage/el2/base/cache/cov-immediate.txt",
+      "reached\n",
+    );
 
     extern "C" {
       fn __llvm_profile_set_filename(path: *const std::os::raw::c_char);
@@ -222,10 +250,16 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       std::thread::sleep(std::time::Duration::from_secs(3));
 
       // Write marker files to verify this code path is reached.
-      let r1 = std::fs::write("/data/storage/el2/base/cache/cov-marker.txt", "cov-dump reached\n");
+      let r1 = std::fs::write(
+        "/data/storage/el2/base/cache/cov-marker.txt",
+        "cov-dump reached\n",
+      );
       log::info!("[cov-dump] marker write r1={:?}", r1);
 
-      let r2 = std::fs::write("/data/app/el2/100/base/com.tauri.api/cache/cov-marker.txt", "cov-dump reached\n");
+      let r2 = std::fs::write(
+        "/data/app/el2/100/base/com.tauri.api/cache/cov-marker.txt",
+        "cov-dump reached\n",
+      );
       log::info!("[cov-dump] marker write r2={:?}", r2);
 
       let path = b"/data/storage/el2/base/cache/cov-app-%m-%p.profraw\0";
@@ -254,6 +288,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       window.__TAURI_INTERNALS__.__TEST_INVOKE_INIT_SCRIPT__ = 'executed';
     "#)
     // 1. Test custom URI scheme protocol (sync)
+    // #186 (fix-variant M1): response headers exercise the new write path --
+    // ACAO + Expose-Headers make the cross-origin fetch provable from JS, and
+    // the echo header is the JS-visible receipt that headers set by the Rust
+    // protocol handler reach the page through wry->wire->setResponseHeader.
     .register_uri_scheme_protocol("myapp", |_ctx, request| {
       log::info!("Custom scheme request: {:?}", request.uri());
 
@@ -276,6 +314,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 
       tauri::http::Response::builder()
         .header("Content-Type", "text/html")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Expose-Headers", "X-Tauri-Scheme-Echo")
+        .header("X-Tauri-Scheme-Echo", "p3-m1-response-header")
         .status(200)
         .body(body)
         .unwrap()
@@ -348,11 +389,63 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         });
       }
 
+      // OHOS device-verification hook for issues #100/#101 (app.exit /
+      // process.restart — both too destructive for the auto suite). A one-shot
+      // `danger-mode` file in the app cache, written via hdc before launch,
+      // schedules the action at +90s (after the autotest suite has finished).
+      // The file is consumed on read, so normal launches never trigger.
+      //   echo -n exit    > cache/danger-mode  → app.exit(0)
+      //   echo -n restart > cache/danger-mode  → app.request_restart()
+      #[cfg(target_env = "ohos")]
+      {
+        const DANGER_MODE_PATH: &str = "/data/storage/el2/base/cache/danger-mode";
+        let mode = std::fs::read_to_string(DANGER_MODE_PATH)
+          .map(|s| s.trim().to_string())
+          .unwrap_or_default();
+        if !mode.is_empty() {
+          let _ = std::fs::remove_file(DANGER_MODE_PATH);
+          log::info!("[danger-mode] '{mode}' scheduled at +90s");
+          let app_handle = app.handle().clone();
+          std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(90));
+            match mode.as_str() {
+              "exit" => {
+                log::info!("[danger-mode] firing app.exit(0)");
+                app_handle.exit(0);
+              }
+              "restart" => {
+                log::info!("[danger-mode] firing app.request_restart()");
+                app_handle.request_restart();
+              }
+              unknown => log::warn!("[danger-mode] unknown mode '{unknown}'"),
+            }
+          });
+        }
+      }
+
+      // OHOS: Stronghold secret-management plugin. Registered here (not in the
+      // builder chain above) because Builder::with_argon2 needs the app handle
+      // to resolve the persisted salt file; the plugin's own doc example uses
+      // this setup-time registration shape. The kdf feature (default) provides
+      // the argon2 key derivation — initialize pays ≈0.7s per load on device.
+      #[cfg(target_env = "ohos")]
+      {
+        let salt_path = app
+          .path()
+          .app_data_dir()
+          .expect("app data dir unavailable for stronghold salt")
+          .join("stronghold-salt.txt");
+        app.handle().plugin(
+          tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build(),
+        )?;
+      }
+
       #[cfg(target_os = "macos")]
       app.manage(AppMenu::<R>(Default::default()));
 
       // Manage event tracker for testing
       app.manage(EventTracker::default());
+      #[cfg(target_env = "ohos")]
       app.manage(cmd::NewWindowDenyState::default());
       app.manage(DownloadTestState::new());
 
@@ -384,6 +477,9 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       let app_handle_title = app.handle().clone();
       let app_handle_download = app.handle().clone();
 
+      // `mut` is consumed by the desktop-only re-assignment below; under
+      // cfg(test) that block is compiled out and the mut is unused.
+      #[allow(unused_mut)]
       let mut window_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .initialization_script("document.addEventListener('DOMContentLoaded', () => { document.title = '✅ INIT SCRIPT WORKED!'; });")
         .on_document_title_changed(move |_window, title| {
@@ -479,7 +575,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     let stem = destination.file_stem().unwrap_or_default().to_string_lossy();
                     let ext = destination.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
                     let parent = destination.parent().unwrap_or(std::path::Path::new("."));
-                    let mut counter = 1;
+                    let mut counter = 1i32;
                     loop {
                       let new_name = format!("{} ({}){}", stem, counter, ext);
                       let new_path = parent.join(&new_name);
@@ -488,7 +584,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                         *destination = new_path;
                         break;
                       }
-                      counter += 1;
+                      counter += 1i32;
                     }
                   }
                   let _ = app_handle_download.emit("download-requested", serde_json::json!({
@@ -527,7 +623,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       #[cfg(all(desktop, not(test)))]
       {
         let app_ = app.handle().clone();
-        let mut created_window_count = std::sync::atomic::AtomicUsize::new(0);
+        let created_window_count = std::sync::atomic::AtomicUsize::new(0);
 
         window_builder = window_builder
           .title("Tauri API Validation")
@@ -573,10 +669,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
               } else {
                 let should_create = deny_state.create.load(std::sync::atomic::Ordering::SeqCst);
                 if should_create {
-                  // Create mode: build a SEPARATE Float OS sub-window that loads
+                  // Create mode: build a SEPARATE SubWindow OS sub-window that loads
                   // the target URL. wry maps Create => false, so the bridge calls
                   // setWebController(null) (non-blocking cancel of ArkWeb's own
-                  // popup) while the Float window is the actual popup. build() is
+                  // popup) while the SubWindow window is the actual popup. build() is
                   // non-blocking on the UI thread (createOSWindow discards its
                   // returned Promise; webview create is runtime.spawn'd), so this
                   // ArkWeb onWindowNew callback returns synchronously — no deadlock.
@@ -587,7 +683,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     tauri::WebviewUrl::External(url.clone()),
                   )
                   .title(url.as_str())
-                  // Size + offset the Float sub-window so it appears as a distinct
+                  // Size + offset the SubWindow sub-window so it appears as a distinct
                   // floating popup, not a full-screen window covering the main
                   // window (createOSWindow defaults to the display size when no
                   // inner_size is set). Logical px; at DPR=2 this yields ~900x700
@@ -595,7 +691,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                   // window stays visible.
                   .inner_size(450.0, 350.0)
                   .position(60.0, 45.0)
-                  .ohos_window_kind(tauri::ohos::OHOSWindowKind::Float);
+                  .ohos_window_kind(tauri::ohos::OHOSWindowKind::SubWindow);
                   log::info!("[OHOS DBG] builder configured, calling build()...");
                   match builder.build() {
                     Ok(window) => {
@@ -608,7 +704,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
                     }
                   }
                 } else {
-                  // Allow mode: do NOT build a Float window. Return Allow so the
+                  // Allow mode: do NOT build a SubWindow window. Return Allow so the
                   // bridge layer (DefaultWebview.ets:handleWindowNew) opens an in-page
                   // dialog (NewWindowDialog.ets) with the target URL, a ✕ close
                   // button, and an embedded Web component. wry maps Allow => true.
@@ -666,7 +762,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         log::info!("OHOS platform initialized successfully"); // No logger initialized on OHOS yet
       }
 
-      #[cfg(desktop)]
+      // Auto-test fixtures; both OHOS device forms run the suite, so the
+      // gate is any(desktop, target_env = "ohos") — iOS/Android stay without
+      // the fixture, matching the upstream desktop-only gate (review R42).
+      #[cfg(any(desktop, target_env = "ohos"))]
       std::thread::spawn(|| {
         let server = match tiny_http::Server::http("localhost:3003") {
           Ok(s) => s,
@@ -680,19 +779,34 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             let mut body = Vec::new();
             let _ = request.as_reader().read_to_end(&mut body);
 
-            // Parse path for /status/{code} pattern
+            // Route: /status/{code} overrides the status; /json serves a
+            // fixed JSON payload; everything else echoes the request body.
+            // /json exists so the plugin-http JSON-parse auto test does not
+            // depend on an external endpoint (jsonplaceholder route observed
+            // flaky from the test network: 50% packet loss blew the 5s test
+            // cap). External HTTPS stays covered by the rustls-tls test.
             let path = request.url().to_string();
-            let status = if let Some(code_str) = path.strip_prefix("/status/") {
-              code_str.parse::<u16>().unwrap_or(200)
+            let (status, payload): (u16, Vec<u8>) = if path == "/json" {
+              (
+                200,
+                br#"{"userId":1,"id":1,"title":"delectus aut autem","completed":false}"#
+                  .to_vec(),
+              )
+            } else if let Some(code_str) = path.strip_prefix("/status/") {
+              (
+                code_str.parse::<u16>().unwrap_or(200),
+                std::mem::take(&mut body),
+              )
             } else {
-              200
+              (200, std::mem::take(&mut body))
             };
 
+            let payload_len = payload.len();
             let response = tiny_http::Response::new(
               tiny_http::StatusCode(status),
               request.headers().to_vec(),
-              std::io::Cursor::new(body),
-              request.body_length(),
+              std::io::Cursor::new(payload),
+              Some(payload_len),
               None,
             );
             let _ = request.respond(response);
@@ -702,9 +816,10 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
 
       // WebSocket echo fixture for plugin-websocket tests (port 3004).
       // Echoes Text/Binary frames back to the sender. tungstenite 0.24 builds
-      // on OHOS-desktop (no TLS deps in default features); same pattern as the
-      // HTTP echo server above (port 3003) which already works under cfg(desktop).
-      #[cfg(desktop)]
+      // for the OHOS target (no TLS deps in default features); same
+      // any(desktop, target_env = "ohos") gate as the HTTP echo server above
+      // (port 3003).
+      #[cfg(any(desktop, target_env = "ohos"))]
       std::thread::spawn(|| {
         let listener = match std::net::TcpListener::bind("localhost:3004") {
           Ok(l) => l,
@@ -713,30 +828,27 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
             return;
           }
         };
-        for stream in listener.incoming() {
-          if let Ok(stream) = stream {
-            std::thread::spawn(move || {
-              let mut ws_stream = match tungstenite::accept(stream) {
-                Ok(ws) => ws,
-                Err(e) => {
-                  log::error!("ws echo handshake failed: {e}");
-                  return;
-                }
-              };
-              while let Ok(msg) = ws_stream.read() {
-                use tungstenite::Message;
-                match msg {
-                  Message::Text(_) | Message::Binary(_) => {
-                    if ws_stream.send(msg).is_err() {
-                      break;
-                    }
-                  }
-                  Message::Close(_) => break,
-                  _ => {}
-                }
+        for stream in listener.incoming().flatten() {
+          std::thread::spawn(move || {
+            let mut ws_stream = match tungstenite::accept(stream) {
+              Ok(ws) => ws,
+              Err(e) => {
+                log::error!("ws echo handshake failed: {e}");
+                return;
               }
-            });
-          }
+            };
+            while let Ok(msg) = ws_stream.read() {
+              use tungstenite::Message;
+              if matches!(msg, Message::Close(_)) {
+                break;
+              }
+              if matches!(msg, Message::Text(_) | Message::Binary(_))
+                && ws_stream.send(msg).is_err()
+              {
+                break;
+              }
+            }
+          });
         }
       });
 
@@ -799,6 +911,15 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_reload,
       cmd::cookie_test,
       cmd::cookie_manual_test,
+      cmd::cookie_test_main_thread_set,
+      cmd::cookie_test_main_thread_read,
+      cmd::get_webview_url,
+      cmd::navigate_webview_hash,
+      cmd::create_incognito_webview,
+      cmd::incognito_cookie_set,
+      cmd::incognito_cookie_isolation,
+      cmd::set_title_on,
+      cmd::tracked_reject_probe,
       #[cfg(any(debug_assertions, feature = "devtools"))]
       cmd::devtools_test,
       #[cfg(any(debug_assertions, feature = "devtools"))]
@@ -810,6 +931,7 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::test_persisted_scope,
       cmd::clear_persisted_scope,
       cmd::clear_window_state,
+      #[cfg(target_env = "ohos")]
       cmd::create_ohos_test_webview,
       cmd::create_isolated_window,
       cmd::dummy_command,
@@ -826,6 +948,14 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::create_transparent_borderless_window,
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_window,
+      #[cfg(target_env = "ohos")]
+      cmd::create_ui_ability_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
+      cmd::create_float_window_racy_attrs,
+      #[cfg(target_env = "ohos")]
+      cmd::get_current_window_id,
+      #[cfg(target_env = "ohos")]
+      cmd::get_device_form,
       #[cfg(target_env = "ohos")]
       cmd::create_ui_ability_windows_x3,
       #[cfg(target_env = "ohos")]
@@ -844,6 +974,8 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_tracked_menu_events,
       cmd::get_tracked_run_events,
       cmd::clear_tracked_events,
+      cmd::track_webview_viewport_probe,
+      cmd::get_tracked_webview_viewport_probes,
       #[cfg(target_env = "ohos")]
       cmd::set_deny_new_window,
       #[cfg(target_env = "ohos")]
@@ -854,11 +986,14 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       cmd::get_last_new_window_url,
       #[cfg(target_env = "ohos")]
       cmd::get_ohos_version_info,
+      cmd::set_content_protection,
       cmd::test_web_page_snapshot,
       #[cfg(target_env = "ohos")]
       cmd::test_create_pdf,
       cmd::set_download_test_mode,
-      #[cfg(desktop)]
+      #[cfg(target_env = "ohos")]
+      cmd::set_exit_confirmation,
+      #[cfg(all(desktop, not(test)))]
       tray::simulate_tray_click,
       #[cfg(debug_assertions)]
       cmd::sentry_test_panic,
@@ -898,38 +1033,54 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
           }
           "MainEventsCleared"
         }
-        RunEvent::ExitRequested { code, api: _api, .. } => {
+        RunEvent::ExitRequested {
+          code, api: _api, ..
+        } => {
           log::info!("[RunEvent] ExitRequested, code={:?}", code);
-          // Test whether prevent_exit works
-          // NOTE: This is test-only code. On OHOS LoopDestroyed path, prevent_exit()
-          // cannot actually prevent exit (system is already tearing down), but it gives
-          // user code a chance to run cleanup logic before RunEvent::Exit fires.
+          // App-level confirm-on-exit — only for implicit exits (code is
+          // None, e.g. system close / all-windows-closed). Explicit exit
+          // requests (app.exit / request_restart, code is Some) are let
+          // through, same convention as the desktop guard below. NOTE: since
+          // issue #103 wired the PC/2in1 pre-close interception
+          // (onPrepareToTerminateAsync) to this dispatch, prevent_exit() here
+          // GENUINELY cancels system-initiated closes — gated behind
+          // EXIT_CONFIRM_MODE (set_exit_confirmation command, TestRunner
+          // button) so the demo stays closable by default.
           #[cfg(target_env = "ohos")]
-          {
-            log::info!("[RunEvent] ExitRequested: calling prevent_exit() to test");
+          if code.is_none() && EXIT_CONFIRM_MODE.load(std::sync::atomic::Ordering::SeqCst) {
+            log::info!("[RunEvent] ExitRequested: confirm mode — preventing + asking page");
             _api.prevent_exit();
-            log::info!("[RunEvent] ExitRequested: prevent_exit() called (may not prevent on LoopDestroyed path)");
+            if let Err(e) = _app_handle.emit("confirm-exit-requested", ()) {
+              log::error!("[RunEvent] confirm-exit-requested emit failed: {e}");
+            }
           }
-          if code.is_some() { "ExitRequested(code)" } else { "ExitRequested" }
+          if code.is_some() {
+            "ExitRequested(code)"
+          } else {
+            "ExitRequested"
+          }
         }
         RunEvent::Exit => {
           log::info!("[RunEvent] Exit");
           "Exit"
         }
-        RunEvent::WindowEvent { label, event, .. } => {
-          match event {
-            tauri::WindowEvent::CloseRequested { .. } => {
-              log::info!("[RunEvent] WindowEvent::CloseRequested, label={}", label);
-              "WindowEvent::CloseRequested"
-            }
-            tauri::WindowEvent::Destroyed => {
-              log::info!("[RunEvent] WindowEvent::Destroyed, label={}", label);
-              "WindowEvent::Destroyed"
-            }
-            _ => "",
+        RunEvent::WindowEvent { label, event, .. } => match event {
+          tauri::WindowEvent::CloseRequested { .. } => {
+            log::info!("[RunEvent] WindowEvent::CloseRequested, label={}", label);
+            "WindowEvent::CloseRequested"
           }
-        }
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+          tauri::WindowEvent::Destroyed => {
+            log::info!("[RunEvent] WindowEvent::Destroyed, label={}", label);
+            "WindowEvent::Destroyed"
+          }
+          _ => "",
+        },
+        #[cfg(any(
+          target_os = "macos",
+          target_os = "ios",
+          target_os = "android",
+          target_env = "ohos"
+        ))]
         RunEvent::Opened { urls } => {
           log::info!("[RunEvent] Opened, urls={:?}", urls);
           "Opened"
@@ -939,7 +1090,11 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         _ => "",
       };
       if !event_name.is_empty() {
-        tracker.run_events.lock().unwrap().push(event_name.to_string());
+        tracker
+          .run_events
+          .lock()
+          .unwrap()
+          .push(event_name.to_string());
       }
     }
 
@@ -948,7 +1103,18 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
       // Keep the event loop running even if all windows are closed
       // This allow us to catch tray icon events when there is no window
       // if we manually requested an exit (code is Some(_)) we will let it go through
-      #[cfg(desktop)]
+      //
+      // OHOS is excluded: since issue Eulogizethesun/tauri#103 wired the
+      // pre-close interception, a prevent_exit() here has become EFFECTIVE on
+      // OHOS desktop (it used to fire into unstoppable teardown) — keeping
+      // this unconditional guard would make the demo permanently unclosable
+      // via the window close button. On OHOS the prevent path is the
+      // EXIT_CONFIRM_MODE toggle in the ExitRequested arm above
+      // (set_exit_confirmation command, TestRunner button) instead. The guard's scenario
+      // (zero windows + live tray loop) cannot occur on OHOS anyway — the
+      // main window's close is the app-level close, which the probe cancels
+      // as a whole.
+      #[cfg(all(desktop, not(target_env = "ohos")))]
       RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
         api.prevent_exit();
       }
@@ -994,7 +1160,12 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
         .build()
         .unwrap();
       }
-      #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_env = "ohos"))]
+      #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_env = "ohos"
+      ))]
       RunEvent::Opened { urls } => {
         log::info!("opened urls: {:?}", urls);
       }

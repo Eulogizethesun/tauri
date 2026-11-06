@@ -33,6 +33,20 @@ pub fn plugin_config<T: DeserializeOwned>(name: &str) -> Option<T> {
   }
 }
 
+/// Emits the `desktop` and `mobile` cfg aliases for the crate currently being built.
+///
+/// Mobile detection is OHOS-aware: on OpenHarmony the device form factor from
+/// `OHOS_DEVICE_TYPE` decides (see [`tauri_utils::platform::is_mobile_target`]).
+///
+/// Plugins should call this from their `build.rs` instead of keeping a local
+/// copy of the alias logic — a drifting copy can emit conflicting cfgs within
+/// the same build.
+pub fn cfg_aliases() {
+  let mobile = tauri_utils::platform::is_mobile_target();
+  cfg_alias("desktop", !mobile);
+  cfg_alias("mobile", mobile);
+}
+
 pub struct Builder<'a> {
   commands: &'a [&'static str],
   global_scope_schema: Option<schemars::schema::RootSchema>,

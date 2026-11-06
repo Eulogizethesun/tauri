@@ -282,6 +282,14 @@ oha commit 0696dc0。
   （第二个 UIAbility 窗口请求被 tao 拒绝并 log error）。upstream 的
   create_ui_ability_window 系命令/按钮保留在 examples/api（编译通过），
   运行时表现为优雅报错——留作后续专项。
+  （2026-09-14 更新：专项设计已建立 → [`multi-uiability-windows`](../multi-uiability-windows/design.md)，
+  含 46 项单例分诊、异步握手状态机与六阶段验证计划。）
+  （2026-09-16 终态更新：专项**已落地**——Phase 1-6 实施完毕，single-UIAbility
+  guard 已由 D7 异步握手（PENDING_UI_ABILITIES 注册表 + waker）取代，多实例
+  真机全验证；launchType 终态为 **`specified` + EntryAbilityStage onAcceptWant
+  实例路由**（Phase 5 二次修订，非早先计划的 standard）；剩余延期项仅
+  mobile 双形态（6.4，阻塞 Mate 70）与手动套件回填（6.2）。细节以该 change
+  的 design.md/tasks.md 为准。）
 - **set_cursor_visible 维持 no-op**：upstream 自身 TODO-untested，且全局 vs
   窗口级语义未定，不移植。
 
@@ -311,6 +319,11 @@ UIAbility 架构无 readWindowId，rebase 带回的 windowStatusChange 注册块
 验证：runtime-wry 按 `w.window_id() == Some(ohos_win_id)` 匹配，tao 主窗口
 window_id=Some(0)；Float 子窗口两侧（tao create_os_window 返回值 ↔ FloatPage
 LocalStorage windowId）共用 NEXT_WINDOW_ID(从 1 起) 虚拟 id 命名空间，无碰撞。
+（2026-09-16 更新：`readWindowId()` 语义已随 [multi-uiability-windows](../multi-uiability-windows/design.md)
+D3 恢复——`abilityWindowId` 从 want.parameters `tauri_window_id` 读取（首实例/裸
+want 回落 0），windowStatusChange/registerUIAbilityStage/setMenuClickHandler 等
+回调全部按该值参数化，本偏差的字面量 0 修正已被取代；NEXT_WINDOW_ID 命名空间
+同时为 Float 子窗与 UIAbility 实例窗（start_ui_ability 预分配 id）共用，仍无碰撞。）
 
 ### 偏差 g：Float 子窗口 maximize/recover 三个平台行为缺陷（2026-08-27 修复+真机验证）
 

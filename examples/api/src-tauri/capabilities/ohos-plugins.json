@@ -33,10 +33,27 @@
     "geolocation:allow-open-location-settings",
     "biometric:default",
     "nfc:default",
+    "nfc:allow-write",
     "barcode-scanner:default",
     "huawei-account:default",
     "accessibility:default",
     "screenshot:default",
-    "continuation:default"
+    "continuation:default",
+    "stronghold:default",
+    "stronghold:allow-remove-store-record",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "/storage/media/100/local/files/**" },
+        { "path": "/storage/Users/currentUser/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "/storage/media/100/local/files/**" },
+        { "path": "/storage/Users/currentUser/**" }
+      ]
+    }
   ]
 }

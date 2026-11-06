@@ -73,7 +73,7 @@ schemars_derive = { git = 'https://github.com/tauri-apps/schemars.git', branch =
 tauri = { path = "./crates/tauri" }
 tauri-plugin = { path = "./crates/tauri-plugin" }
 tauri-utils = { path = "./crates/tauri-utils" }
-cargo-mobile2 = { git = "https://github.com/Eulogizethesun/cargo-mobile2", branch = "ohdev-git", default-features = false }
+cargo-mobile2 = { git = "https://github.com/Eulogizethesun/cargo-mobile2", branch = "ohdev-git" }
 wry = { git = "https://github.com/Eulogizethesun/wry", branch = "ohdev-git" }
 #tao = { git = "https://github.com/richerfu/tao", branch = "feat-ohos-webview" }
 tao = { git = "https://github.com/Eulogizethesun/tao", branch = "ohdev-git" }
@@ -86,3 +86,15 @@ openharmony-ability-derive = { git = "https://github.com/Eulogizethesun/openharm
 # OHOS-only "0.7" requirement is redirected here to the local fork (0.7.1,
 # matching upstream repo main).
 window-vibrancy = { git = "https://github.com/Eulogizethesun/window-vibrancy", branch = "ohdev-git" }
+# stronghold-runtime: OHOS adaptation (nix excluded from the OHOS dependency
+# graph + upstream DirectAlloc misaligned-offset fix), published on the
+# OpenHarmony Artifactory cargo registry under the same version (2.0.1) with
+# an adapted checksum — consumed through the source replacement configured in
+# .cargo/config.toml (the same mechanism plugins-workspace uses), so the
+# normal version requirement resolves to the adapted build with no patch
+# entry. A path patch is deliberately avoided: patch entries are validated
+# during dependency resolution even when the patched crate is not in the
+# graph, so a path dependency would make every resolving environment (review
+# checkouts, CI, external contributors) require the fork checked out as a
+# sibling. Reference source of the adaptation: ohos branch of the public
+# fork https://gitcode.com/dragonswordy/stronghold.rs.

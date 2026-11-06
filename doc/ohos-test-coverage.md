@@ -385,7 +385,7 @@ bash prod-verify-s4.sh
 - wry：InnerWebView::new_*（14-38）、PendingOp::execute（66）、create_pdf/set_cookie 等——webview 运行时
 - oha：create_os_window（32）、BridgePlugin::on_main_thread_event（88）、BridgePluginRegistry 大部、StatusBarClient/MenuClient 方法（各 5-11 行 bridge 调用）
 - tray-icon：start_event_forward_thread（34）、TrayIcon::new/set_* —— bridge 依赖
-- vibrancy：apply_ohos_mica/acrylic/clear_ohos_blur——bridge 依赖
+- vibrancy：apply_ohos_blur/acrylic/clear_ohos_blur——bridge 依赖（apply_ohos_mica 等三个零调用导出已于 #90 删除）
 
 ### 本轮新增测试（2026-08-22，4 仓 43 个，设备侧全通过）
 

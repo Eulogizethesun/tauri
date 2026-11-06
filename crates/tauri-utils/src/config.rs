@@ -2219,7 +2219,7 @@ pub struct WindowConfig {
   )]
   pub disable_input_accessory_view: bool,
   ///
-  /// Set a custom path for the webview's data directory (localStorage, cache, etc.) **relative to [`appDataDir()`]/${label}**.
+  /// Set a custom path for the webview's data directory (localStorage, cache, etc.) **relative to `appDataDir()`/${label}**.
   ///
   /// To set absolute paths, use [`WebviewWindowBuilder::data_directory`](https://docs.rs/tauri/2/tauri/webview/struct.WebviewWindowBuilder.html#method.data_directory)
   ///
@@ -3253,7 +3253,7 @@ fn default_min_sdk_version() -> u32 {
 
 /// General configuration for the OpenHarmony target.
 #[skip_serializing_none]
-#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenHarmonyConfig {
@@ -3272,10 +3272,13 @@ pub struct OpenHarmonyConfig {
 
   /// Marks the app's ability as continuable (app continuation / task handoff).
   ///
-  /// When `Some(true)`, the CLI writes `continuable: true` into each entry
-  /// module.json5's abilities entry at build time (same injection point as
-  /// `deviceTypes`). Requires `continueType` matching between devices.
-  /// `None`/`Some(false)` keeps module.json5 unchanged.
+  /// When `Some(true)`, the CLI writes `continuable: true` plus `continueType`
+  /// into each entry module.json5's abilities entry at build time (same
+  /// injection point as `deviceTypes`). Any other value (`None` or
+  /// `Some(false)`) removes both keys from module.json5, so toggling back to
+  /// disabled also takes effect on rebuild — keys hand-added to module.json5
+  /// are stripped on the next build. Requires `continueType` matching between
+  /// devices.
   #[serde(alias = "continuable")]
   pub continuable: Option<bool>,
 
@@ -3284,17 +3287,6 @@ pub struct OpenHarmonyConfig {
   /// `continuable` is `Some(true)`; defaults to `[identifier]` when omitted.
   #[serde(alias = "continue-type")]
   pub continue_type: Option<Vec<String>>,
-}
-
-impl Default for OpenHarmonyConfig {
-  fn default() -> Self {
-    Self {
-      version_code: None,
-      device_types: OpenHarmonyDeviceTypes::default(),
-      continuable: None,
-      continue_type: None,
-    }
-  }
 }
 
 /// Per-form OHOS device types. Each list drives one Entry HAP's `module.json5`

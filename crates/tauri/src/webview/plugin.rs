@@ -68,9 +68,7 @@ mod commands {
     label: Option<String>,
     value: Option<Color>,
   ) -> crate::Result<()> {
-    get_webview(webview, label)?
-      .set_background_color(value)
-      .map_err(Into::into)
+    get_webview(webview, label)?.set_background_color(value)
   }
 }
 
@@ -245,7 +243,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
     init_script.push_str(
       &Devtools {
-        os_name: std::env::consts::OS,
+        os_name: crate::os_name(),
       }
       .render_default(&Default::default())
       .unwrap()

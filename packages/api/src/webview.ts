@@ -421,6 +421,20 @@ class Webview {
     ).then((s) => new PhysicalSize(s))
   }
 
+  // Getters (platform notes)
+  //
+  // OpenHarmony: `position()` / `size()` are cache-backed. For a natural-layout
+  // webview (created without bounds) the cache holds the upstream
+  // WebViewAttributes::default() 200×200 placeholder — never the live rendered
+  // geometry, which is container-driven and not reported back by the platform.
+  // After a partial `setSize()` / `setPosition()`, the components the call did
+  // not set keep their last cached value: the "unspecified" sentinels
+  // (i32::MIN-derived values) sent on the wire for those components are
+  // screened out by the wry-side bounds-cache merge and are never observable
+  // through these getters (issue Eulogizethesun/tauri#245). Within one dpi
+  // variant the merge is per-component; a partial write in a different variant
+  // keeps the cached axis wholesale.
+
   // Setters
 
   /**
@@ -587,7 +601,13 @@ class Webview {
    * @returns A promise indicating the success or failure of the operation.
    */
   async clearAllBrowsingData(): Promise<void> {
-    return invoke('plugin:webview|clear_all_browsing_data')
+    // `label` for cross-webview routing — same rationale as setBackgroundColor
+    // (without it the backend falls back to the invoking webview, so
+    // `Webview.getByLabel(x).clearAllBrowsingData()` would clear the caller's
+    // data instead of x's).
+    return invoke('plugin:webview|clear_all_browsing_data', {
+      label: this.label
+    })
   }
 
   /**
@@ -608,7 +628,12 @@ class Webview {
    * @since 2.1.0
    */
   async setBackgroundColor(color: Color | null): Promise<void> {
-    return invoke('plugin:webview|set_webview_background_color', { value: color })
+    // `label` for cross-webview routing — same rationale as Window.setBackgroundColor
+    // (without it the backend falls back to the invoking webview).
+    return invoke('plugin:webview|set_webview_background_color', {
+      label: this.label,
+      value: color
+    })
   }
 
   // Listeners

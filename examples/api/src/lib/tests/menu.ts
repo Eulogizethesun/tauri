@@ -1,4 +1,5 @@
 import type { TestCase } from '../test-runner';
+import { desktopOnlySuite } from '../test-runner';
 import { invoke } from '@tauri-apps/api/core';
 
 function assert(condition: boolean, msg: string) {
@@ -21,7 +22,7 @@ async function skipIfNoSimulate(): Promise<boolean> {
   }
 }
 
-export const menuTests: TestCase[] = [
+const menuTestsInner: TestCase[] = [
   // ==================== Menu 测试 ====================
 
   // --- 创建方法 ---
@@ -791,6 +792,32 @@ export const menuTests: TestCase[] = [
       assert(item.id.length > 0, `id empty: "${item.id}"`);
     },
   },
+  // NativeIcon variants (issue Eulogizethesun/tauri#112): muda maps all 56
+  // variants to sys.symbol glyphs on OHOS. Sampled subset of the previously
+  // unmapped ones (the Add→plus correction included); visual rendering is
+  // verified manually via the Menu page's NativeIcon button.
+  {
+    name: '@tauri-apps/api/menu.IconMenuItem(native icon variants)',
+    category: 'auto',
+    async fn() {
+      const { IconMenuItem, NativeIcon } = await import('@tauri-apps/api/menu');
+      const variants = [
+        NativeIcon.Add,
+        NativeIcon.Bluetooth,
+        NativeIcon.Caution,
+        NativeIcon.TrashFull,
+        NativeIcon.UserGuest,
+        NativeIcon.StatusPartiallyAvailable,
+        NativeIcon.QuickLook,
+        NativeIcon.SmartBadge,
+      ];
+      const items = await Promise.all(
+        variants.map((icon) => IconMenuItem.new({ text: 'native icon item', icon }))
+      );
+      assert(items.length === variants.length, `created ${items.length}/${variants.length} items`);
+      assert(items.every((i) => i.id.length > 0), 'every item should have an id');
+    },
+  },
   {
     name: '@tauri-apps/api/menu.IconMenuItem.with_id',
     category: 'auto',
@@ -1196,3 +1223,10 @@ export const menuTests: TestCase[] = [
     },
   },
 ];
+
+/**
+ * Menu is a desktop-form feature on OHOS: lib.rs initialises the menu plugin
+ * only under cfg(desktop), so on a mobile-form build every plugin:menu| invoke
+ * fails with "plugin menu not found". Wrap the whole suite.
+ */
+export const menuTests: TestCase[] = desktopOnlySuite(menuTestsInner, 'menu');

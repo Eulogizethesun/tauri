@@ -7,6 +7,9 @@
   windows_subsystem = "windows"
 )]
 
+//! File associations example app demonstrating opening files handed over
+//! by the operating system.
+
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 

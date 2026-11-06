@@ -3,7 +3,11 @@ import { common } from '@kit.AbilityKit';
 export interface Invoke {
   parseArgs(): string;
   resolve(result: string): void;
-  reject(error: string): void;
+  // `code` is the optional machine-readable error code, mirroring Android's
+  // Invoke.reject(message, code); it is serialized as the `code` field of the
+  // ErrorResponse JSON the Rust side deserializes (tauri::plugin::mobile::
+  // ErrorResponse has optional `code`/`message`).
+  reject(error: string, code?: string): void;
 }
 
 export type CommandHandler = (invoke: Invoke) => void;
@@ -17,6 +21,12 @@ export abstract class Plugin {
   // Null by default — plugins that need context (like Notification) should
   // check `this.context != null` before using it.
   context: common.UIAbilityContext | null = null;
+
+  // Serialized JSON config from tauri.conf.json's `plugins` section for this
+  // plugin, assigned by PluginManager.load() before any command runs. Empty
+  // string when the app defines no config for the plugin — the ArkTS
+  // counterpart of Android's PluginHandle.config.
+  config: string = '';
 
   // Static handler bridging ArkTS emit to Rust NAPI (tauri_send_channel_data).
   // Set once by EntryAbility.initTauriPlugins() via Plugin.setEmitHandler().
@@ -71,6 +81,23 @@ export abstract class Plugin {
       }
     }
     return null;
+  }
+
+  /**
+   * Returns this plugin's configuration from the tauri.conf.json `plugins`
+   * section, parsed as T. Returns null when the plugin has no config set or
+   * the stored JSON cannot be parsed — callers must handle both.
+   */
+  getConfig<T>(): T | null {
+    if (this.config.length === 0) {
+      return null;
+    }
+    try {
+      return JSON.parse(this.config) as T;
+    } catch (e) {
+      console.warn('[Plugin] getConfig: failed to parse config: ' + (e as Error).message);
+      return null;
+    }
   }
 
   /**

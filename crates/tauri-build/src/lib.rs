@@ -422,6 +422,7 @@ impl Attributes {
   }
 }
 
+/// Returns `true` if the current build is a dev build (as instructed by the tauri cargo dependency hook).
 pub fn is_dev() -> bool {
   env::var_os("DEP_TAURI_DEV")
     .expect("missing `cargo:dev` instruction, please update tauri to latest")
@@ -469,7 +470,6 @@ pub fn build() {
 pub fn try_build(attributes: Attributes) -> Result<()> {
   use anyhow::anyhow;
 
-  let target_os = env::var_os("CARGO_CFG_TARGET_OS").unwrap();
   let target_env = env::var_os("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
   if target_env == "ohos" {
@@ -477,13 +477,7 @@ pub fn try_build(attributes: Attributes) -> Result<()> {
   }
 
   println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
-  println!("cargo:rerun-if-env-changed=OHOS_DEVICE_TYPE");
-  let mobile = if target_env == "ohos" {
-    let device_type = env::var("OHOS_DEVICE_TYPE").unwrap_or_else(|_| "mobile".to_string());
-    device_type != "desktop"
-  } else {
-    target_os == "ios" || target_os == "android"
-  };
+  let mobile = tauri_utils::platform::is_mobile_target();
 
   cfg_alias("desktop", !mobile);
   cfg_alias("mobile", mobile);
@@ -526,6 +520,14 @@ pub fn try_build(attributes: Attributes) -> Result<()> {
     if let Some(associations) = config.bundle.file_associations.as_ref() {
       mobile::update_android_manifest_file_associations(associations)?;
     }
+  }
+
+  // Materialize the `@tauri/app` HAR module from the single tauri source
+  // (crates/tauri/mobile/ohos) into gen/ohos/tauri — the OHOS counterpart of
+  // the gradle file generation above. Runs on every Rust build, which always
+  // precedes hvigor packaging.
+  if let Some(project_dir) = env::var_os("TAURI_OHOS_PROJECT_PATH").map(PathBuf::from) {
+    mobile::sync_ohos_tauri_module(project_dir)?;
   }
 
   cfg_alias("dev", is_dev());
@@ -643,7 +645,7 @@ pub fn try_build(attributes: Attributes) -> Result<()> {
 
     if let Some(version_str) = &config.version {
       if let Ok(v) = Version::parse(version_str) {
-        let version = (v.major << 48) | (v.minor << 32) | (v.patch << 16);
+        let version = (v.major << 48i32) | (v.minor << 32i32) | (v.patch << 16i32);
         res.set_version_info(VersionInfo::FILEVERSION, version);
         res.set_version_info(VersionInfo::PRODUCTVERSION, version);
         res.set("FileVersion", version_str);

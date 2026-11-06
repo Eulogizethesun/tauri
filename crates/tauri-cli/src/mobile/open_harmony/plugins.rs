@@ -7,7 +7,6 @@ use crate::Result;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -21,9 +20,6 @@ pub struct DetectedPlugin {
 pub struct OhPackage {
   pub name: String,
   pub version: String,
-  pub main: Option<String>,
-  #[serde(default)]
-  pub dependencies: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -345,12 +341,40 @@ pub fn validate_plugin_name(name: &str) -> Result<()> {
   Ok(())
 }
 
+/// Validates an ohpm package name - the `name` field of a plugin HAR's
+/// oh-package.json5. Accepts both plain (`plugin-dialog`) and scoped
+/// (`@tauri/plugin-dialog`) names: each part may only contain ASCII letters,
+/// digits, `-`, `_` and `.`, and must neither be empty nor start/end with `.`
+/// or `_` (the directory and import path constraints ohpm itself enforces).
+///
+/// Deliberately not restricted to the official `@tauri/plugin-` prefix: the
+/// app-local plugin layout (`<src-tauri>/plugins/<name>/openharmony`, see
+/// [`find_plugin_har`]) ships HARs under their own package names.
 fn validate_identifier(identifier: &str) -> Result<()> {
-  if !identifier.starts_with("@tauri/plugin-") {
-    bail!("Identifier must start with @tauri/plugin-")
+  let parts: Vec<&str> = if let Some(scoped) = identifier.strip_prefix('@') {
+    let Some((scope, name)) = scoped.split_once('/') else {
+      bail!("Scoped ohpm package name '{identifier}' is missing a '/' after the scope");
+    };
+    vec![scope, name]
+  } else {
+    vec![identifier]
+  };
+
+  for part in parts {
+    if part.is_empty() {
+      bail!("ohpm package name '{identifier}' has an empty part");
+    }
+    if !part
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+      bail!("ohpm package name '{identifier}' may only contain letters, digits, '-', '_' and '.'");
+    }
+    if part.starts_with(['.', '_']) || part.ends_with(['.', '_']) {
+      bail!("ohpm package name '{identifier}' has a part starting or ending with '.' or '_'");
+    }
   }
-  let name_part = identifier.trim_start_matches("@tauri/plugin-");
-  validate_plugin_name(name_part)?;
+
   Ok(())
 }
 
@@ -521,20 +545,6 @@ fn adjust_paths_in_file(file_path: &Path) -> Result<()> {
   Ok(())
 }
 
-pub fn copy_all_plugin_hars(plugins: &[PluginMeta], dest_dir: &Path) -> Result<Vec<PathBuf>> {
-  let copied: Vec<PathBuf> = plugins
-    .iter()
-    .map(|meta| copy_plugin_har(meta, dest_dir))
-    .collect::<Result<Vec<_>>>()?;
-
-  log::info!(
-    "Copied {} plugin HARs to {}",
-    copied.len(),
-    dest_dir.display()
-  );
-  Ok(copied)
-}
-
 pub fn update_build_profile(project_dir: &Path, plugins: &[PluginMeta]) -> Result<()> {
   let build_profile_path = project_dir.join("build-profile.json5");
 
@@ -585,20 +595,17 @@ pub fn update_build_profile(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
 }
 
 /// Rewrite `build-profile.json5`'s `modules` array to activate exactly the
-/// given entry modules — `["entry_mobile"]` for a single-form build,
-/// `["entry_mobile", "entry_desktop"]` for `--app` — preserving the shared
+/// given entry modules - `["entry_mobile"]` for a single-form build,
+/// `["entry_mobile", "entry_desktop"]` for `--app` - preserving the shared
 /// non-entry modules already present (`tauri`, `dialog`, ...). This selects
 /// which entry HAP(s) hvigor builds.
 ///
 /// Note: entry modules are rebuilt from scratch (only `name`/`srcPath`/`targets`
 /// are written). User customizations on an entry's build-profile module object
-/// (e.g. an added `buildOption`) would be dropped — the template-generated
+/// (e.g. an added `buildOption`) would be dropped - the template-generated
 /// entries don't carry any, so this is acceptable. Non-entry modules are
 /// preserved verbatim.
-pub fn write_build_profile_modules(
-  project_dir: &Path,
-  active_entries: &[&str],
-) -> Result<()> {
+pub fn write_build_profile_modules(project_dir: &Path, active_entries: &[&str]) -> Result<()> {
   let build_profile_path = project_dir.join("build-profile.json5");
   let content = fs::read_to_string(&build_profile_path)
     .with_context(|| "failed to read build-profile.json5")?;
@@ -646,8 +653,7 @@ pub fn write_build_profile_modules(
   }
 
   let updated = serialize_json5(&profile)?;
-  fs::write(&build_profile_path, updated)
-    .with_context(|| "failed to write build-profile.json5")?;
+  fs::write(&build_profile_path, updated).with_context(|| "failed to write build-profile.json5")?;
   log::info!("Activated entry modules: {:?}", active_entries);
   Ok(())
 }
@@ -691,7 +697,7 @@ pub fn write_entry_device_types(
 /// injection point as [`write_entry_device_types`]).
 ///
 /// `continuable == Some(true)` writes `continuable: true` plus `continueType`
-/// (`continue_type` when provided, else falling back to `[identifier]` — the
+/// (`continue_type` when provided, else falling back to `[identifier]` - the
 /// same app installed on both devices then matches automatically). Any other
 /// `continuable` value **removes** both keys, so toggling back to disabled also
 /// takes effect on rebuild.
@@ -728,7 +734,7 @@ pub fn write_entry_continuation(
       Value::Array(types.into_iter().map(Value::String).collect()),
     );
   } else {
-    // Removing a missing key is a no-op — safe toggle-back to disabled.
+    // Removing a missing key is a no-op - safe toggle-back to disabled.
     ability.remove("continuable");
     ability.remove("continueType");
   }
@@ -762,9 +768,9 @@ pub fn update_entry_package(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
   for plugin in plugins {
     if !dependencies.contains_key(&plugin.identifier) {
       log::info!(
-        "Adding dependency '{}' -> '{}'",
+        "Adding dependency '{}' -> 'file:../{}'",
         plugin.identifier,
-        format!("file:../{}", plugin.name)
+        plugin.name
       );
 
       dependencies.insert(
@@ -788,15 +794,22 @@ pub fn update_entry_package(project_dir: &Path, plugins: &[PluginMeta]) -> Resul
 }
 
 /// Idempotently sync the plugin imports and `STATIC_PLUGINS` registrations in
-/// an entry module's `EntryAbility.ets` with the detected plugin set.
+/// an entry module's `EntryAbility.ets` with the detected plugin set, and the
+/// `@ohos-rs/ability` bridge plugin factories with the canonical list.
 ///
 /// That file is generated once at `ohos init` from the handlebars template
 /// (`{{#each plugins}}` loops) and, like the rest of `gen/`, is never
-/// regenerated on subsequent builds — so plugins added to the app's
+/// regenerated on subsequent builds - so plugins added to the app's
 /// `Cargo.toml` after init would get their HAR copied and wired into
 /// build-profile/oh-package, but never reach the ArkTS plugin registry and
 /// fail at runtime with "Plugin not found: <name>". This backfills the two
 /// generated blocks the same way the template would have.
+///
+/// Bridge-backed plugins fail harder: a Rust-side bridge declaration without
+/// the matching ArkTS factory in `bridgePlugins` aborts bridge session setup,
+/// freezing the whole app - not just the missing plugin - so the canonical
+/// factory list is backfilled the same additive way (see
+/// [`sync_bridge_plugin_factories`]).
 ///
 /// Additive-only: existing lines (including hand edits) are never rewritten or
 /// removed; entries for plugins that are no longer detected are left in place.
@@ -809,15 +822,15 @@ pub fn update_entry_ability(
     .join(entry_module)
     .join("src/main/ets/entryability/EntryAbility.ets");
 
-  let content =
-    fs::read_to_string(&ability_path).with_context(|| format!("failed to read {}", ability_path.display()))?;
+  let content = fs::read_to_string(&ability_path)
+    .with_context(|| format!("failed to read {}", ability_path.display()))?;
 
   let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
   // Anchors: the `@tauri/app` import for new plugin imports, and the
   // STATIC_PLUGINS declaration (or its last `.set(` line) for new
   // registrations. If the file was not generated from the standard template
-  // (no import anchor), skip — nothing to backfill into.
+  // (no import anchor), skip - nothing to backfill into.
   let Some(import_anchor) = lines
     .iter()
     .position(|l| l.trim_start().starts_with("import") && l.contains("from '@tauri/app'"))
@@ -831,7 +844,11 @@ pub fn update_entry_ability(
   let mut reg_anchor = lines
     .iter()
     .rposition(|l| l.contains("STATIC_PLUGINS.set("))
-    .or_else(|| lines.iter().position(|l| l.contains("const STATIC_PLUGINS")));
+    .or_else(|| {
+      lines
+        .iter()
+        .position(|l| l.contains("const STATIC_PLUGINS"))
+    });
 
   for plugin in plugins {
     let import_line = format!("import {} from '{}';", plugin.class_name, plugin.identifier);
@@ -846,7 +863,8 @@ pub fn update_entry_ability(
     {
       log::info!(
         "Adding EntryAbility import for plugin '{}': {}",
-        plugin.name, import_line
+        plugin.name,
+        import_line
       );
       lines.insert(import_anchor + 1, import_line);
       // The registration anchor shifted by one line.
@@ -862,7 +880,8 @@ pub fn update_entry_ability(
       if let Some(anchor) = reg_anchor {
         log::info!(
           "Adding STATIC_PLUGINS entry for plugin '{}': {}",
-          plugin.name, reg_line
+          plugin.name,
+          reg_line
         );
         lines.insert(anchor + 1, reg_line);
         // Anchor still points at a valid `.set(` line for the next plugin.
@@ -878,6 +897,8 @@ pub fn update_entry_ability(
     }
   }
 
+  sync_bridge_plugin_factories(&mut lines, entry_module);
+
   let mut updated = lines.join("\n");
   if !updated.ends_with('\n') {
     updated.push('\n');
@@ -888,6 +909,120 @@ pub fn update_entry_ability(
   Ok(())
 }
 
+/// ArkTS bridge plugin factories shipped by `@ohos-rs/ability` and registered
+/// in the generated EntryAbility's `bridgePlugins` array. Mirrors the
+/// `@ohos-rs/ability` plugin registry (package/src/main/ets/plugins/all.ets,
+/// generated by pack-plugins.ps1 - review R10) - keep both lists in sync. The
+/// `entry_{desktop,mobile}` EntryAbility.ets.hbs templates now assign
+/// `allBridgePlugins` directly (which covers every plugin the package ships),
+/// so this table only serves the build-time additive backfill for generated
+/// files that still carry an explicit factory array. Unused factories stay
+/// lazy and never instantiate, so backfilling the full list is safe even for
+/// apps that use none of them.
+///
+/// Each entry is `(import binding, factory name)`; the two differ only for the
+/// aliased global-shortcut plugin (its plain name collides with the JS-layer
+/// plugin import).
+const BRIDGE_PLUGIN_FACTORIES: &[(&str, &str)] = &[
+  ("AccessibilityPlugin", "AccessibilityPlugin"),
+  ("PermissionPlugin", "PermissionPlugin"),
+  ("AppControlPlugin", "AppControlPlugin"),
+  ("FilesPlugin", "FilesPlugin"),
+  ("ResourcePlugin", "ResourcePlugin"),
+  ("WindowPlugin", "WindowPlugin"),
+  ("WebviewPlugin", "WebviewPlugin"),
+  ("UrlPlugin", "UrlPlugin"),
+  ("WebviewUrlPlugin", "WebviewUrlPlugin"),
+  ("ClipboardPlugin", "ClipboardPlugin"),
+  (
+    "GlobalShortcutPlugin as GlobalShortcutBridgePlugin",
+    "GlobalShortcutBridgePlugin",
+  ),
+  ("DeepLinkPlugin", "DeepLinkPlugin"),
+  ("AutostartPlugin", "AutostartPlugin"),
+  ("MenuPlugin", "MenuPlugin"),
+  ("StatusbarPlugin", "StatusbarPlugin"),
+  ("AccountPlugin", "AccountPlugin"),
+  ("UpdaterPlugin", "UpdaterPlugin"),
+  ("WebviewCookiePlugin", "WebviewCookiePlugin"),
+];
+
+/// Backfills the `@ohos-rs/ability` import block and the `bridgePlugins` array
+/// of a generated EntryAbility.ets with the canonical bridge plugin factory
+/// list - additive-only, mirroring the JS-layer sync in
+/// [`update_entry_ability`].
+///
+/// A generated file predating the bridge plugin architecture (no
+/// `@ohos-rs/ability` import, or no `bridgePlugins` array) cannot be patched
+/// line-wise; the caller is pointed at `ohos init` to regenerate instead.
+fn sync_bridge_plugin_factories(lines: &mut Vec<String>, entry_module: &str) {
+  let Some(import_close) = lines
+    .iter()
+    .position(|l| l.trim_start().starts_with('}') && l.contains("from '@ohos-rs/ability'"))
+  else {
+    log::warn!(
+      "{entry_module}/EntryAbility.ets has no '@ohos-rs/ability' import; it predates the bridge plugin architecture — re-run `tauri ohos init` to regenerate"
+    );
+    return;
+  };
+
+  let Some(array_open) = lines.iter().position(|l| l.contains("bridgePlugins = [")) else {
+    log::warn!(
+      "{entry_module}/EntryAbility.ets has no `bridgePlugins` array; it predates the bridge plugin architecture — re-run `tauri ohos init` to regenerate"
+    );
+    return;
+  };
+  let Some(array_close) = (array_open + 1..lines.len()).find(|&i| lines[i].trim() == "]") else {
+    log::warn!(
+      "{entry_module}/EntryAbility.ets has a malformed `bridgePlugins` array; skipping bridge plugin sync"
+    );
+    return;
+  };
+
+  let mut missing = Vec::new();
+  for (binding, factory) in BRIDGE_PLUGIN_FACTORIES {
+    if lines
+      .iter()
+      .any(|l| l.contains(&format!("new {factory}()")))
+    {
+      continue;
+    }
+    // Skip the import when the local name is already present somewhere (e.g.
+    // an orphaned import whose factory line was hand-removed) - a duplicate
+    // binding would fail the ArkTS compile.
+    let needs_import = !lines.iter().any(|l| l.contains(factory));
+    missing.push((*binding, *factory, needs_import));
+  }
+  if missing.is_empty() {
+    return;
+  }
+
+  // Insert factory lines (higher index) before import lines (lower index) so
+  // neither insertion point shifts while the other is still in use.
+  for (offset, (_, factory, _)) in missing.iter().enumerate() {
+    log::info!("Adding EntryAbility bridgePlugins entry for '{factory}'");
+    lines.insert(
+      array_close + offset,
+      format!("    new LazyPlugin(() => new {factory}()),"),
+    );
+  }
+
+  let mut import_at = import_close;
+  for (binding, factory, needs_import) in &missing {
+    if *needs_import {
+      log::info!("Adding EntryAbility '@ohos-rs/ability' import for bridge plugin '{factory}'");
+      lines.insert(import_at, format!("  {binding},"));
+      import_at += 1;
+    }
+  }
+}
+
+/// Serializes `value` into JSON5-ish text.
+///
+/// Lossy round-trip: this pretty-prints with serde_json and re-adds trailing
+/// commas line by line - any comments in the original file are already gone
+/// (the file was parsed into a `serde_json::Value` beforehand), and key order
+/// follows serde_json's map ordering, not the source file's.
 fn serialize_json5(value: &Value) -> Result<String> {
   let json = serde_json::to_string_pretty(value).context("failed to serialize JSON5")?;
 
@@ -900,16 +1035,21 @@ fn serialize_json5(value: &Value) -> Result<String> {
       let trimmed = line.trim();
       let next_trimmed = lines.get(idx + 1).map(|l| l.trim()).unwrap_or("");
 
-      if trimmed.is_empty() || trimmed.starts_with("//") {
-        line.to_string()
-      } else if next_trimmed.starts_with("}") || next_trimmed.starts_with("]") {
-        line.to_string()
-      } else if trimmed.ends_with("{") || trimmed.ends_with("[") || trimmed.ends_with(",") {
-        line.to_string()
-      } else if trimmed.ends_with("}") || trimmed.ends_with("]") {
+      // Lines that already end with a separator, open a nested block, or are
+      // immediately followed by a closing bracket must not gain a comma.
+      if trimmed.is_empty()
+        || trimmed.starts_with("//")
+        || next_trimmed.starts_with("}")
+        || next_trimmed.starts_with("]")
+        || trimmed.ends_with('{')
+        || trimmed.ends_with('[')
+        || trimmed.ends_with(',')
+        || trimmed.ends_with('}')
+        || trimmed.ends_with(']')
+      {
         line.to_string()
       } else {
-        format!("{}{}", line, ",")
+        format!("{line},")
       }
     })
     .collect::<Vec<_>>()
@@ -985,7 +1125,8 @@ pub fn validate_plugin_configs(project_dir: &Path, plugins: &[PluginMeta]) -> Re
     }
   }
 
-  let oh_package_path = project_dir.join(format!("{}/oh-package.json5", super::active_entry_module()));
+  let oh_package_path =
+    project_dir.join(format!("{}/oh-package.json5", super::active_entry_module()));
   let content = fs::read_to_string(&oh_package_path)
     .with_context(|| "failed to read entry oh-package.json5 for validation")?;
   for plugin in plugins {
@@ -1000,19 +1141,159 @@ pub fn validate_plugin_configs(project_dir: &Path, plugins: &[PluginMeta]) -> Re
   Ok(())
 }
 
-pub fn get_all_plugin_metadata(project_dir: &Path) -> Result<Vec<PluginMeta>> {
-  let detected = detect_all_plugins(project_dir)?;
+/// Full plugin injection pipeline shared by `ohos build` and `ohos dev`:
+/// detect the app's Tauri plugins, parse and validate their HAR metadata,
+/// copy each HAR into the generated project, and wire the build-profile /
+/// oh-package / EntryAbility registrations.
+///
+/// Returns the plugin metadata so callers can re-run the per-rebuild steps
+/// (`copy_plugin_har` + `update_plugin_configs`) in dev's watch loop.
+pub fn inject_plugins(tauri_dir: &Path, project_dir: &Path) -> Result<Vec<PluginMeta>> {
+  log::info!("Starting OpenHarmony dynamic plugin injection");
 
-  let metadata: Vec<PluginMeta> = detected
-    .iter()
-    .map(|p| parse_plugin_meta(&p.har_path, &p.name))
-    .collect::<Result<Vec<_>>>()?;
+  let detected_plugins = detect_all_plugins(tauri_dir).context("Plugin detection failed")?;
+
+  if detected_plugins.is_empty() {
+    log::info!("No OpenHarmony-compatible plugins detected, continuing");
+    return Ok(vec![]);
+  }
 
   log::info!(
-    "Parsed {} plugin metadata entries: {:?}",
-    metadata.len(),
-    metadata.iter().map(|m| &m.name).collect::<Vec<_>>()
+    "Detected {} OpenHarmony plugins: {:?}",
+    detected_plugins.len(),
+    detected_plugins.iter().map(|p| &p.name).collect::<Vec<_>>()
   );
 
+  let metadata: Vec<PluginMeta> = detected_plugins
+    .iter()
+    .map(|d| parse_plugin_meta(&d.har_path, &d.name))
+    .collect::<Result<Vec<_>>>()
+    .context("Plugin metadata parsing failed")?;
+
+  for plugin in &metadata {
+    validate_plugin_meta(plugin)
+      .context(format!("Invalid metadata for plugin '{}'", plugin.name))?;
+  }
+
+  for plugin in &metadata {
+    copy_plugin_har(plugin, project_dir)
+      .context(format!("Failed to copy plugin '{}' HAR", plugin.name))?;
+  }
+
+  update_plugin_configs(project_dir, &metadata)
+    .context("Failed to update plugin configurations")?;
+
+  validate_plugin_configs(project_dir, &metadata)
+    .context("Plugin configuration validation failed")?;
+
+  log::info!("Plugin injection completed with {} plugins", metadata.len());
   Ok(metadata)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn validate_identifier_accepts_official_and_local_ohpm_names() {
+    assert!(validate_identifier("@tauri/plugin-dialog").is_ok());
+    assert!(validate_identifier("my-local-plugin").is_ok());
+    assert!(validate_identifier("@my-scope/plugin").is_ok());
+    assert!(validate_identifier("plugin.name.2").is_ok());
+  }
+
+  #[test]
+  fn validate_identifier_rejects_malformed_names() {
+    // empty / empty parts
+    assert!(validate_identifier("").is_err());
+    assert!(validate_identifier("@scope").is_err());
+    assert!(validate_identifier("@scope/").is_err());
+    // characters that cannot appear in a package name or import path
+    assert!(validate_identifier("has space").is_err());
+    assert!(validate_identifier("../escape").is_err());
+    assert!(validate_identifier("a'b").is_err());
+    // ohpm forbids parts starting/ending with '.' or '_'
+    assert!(validate_identifier(".leading").is_err());
+    assert!(validate_identifier("trailing.").is_err());
+    assert!(validate_identifier("_under").is_err());
+    assert!(validate_identifier("under_").is_err());
+  }
+
+  /// Bridge-era EntryAbility.ets skeleton around the two anchors
+  /// [`sync_bridge_plugin_factories`] patches: the multi-line
+  /// `@ohos-rs/ability` import block and the `bridgePlugins` array.
+  fn entry_ability(import_names: &[&str], factories: &[&str]) -> Vec<String> {
+    let mut lines = vec![
+      "import {".to_string(),
+      "  NativeAbility,".to_string(),
+      "  LazyPlugin,".to_string(),
+    ];
+    lines.extend(import_names.iter().map(|n| format!("  {n},")));
+    lines.extend([
+      "} from '@ohos-rs/ability'".to_string(),
+      String::new(),
+      "export default class EntryAbility extends NativeAbility {".to_string(),
+      "  public bridgePlugins = [".to_string(),
+    ]);
+    lines.extend(
+      factories
+        .iter()
+        .map(|n| format!("    new LazyPlugin(() => new {n}()),")),
+    );
+    lines.extend(["  ]".to_string(), "}".to_string()]);
+    lines
+  }
+
+  #[test]
+  fn backfills_missing_bridge_factories_and_imports() {
+    // An older generated file that only knows PermissionPlugin.
+    let mut lines = entry_ability(&["PermissionPlugin"], &["PermissionPlugin"]);
+    sync_bridge_plugin_factories(&mut lines, "entry_mobile");
+
+    let content = lines.join("\n");
+    assert!(content.contains("  AccessibilityPlugin,\n"));
+    assert!(content.contains("    new LazyPlugin(() => new AccessibilityPlugin()),"));
+    // The aliased global-shortcut binding round-trips both halves.
+    assert!(content.contains("  GlobalShortcutPlugin as GlobalShortcutBridgePlugin,\n"));
+    assert!(content.contains("    new LazyPlugin(() => new GlobalShortcutBridgePlugin()),"));
+    // Existing entries are left untouched.
+    assert_eq!(
+      content
+        .matches("new LazyPlugin(() => new PermissionPlugin()),")
+        .count(),
+      1
+    );
+  }
+
+  #[test]
+  fn backfill_is_idempotent() {
+    let mut lines = entry_ability(&["PermissionPlugin"], &["PermissionPlugin"]);
+    sync_bridge_plugin_factories(&mut lines, "entry_mobile");
+    let once = lines.clone();
+    sync_bridge_plugin_factories(&mut lines, "entry_mobile");
+    assert_eq!(once, lines);
+  }
+
+  #[test]
+  fn orphaned_import_is_not_duplicated() {
+    // MenuPlugin is still imported but its factory line was hand-removed -
+    // backfilling must add the factory without duplicating the import binding.
+    let mut lines = entry_ability(&["MenuPlugin"], &[]);
+    sync_bridge_plugin_factories(&mut lines, "entry_mobile");
+
+    let content = lines.join("\n");
+    assert_eq!(content.matches("  MenuPlugin,").count(), 1);
+    assert!(content.contains("new LazyPlugin(() => new MenuPlugin()),"));
+  }
+
+  #[test]
+  fn pre_bridge_file_is_left_untouched() {
+    let mut lines: Vec<String> = "export default class EntryAbility extends NativeAbility {"
+      .lines()
+      .map(String::from)
+      .collect();
+    let before = lines.clone();
+    sync_bridge_plugin_factories(&mut lines, "entry_mobile");
+    assert_eq!(before, lines);
+  }
 }

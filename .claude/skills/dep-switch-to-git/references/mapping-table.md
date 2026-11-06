@@ -43,6 +43,7 @@ All git dependencies use: `git = "https://github.com/Eulogizethesun/<repo>", bra
 | `openharmony-ability-plugin-continuation` | `Eulogizethesun/openharmony-ability` | `../openharmony-ability/crates/plugin-continuation` |
 | `openharmony-ability-plugin-deep-link` | `Eulogizethesun/openharmony-ability` | `../openharmony-ability/crates/plugin-deep-link` |
 | `openharmony-ability-plugin-global-shortcut` | `Eulogizethesun/openharmony-ability` | `../openharmony-ability/crates/plugin-global-shortcut` |
+| `openharmony-ability-plugin-app-control` | `Eulogizethesun/openharmony-ability` | `../openharmony-ability/crates/plugin-app-control` |
 
 ## Tauri Plugins (all from plugins-workspace)
 
@@ -85,6 +86,7 @@ All `tauri-plugin-*` crates listed below resolve to the same git repo:
 | `tauri-plugin-accessibility` | `../../../../plugins-workspace/plugins/accessibility` |
 | `tauri-plugin-screenshot` | `../../../../plugins-workspace/plugins/screenshot` |
 | `tauri-plugin-continuation` | `../../../../plugins-workspace/plugins/continuation` |
+| `tauri-plugin-stronghold` | `../../../../plugins-workspace/plugins/stronghold` |
 
 ## Sentry (separate repo)
 

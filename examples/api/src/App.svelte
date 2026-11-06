@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte'
   import { writable } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
+  import { ask } from '@tauri-apps/plugin-dialog'
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
   import { setTheme } from '@tauri-apps/api/app'
 
@@ -38,6 +40,28 @@
   appWindow.onDragDropEvent((event) => {
     onMessage(event.payload)
   })
+
+  // App-level exit confirmation (product UX over the #103 pre-close
+  // interception): when the backend blocks an implicit close (window X) it
+  // emits confirm-exit-requested; ask the user and exit explicitly on
+  // confirm — explicit exits (process.exit) are never prevented. Guarded
+  // against re-entrancy (multiple X clicks while the dialog is up) and
+  // scoped to the main window only.
+  if (appWindow.label === 'main') {
+    let exitDialogShowing = false
+    listen('confirm-exit-requested', async () => {
+      if (exitDialogShowing) return
+      exitDialogShowing = true
+      try {
+        const ok = await ask('确认退出？', { title: '退出应用' })
+        if (ok) await invoke('plugin:process|exit', { code: 0 })
+      } catch (e) {
+        console.error('[exit-confirm] dialog/exit failed:', e)
+      } finally {
+        exitDialogShowing = false
+      }
+    })
+  }
 
   const userAgent = navigator.userAgent.toLowerCase()
   const isMobile = userAgent.includes('android') || userAgent.includes('iphone')

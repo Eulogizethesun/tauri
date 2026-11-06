@@ -40,6 +40,101 @@ export function skip(reason: string): never {
   throw new Error(`skip: ${reason}`);
 }
 
+// ─── OHOS device-form gating (mobile baseline) ──────────────────────────────
+//
+// The suite is authored against the desktop (PC/2in1) form. On an OHOS
+// mobile-form build whole feature domains are absent BY DESIGN:
+//   - menu/tray: lib.rs initialises them only under cfg(desktop) → every
+//     plugin:menu| / plugin:tray| invoke fails ("plugin menu not found");
+//   - many core window commands (maximize, setFullscreen, currentMonitor,
+//     decorations, cursor, effects...) are upstream cfg(desktop) and are
+//     not compiled into the mobile .so — each invoke fails with
+//     "Plugin not found: window" after the ArkTS fallback also misses.
+// Instead of surfacing these as failures on the mobile baseline, cases
+// declare themselves desktop-only and are skipped with a reason.
+
+let cachedMobileForm: boolean | null = null;
+
+/**
+ * Whether this app runs as the OHOS mobile form (phone/tablet). Asks the
+ * Rust side once (`get_device_form` — the same predicate tao's UIAbility
+ * spawn gate uses) and caches it. Non-OHOS platforms (no command) default
+ * to false (desktop semantics), matching how the suite ran before this
+ * gate existed.
+ */
+export async function isMobileForm(): Promise<boolean> {
+  if (cachedMobileForm === null) {
+    try {
+      cachedMobileForm = (
+        await invoke<{ mobile_form: boolean }>('get_device_form')
+      ).mobile_form;
+    } catch {
+      cachedMobileForm = false;
+    }
+  }
+  return cachedMobileForm;
+}
+
+/**
+ * Skip the current test when running on an OHOS mobile-form build.
+ * Use at the top of a desktop-only test's fn().
+ */
+export async function skipOnMobile(reason: string): Promise<void> {
+  if (await isMobileForm()) {
+    skip(`desktop-only on OHOS mobile form — ${reason}`);
+  }
+}
+
+/**
+ * Wrap a whole desktop-only suite: every case is skipped on an OHOS
+ * mobile-form build. Use for feature domains that are desktop-form by
+ * design (menu, tray) so future cases inherit the skip automatically.
+ */
+export function desktopOnlySuite(tests: TestCase[], feature: string): TestCase[] {
+  return tests.map((t) => ({
+    ...t,
+    async fn() {
+      await skipOnMobile(`${feature} is a desktop-form feature (not initialised on mobile builds)`);
+      return t.fn();
+    },
+  }));
+}
+
+// ─── OHOS API-level gating (version tiering) ────────────────────────────────
+//
+// Several OHOS window/webview operations are version-gated in
+// tauri-runtime-wry (`ohos_requires_api`): print/createPdf/setAlwaysOnTop
+// need SDK API 14+, startResizeDragging 20+, setCursorGrab 22+ — below the
+// threshold the facade rejects with the unified version error because the
+// underlying ArkTS/NDK API does not exist there. The suite's verified
+// devices are API 23 (2in1) and API 26 (phone), where every gate passes, so
+// the low-tier rejection is unreachable on them. Gated cases therefore probe
+// DUAL-MODE: below the threshold they positively ASSERT the version error
+// (message matched, not merely tolerated by a catch-all), at/above it they
+// run the normal path — the Err side fires automatically whenever a low-API
+// device runs the suite. It is disclosed in the PR text that no low-API
+// device was available in this round, so the assertion below the threshold
+// has not been observed firing on hardware yet.
+
+let cachedSdkApiVersion: number | null = null;
+
+/**
+ * The device's OHOS SDK API level (`get_ohos_version_info`), or null on
+ * non-OHOS platforms (no command → no tiering applies).
+ */
+export async function ohosSdkApiVersion(): Promise<number | null> {
+  if (cachedSdkApiVersion === null) {
+    try {
+      cachedSdkApiVersion = (
+        await invoke<{ sdkApiVersion: number }>('get_ohos_version_info')
+      ).sdkApiVersion;
+    } catch {
+      cachedSdkApiVersion = -1;
+    }
+  }
+  return cachedSdkApiVersion < 0 ? null : cachedSdkApiVersion;
+}
+
 const TEST_TIMEOUT_MS = 5000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
