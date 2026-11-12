@@ -574,6 +574,33 @@ class Webview {
   }
 
   /**
+   * Reloads the current page of this webview.
+   * @example
+   * ```typescript
+   * import { getCurrentWebview } from '@tauri-apps/api/webview';
+   * await getCurrentWebview().reload();
+   * ```
+   *
+   * #### Platfrom-specific:
+   *
+   * - **OpenHarmony**: Routed through ArkWeb's `WebviewController.refresh`.
+   *   The command is only registered on OHOS targets.
+   *
+   * @returns A promise indicating the success or failure of the operation.
+   *
+   * @since 2.1.0
+   */
+  async reload(): Promise<void> {
+    // `label` for cross-webview routing — same rationale as
+    // clearAllBrowsingData: without it the backend falls back to the
+    // invoking webview, so `Webview.getByLabel(x).reload()` would reload the
+    // caller instead of x.
+    return invoke('plugin:webview|webview_reload', {
+      label: this.label
+    })
+  }
+
+  /**
    * Moves this webview to the given label.
    * @example
    * ```typescript

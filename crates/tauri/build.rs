@@ -147,6 +147,10 @@ const PLUGINS: &[(&str, &[(&str, bool)])] = &[
       ("reparent", false),
       ("clear_all_browsing_data", false),
       ("set_webview_background_color", false),
+      // OHOS-only command (cfg(target_env = "ohos") in plugin.rs); the
+      // permission list is host-compiled so the entry is unconditional —
+      // inert on other targets, mirrors set_webview_background_color above.
+      ("webview_reload", false),
       // internal
       ("internal_toggle_devtools", true),
     ],

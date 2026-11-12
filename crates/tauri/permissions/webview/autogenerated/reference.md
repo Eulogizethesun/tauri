@@ -437,6 +437,32 @@ Denies the webview_position command without any pre-configured scope.
 <tr>
 <td>
 
+`core:webview:allow-webview-reload`
+
+</td>
+<td>
+
+Enables the webview_reload command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`core:webview:deny-webview-reload`
+
+</td>
+<td>
+
+Denies the webview_reload command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `core:webview:allow-webview-show`
 
 </td>
