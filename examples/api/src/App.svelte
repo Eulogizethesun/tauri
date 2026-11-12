@@ -20,12 +20,7 @@
   import Continuation from './views/Continuation.svelte'
 
   import { runTests } from './lib/test-runner'
-  import { coreTests } from './lib/tests/core'
-  import { pluginTests } from './lib/tests/plugins'
-  import { dpiTests } from './lib/tests/dpi'
-  import { windowDpiTests } from './lib/tests/window-dpi'
-  import { imageTests } from './lib/tests/image'
-  import { menuTests } from './lib/tests/menu'
+  import { coreTests, pluginTests, dpiTests, windowDpiTests, imageTests, menuTests } from './lib/tests'
   import { enableConsoleCapture } from './lib/console-capture'
 
   enableConsoleCapture()

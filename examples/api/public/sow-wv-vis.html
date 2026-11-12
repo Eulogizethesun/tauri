@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>child webview hide/show target</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      font-size: 15px;
+      padding: 24px;
+      background: lemonchiffon;
+      color: #222;
+      margin: 0;
+    }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    #countBtn {
+      font-size: 20px;
+      padding: 14px 28px;
+      background: #fff;
+      border: 2px solid #b8860b;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #up {
+      margin: 14px 0 4px;
+      font-family: monospace;
+      font-size: 16px;
+    }
+    .hint { color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>Child Webview — hide/show target</h2>
+  <!-- 外链脚本：CSP default-src 'self' 无 'unsafe-inline'（与 webview-viewport-probe.html
+       同约束）——data:URL 内联 onclick 被静默拦截，第 5 轮计数不增的根因。 -->
+  <button id="countBtn">count: 0</button>
+  <div id="up">uptime: 0s（重载会归零）</div>
+  <p class="hint">hide → show 后：计数保留 + 计时不归零 = 页面未重载、JS 状态不丢</p>
+  <script src="sow-wv-vis.js"></script>
+</body>
+</html>

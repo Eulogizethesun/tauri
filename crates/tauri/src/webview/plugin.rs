@@ -70,6 +70,22 @@ mod commands {
   ) -> crate::Result<()> {
     get_webview(webview, label)?.set_background_color(value)
   }
+
+  /// Reloads the webview's current page.
+  ///
+  /// OHOS-only registration: the wry OHOS backend routes this through ArkWeb's
+  /// `WebviewController.refresh` (WebviewPlugin.ets `reload` action, dispatch
+  /// via `PendingOp::Reload`). Keeping the command out of
+  /// `desktop_commands` leaves the desktop command surface unchanged from
+  /// upstream.
+  #[cfg(target_env = "ohos")]
+  #[command(root = "crate")]
+  pub async fn webview_reload<R: Runtime>(
+    webview: Webview<R>,
+    label: Option<String>,
+  ) -> crate::Result<()> {
+    get_webview(webview, label)?.reload()
+  }
 }
 
 #[cfg(desktop)]
@@ -273,6 +289,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       #[cfg(desktop)] desktop_commands::set_webview_auto_resize,
       #[cfg(any(desktop, target_env = "ohos"))]
       commands::set_webview_background_color,
+      #[cfg(target_env = "ohos")]
+      commands::webview_reload,
       #[cfg(desktop)] desktop_commands::set_webview_zoom,
       #[cfg(desktop)] desktop_commands::webview_hide,
       #[cfg(desktop)] desktop_commands::webview_show,

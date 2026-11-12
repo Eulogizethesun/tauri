@@ -69,6 +69,27 @@ const menuTestsInner: TestCase[] = [
       assert(items.length === 1, `items.length should be 1, got ${items.length}`);
     },
   },
+  {
+    name: '@tauri-apps/api/menu.Menu.default',
+    category: 'auto',
+    async fn() {
+      const { Menu } = await import('@tauri-apps/api/menu');
+      // S5M-052「获取默认菜单」：Menu.default() 走 plugin:menu|default 命令，
+      // Rust 侧 Menu::default（menu.rs:187）以预置模板构造——非 macOS 为
+      // Edit/Window/Help 三个 Submenu（OHOS target_os=linux 与 Linux 上游
+      // 同枝，File 项被 cfg 跳过）。断言只锁契约形态不锁平台条目数下界 2。
+      const menu = await Menu.default();
+      assert(menu !== undefined, 'Menu.default returned undefined');
+      assert(menu.id.length > 0, `menu.id returned empty: ${menu.id}`);
+      const items = await menu.items();
+      assert(Array.isArray(items), `items() should return an array, got ${typeof items}`);
+      assert(items.length >= 2, `default menu should contain at least the Window and Help submenus, got ${items.length}`);
+      for (const item of items) {
+        assert(typeof item.id === 'string' && item.id.length > 0,
+          `submenu id should be a non-empty string, got ${JSON.stringify(item.id)}`);
+      }
+    },
+  },
 
   // --- 菜单项管�?---
   {
