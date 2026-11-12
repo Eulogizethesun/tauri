@@ -160,6 +160,7 @@
     "core:webview:allow-reparent",
     "core:webview:allow-print",
     "core:webview:allow-set-webview-background-color",
+    "core:webview:allow-webview-reload",
     "fs:default",
     "fs:allow-mkdir",
     "fs:allow-write-file",

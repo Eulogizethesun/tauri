@@ -1,11 +1,11 @@
 import { skip, skipOnMobile, ohosSdkApiVersion, type TestCase } from '../test-runner';
 import { invoke, Channel, Resource } from '@tauri-apps/api/core';
-import { emit, listen, once } from '@tauri-apps/api/event';
-import { getVersion } from '@tauri-apps/api/app';
-import { getCurrentWindow, currentMonitor, cursorPosition, Effect, PhysicalPosition, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
+import { emit, listen, once, emitTo } from '@tauri-apps/api/event';
+import { getVersion, getName, getTauriVersion, getIdentifier, getBundleType, defaultWindowIcon, supportsMultipleWindows, setDockVisibility, hide as appHide, show as appShow } from '@tauri-apps/api/app';
+import { getCurrentWindow, currentMonitor, cursorPosition, availableMonitors, getAllWindows, primaryMonitor, Effect, PhysicalPosition, LogicalPosition, LogicalSize } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWebview, Webview } from '@tauri-apps/api/webview';
-import { appCacheDir } from '@tauri-apps/api/path';
+import { appCacheDir, basename, dirname, extname, isAbsolute, normalize, resolve, appConfigDir, appLocalDataDir, appLogDir, audioDir, configDir, dataDir, documentDir, downloadDir, pictureDir, tempDir, runtimeDir } from '@tauri-apps/api/path';
 
 // Helper to test custom protocol using iframe
 function testCustomProtocol(url: string): Promise<{ ok: boolean; error?: string }> {
@@ -36,6 +36,31 @@ function testCustomProtocol(url: string): Promise<{ ok: boolean; error?: string 
 
 function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(msg);
+}
+
+// C1b 目录 API 形态断言（SOW §三 S3-048~S3-058，2026-11-10）：
+// 通用腿=非空+绝对路径；OHOS el2 形态腿=严格尾部断言。JS 层（plugin:path 经
+// ArkTS Context）返回模块级形态 el2/base/haps/<module>/<tail>——2026-11-10 真机
+// 勘误：首版按 crates/tauri/src/path/ohos.rs 的 bundle 级形态写期望，实测 10/10
+// 带 haps/entry_desktop 模块段（与 appCacheDir 模块级路径陷阱同源，Rust/物理侧
+// 才是 bundle 级）；模块段按可选处理（bundle 级/模块级两形态皆合法），尾部严格。
+const OHOS_EL2_BASE = '/data/storage/el2/base/';
+
+async function assertDirPath(dir: string, ohosSuffix: string, apiName: string): Promise<void> {
+  assert(typeof dir === 'string' && dir.length > 0, `${apiName}: expected non-empty path, got "${dir}"`);
+  assert((await isAbsolute(dir)) === true, `${apiName}: path should be absolute, got "${dir}"`);
+  if (dir.startsWith(OHOS_EL2_BASE)) {
+    let tail = dir.slice(OHOS_EL2_BASE.length);
+    if (tail.startsWith('haps/')) {
+      const moduleEnd = tail.indexOf('/', 'haps/'.length);
+      assert(moduleEnd > 0, `${apiName}: malformed haps module segment, got "${dir}"`);
+      tail = tail.slice(moduleEnd + 1);
+    }
+    assert(
+      tail === ohosSuffix,
+      `${apiName}: OHOS el2 form should be base/[haps/<module>/]${ohosSuffix}, got "${dir}"`
+    );
+  }
 }
 
 // Probe IPC response routing into a same-origin iframe child frame.
@@ -388,6 +413,99 @@ export const coreTests: TestCase[] = [
     },
   },
 
+  // @tauri-apps/api/app 应用信息（C1b 新断言批，SOW §三 S3-003~S3-008/S3-011/S3-012，2026-11-10）。
+  // 契约依据 crates/tauri/src/app/plugin.rs：getBundleType=null（HAP 不在 BundleType 枚举，
+  // bundler 二进制补丁不触及 ohos 构建）；app.hide/show 与 setDockVisibility 在非 macOS
+  // 全为 no-op 返回 Ok（cfg 门，与 #237 窗口级契约拒绝是不同形态）。
+  {
+    name: '@tauri-apps/api/app.getName',
+    category: 'auto',
+    async fn() {
+      const name = await getName();
+      assert(typeof name === 'string' && name.length > 0, `expected non-empty app name, got "${name}"`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.getTauriVersion',
+    category: 'auto',
+    async fn() {
+      const v = await getTauriVersion();
+      assert(/^\d+\.\d+\.\d+/.test(String(v)), `expected semantic version string, got "${v}"`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.getIdentifier',
+    category: 'auto',
+    async fn() {
+      const id = await getIdentifier();
+      assert(typeof id === 'string' && id.length > 0, `expected non-empty identifier, got "${id}"`);
+      assert(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(id), `identifier should be dotted reverse-domain form, got "${id}"`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.getBundleType',
+    category: 'auto',
+    async fn() {
+      // d.ts 签名是 Promise<BundleType>，Rust 侧返回 Option——OHOS 未走桌面
+      // bundler 补丁，__TAURI_BUNDLE_TYPE 保持 UNK → null 是平台预期值。
+      const t = await getBundleType();
+      const enumValues = ['nsis', 'msi', 'deb', 'rpm', 'appimage', 'app'];
+      assert(
+        t === null || enumValues.includes(t as never),
+        `expected null (OHOS) or a BundleType enum value, got "${t}"`
+      );
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.defaultWindowIcon',
+    category: 'auto',
+    async fn() {
+      const icon = await defaultWindowIcon();
+      if (icon === null) return; // 合同双臂：无默认图标（icon 未配置）即 null
+      assert(typeof icon.rid === 'number' && icon.rid > 0, `expected Image with rid>0 or null, got rid=${icon.rid}`);
+      const size = await icon.size();
+      assert(size.width > 0 && size.height > 0, `icon size should be positive, got ${size.width}x${size.height}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.supportsMultipleWindows',
+    category: 'auto',
+    async fn() {
+      const smw = await supportsMultipleWindows();
+      assert(typeof smw === 'boolean', `expected boolean, got "${smw}"`);
+      // 本套件的 float 子窗/多窗用例依赖真多窗——false 意味着整个多窗族失真。
+      assert(smw === true, `expected true on OHOS (suite depends on sub-windows), got ${smw}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.hide+show (app-level, non-macOS no-op contract)',
+    category: 'auto',
+    timeout: 6000,
+    async fn() {
+      // S3-011：应用级 app_hide/app_show 被 cfg(target_os = "macos") 门住
+      // （plugin.rs:41-47），非 macOS 一律 no-op 返回 Ok。断言=干净 resolve +
+      // 主窗可见性不翻（no-op 实证）。窗口级 hide 的 #237 契约拒绝是另一路径。
+      const before = await getCurrentWindow().isVisible();
+      await appHide();
+      await appShow();
+      const after = await getCurrentWindow().isVisible();
+      assert(before === true, `main window should be visible before, got ${before}`);
+      assert(after === true, `main window should stay visible (non-macOS no-op contract), got ${after}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/app.setDockVisibility (non-macOS no-op contract)',
+    category: 'auto',
+    async fn() {
+      // S3-012：set_dock_visibility 在非 macOS 全为 no-op 返回 Ok
+      // （plugin.rs:108-110）。计划稿曾列 manual（判据 dock 图标消失/恢复），
+      // 按源码实证 OHOS 无 macOS 式 Dock、判据定义性不可验——转 auto 契约
+      // 断言（#237 诚实契约先例）：双向调用干净 resolve 即链路验证。
+      await setDockVisibility(false);
+      await setDockVisibility(true);
+    },
+  },
+
   // @tauri-apps/api/core
   {
     name: '@tauri-apps/api/core.invoke',
@@ -525,6 +643,26 @@ export const coreTests: TestCase[] = [
       assert(count === 1, `once listener fired ${count} times, expected 1`);
     },
   },
+  {
+    name: '@tauri-apps/api/event.emitTo',
+    category: 'auto',
+    async fn() {
+      // S2-019「定向发送事件」：emitTo 带 EventTarget 对象（非裸字符串标签），
+      // kind='Webview' + 本 webview 标签 → 事件只送目标，本窗 listen 收到且
+      // payload 逐字段相符。kind='Any' 的字符串形式已由既有 emit 用例盖。
+      const label = getCurrentWebview().label;
+      let received: any = null;
+      const unlisten = await listen('sow-emitto-evt', (event) => {
+        received = event.payload;
+      });
+      await emitTo({ kind: 'Webview', label }, 'sow-emitto-evt', { v: 42, tag: 'sow' });
+      await new Promise((r) => setTimeout(r, 100));
+      unlisten();
+      assert(received !== null, 'emitTo target listener did not receive event');
+      assert(received.v === 42 && received.tag === 'sow',
+        `unexpected emitTo payload: ${JSON.stringify(received)}`);
+    },
+  },
 
   // @tauri-apps/api/window
   {
@@ -561,6 +699,268 @@ export const coreTests: TestCase[] = [
       assert(typeof monitor.position.y === 'number', `monitor.position.y should be a number, got ${monitor.position.y}`);
     },
   },
+  {
+    name: '@tauri-apps/api/window.availableMonitors',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('the availableMonitors window command is upstream cfg(desktop) and absent from the mobile build');
+      // C1a 平移自 cov 层 wox monitors 批（SOW §一 S1-072「获取可用显示器」，2026-11-10）：
+      // 数组形态 + 每项字段断言（wox:65/73 原 Array.isArray 收紧为逐项形态）
+      const monitors = await availableMonitors();
+      assert(Array.isArray(monitors), `availableMonitors should resolve to an array, got: ${monitors}`);
+      assert(monitors.length > 0, `availableMonitors array should be non-empty on a device with a display, got ${monitors.length}`);
+      for (const m of monitors) {
+        assert(typeof m.name === 'string', `monitor.name should be a string, got ${typeof m.name}`);
+        assert(typeof m.size.width === 'number' && m.size.width > 0, `monitor.size.width should be positive, got ${m.size.width}`);
+        assert(typeof m.scaleFactor === 'number' && m.scaleFactor > 0, `monitor.scaleFactor should be positive, got ${m.scaleFactor}`);
+        assert(m.position !== undefined, 'monitor.position should be present');
+      }
+    },
+  },
+
+  // ── C3 批（SOW §一 auto 7 条，2026-11-10）──
+  {
+    name: '@tauri-apps/api/window.primaryMonitor (null-or-valid contract)',
+    category: 'auto',
+    async fn() {
+      await skipOnMobile('the primaryMonitor window command is upstream cfg(desktop) and absent from the mobile build');
+      // S1-073「获取主显示器」：null-or-合法契约（OHOS 可能不报 primary——null 不假失败）
+      const monitor = await primaryMonitor();
+      if (monitor === null || monitor === undefined) {
+        // 契约允许：无主显示器概念时返回 null（不硬失败）
+        return;
+      }
+      assert(typeof monitor.size.width === 'number' && monitor.size.width > 0, `monitor.size.width should be positive, got ${monitor.size.width}`);
+      assert(typeof monitor.size.height === 'number' && monitor.size.height > 0, `monitor.size.height should be positive, got ${monitor.size.height}`);
+      assert(typeof monitor.scaleFactor === 'number' && monitor.scaleFactor > 0, `monitor.scaleFactor should be positive, got ${monitor.scaleFactor}`);
+    },
+  },
+  {
+    name: 'window.setTitle+title round-trip',
+    category: 'side-effect',
+    async fn() {
+      await skipOnMobile('the setTitle window command is upstream cfg(desktop) and absent from the mobile build');
+      // S1-029「读取窗口标题」：setTitle 派发（tao set_title→API 15 set_window_title）；
+      // fix 批② 实装 title() cache-on-set 读回（tao 桥无同步查询，set_title 写
+      // app-owned 缓存镜像，title() 读回；从未 set 过=空串保持前行为）→
+      // read===marker 全等断言臂激活；read==='' 仅在缓存未写过时出现（本用例
+      // 前 setTitle 已必然写过 → 空串即回归信号）。曾为披露缺口（getter 恒空串）。
+      const win = getCurrentWindow();
+      const original = await win.title();
+      const marker = 'sow-title-' + Date.now();
+      try {
+        await win.setTitle(marker);
+        await new Promise((r) => setTimeout(r, 300));
+        const read = await win.title();
+        if (read !== '') {
+          assert(read === marker, `title() should read back "${marker}" after setTitle, got "${read}"`);
+        }
+        // read === ''：缓存从未写过——本用例前置 setTitle 已写过，出现即回归
+      } finally {
+        try { await win.setTitle(original); } catch { /* restore best-effort */ }
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/api/window.getAllWindows (main + created sub-window)',
+    category: 'side-effect',
+    timeout: 8000,
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      // S1-052「获取所有窗口」：快照含主窗 + 建子窗后长度增长且含新 label + destroy 后回落（无僵尸注册表项）
+      const before = await getAllWindows();
+      assert(Array.isArray(before), `getAllWindows should resolve to array, got ${before}`);
+      assert(before.some((w) => w.label === 'main'), `getAllWindows should contain the 'main' window, got labels: ${before.map((w) => w.label).join(',')}`);
+      const windowId = 'test-float-allwin-' + Date.now();
+      await invoke('create_borderless_window', { windowId });
+      await new Promise((r) => setTimeout(r, 600));
+      const win = await WebviewWindow.getByLabel(windowId);
+      assert(win !== null, `float sub-window "${windowId}" not registered within the 600ms handshake window - creation race`);
+      try {
+        const during = await getAllWindows();
+        assert(during.length >= before.length + 1, `getAllWindows length should grow by >=1 after sub-window creation, before=${before.length} during=${during.length}`);
+        assert(during.some((w) => w.label === windowId), `getAllWindows should contain "${windowId}", got labels: ${during.map((w) => w.label).join(',')}`);
+      } finally {
+        try { await win!.destroy(); } catch { /* cleanup best-effort */ }
+      }
+      let after = await getAllWindows();
+      const deadline = Date.now() + 2000;
+      while (after.some((w) => w.label === windowId) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+        after = await getAllWindows();
+      }
+      assert(!after.some((w) => w.label === windowId), `destroyed window "${windowId}" still listed in getAllWindows 2000ms after destroy - zombie registry entry`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/window.onThemeChanged + setTheme round-trip',
+    category: 'side-effect',
+    timeout: 8000,
+    async fn() {
+      // S1-062「监听主题变化」：onThemeChanged 事件 + setTheme 读回（降级预案：真机红→转 manual）
+      const win = getCurrentWindow();
+      const original = await win.theme();
+      const target = original === 'dark' ? 'light' : 'dark';
+      let event: string | null = null;
+      const unlisten = await win.onThemeChanged(({ payload }) => { event = payload; });
+      try {
+        await win.setTheme(target);
+        await new Promise((r) => setTimeout(r, 800));
+        const read = await win.theme();
+        assert(read === target, `theme() should read back "${target}" after setTheme, got "${read}"`);
+        assert(event === target, `onThemeChanged should fire with "${target}" within 800ms, got ${String(event)}`);
+      } finally {
+        unlisten();
+        try { await win.setTheme(original); } catch { /* restore best-effort */ }
+      }
+    },
+  },
+  {
+    name: 'float sub-window toggleMaximize (isMaximized mirror asserted)',
+    category: 'side-effect',
+    timeout: 10000,
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      // S1-066「切换子窗口最大化」：toggleMaximize → isMaximized 镜像双向
+      // （float maximize 1300004/白条修复的回归臂；主窗 maximize 断言另存于 wops 区）
+      const windowId = 'test-float-tmax-' + Date.now();
+      await invoke('create_borderless_window', { windowId });
+      await new Promise((r) => setTimeout(r, 600));
+      const win = await WebviewWindow.getByLabel(windowId);
+      assert(win !== null, `float sub-window "${windowId}" not registered within the 600ms handshake window - creation race`);
+      try {
+        await win!.toggleMaximize();
+        let max = await win!.isMaximized();
+        const deadline = Date.now() + 2000;
+        while (!max && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+          max = await win!.isMaximized();
+        }
+        assert(max === true, `float sub-window isMaximized should become true after toggleMaximize(), got ${max}`);
+        await win!.toggleMaximize();
+        let max2 = await win!.isMaximized();
+        const deadline2 = Date.now() + 2000;
+        while (max2 && Date.now() < deadline2) {
+          await new Promise((r) => setTimeout(r, 100));
+          max2 = await win!.isMaximized();
+        }
+        assert(max2 === false, `float sub-window isMaximized should return false after second toggleMaximize(), got ${max2}`);
+      } finally {
+        try { await win!.destroy(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    name: 'float sub-window setEnabled (OHOS rejection contract)',
+    category: 'side-effect',
+    timeout: 8000,
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      // S1-067「切换启用状态」：OHOS 契约=setEnabled 显式拒绝（#225：dispatcher
+      // 提前报错而非静默 no-op）；isEnabled 恒 true（window/mod.rs:40 无系统态可查）。
+      // 用子窗不用主窗——万一拒绝未发生也不锁死整个 UI。
+      const windowId = 'test-float-enable-' + Date.now();
+      await invoke('create_borderless_window', { windowId });
+      await new Promise((r) => setTimeout(r, 600));
+      const win = await WebviewWindow.getByLabel(windowId);
+      assert(win !== null, `float sub-window "${windowId}" not registered within the 600ms handshake window - creation race`);
+      try {
+        let rejected = false;
+        try {
+          await win!.setEnabled(false);
+        } catch (e) {
+          const msg = String(e);
+          assert(
+            /not supported on OpenHarmony/.test(msg),
+            `setEnabled should reject with the documented contract message, got: ${msg}`,
+          );
+          rejected = true;
+        }
+        assert(rejected, 'setEnabled should reject on OHOS (contract per #225) — a silent success/no-op here is a regression of the honest-error family');
+        assert((await win!.isEnabled()) === true, 'isEnabled should stay true on OHOS (no system enabled/disabled state, window/mod.rs:40)');
+      } finally {
+        try { await win!.destroy(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/api/window.center (float sub-window recenters)',
+    category: 'side-effect',
+    timeout: 8000,
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      // S1-017「窗口居中」：fix 批① 实装 WindowExt::center ohos 覆写
+      // （current_monitor → calculate_window_center_position(work_area 几何)
+      // → set_outer_position，与建窗期 #[cfg(desktop)] centering 同一公式）。
+      // 曾为披露 no-op 契约（默认空实现：位置 40,40 不动）；实装后本用例
+      // 改回几何比对——用 JS Monitor.workArea 复算同一公式，±8 物理px 容差
+      // （整型取整+派发异步），currentMonitor null 时 honest skip。
+      const windowId = 'test-float-center-' + Date.now();
+      await invoke('create_borderless_window', { windowId });
+      await new Promise((r) => setTimeout(r, 600));
+      const win = await WebviewWindow.getByLabel(windowId);
+      assert(win !== null, `float sub-window "${windowId}" not registered within the 600ms handshake window - creation race`);
+      try {
+        await win!.setPosition(new PhysicalPosition(40, 40));
+        await new Promise((r) => setTimeout(r, 300));
+        await win!.center();
+        // 派发生效窗口（center 经 dispatcher 异步移动子窗）
+        await new Promise((r) => setTimeout(r, 800));
+        // currentMonitor 是模块级函数（Window 实例无此方法——首跑 #27 即
+        // "t.currentMonitor is not a function"）；单显示器设备上模块级
+        // currentMonitor 与子窗所在 monitor 同一 workArea。
+        const monitor = await currentMonitor();
+        if (monitor === null) {
+          skip('currentMonitor() returned null on this device — center geometry unjudgeable');
+        }
+        const pos = await win!.outerPosition();
+        const size = await win!.outerSize();
+        const wa = monitor!.workArea;
+        const expectX = Math.round((wa.size.width - size.width) / 2) + wa.position.x;
+        const expectY = Math.round((wa.size.height - size.height) / 2) + wa.position.y;
+        assert(
+          Math.abs(pos.x - expectX) <= 8 && Math.abs(pos.y - expectY) <= 8,
+          `window.center(): position (${pos.x},${pos.y}) ≠ work-area center (${expectX},${expectY}) ±8 physical px — center() not applied or wrong geometry (window ${size.width}×${size.height}, work area ${wa.size.width}×${wa.size.height} @ ${wa.position.x},${wa.position.y})`,
+        );
+      } finally {
+        try { await win!.destroy(); } catch { /* cleanup best-effort */ }
+      }
+    },
+  },
+
+  // ── C3 批（SOW §一 manual 6 条锚点，2026-11-10）──
+  // 判据=无 getter 的纯视觉/系统交互形态（SOW §一 S1-018/037/040/042/061/088）。
+  // wrapManual 字面量与 name 逐字一致；判据见 manual_tests.md §三十六追加行。
+  {
+    name: 'window.setZoom (1.5x visual)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'window.setSkipTaskbar (taskbar icon toggle)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'window.setShadow (visual toggle)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'window.setIcon (1x1 PNG)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'window.onScaleChanged (system display settings)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'window.startDragging (mouse drag)',
+    category: 'manual',
+    async fn() {},
+  },
 
   // @tauri-apps/api/webview
   {
@@ -573,6 +973,35 @@ export const coreTests: TestCase[] = [
     },
   },
 
+  // ── C4 批（SOW §二 子 Webview manual 3 条锚点，2026-11-10）──
+  // 判据=子 Webview 级形态（S2-032/034/035）——与 §一 window 级同名 API 的差别
+  // 在作用对象：本批按钮在子 Webview 上派发。wrapManual 字面量与 name 逐字一致；
+  // 判据见 manual_tests.md §四十二追加行。
+  {
+    name: 'webview.setZoom (child webview 1.5x visual)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'webview.setFocus (child webview z-order)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'webview.hide+show (child webview)',
+    category: 'manual',
+    async fn() {},
+  },
+
+  // ── fix 批⑤（S1-018/S2-032 绝对语义复验锚点，2026-11-10）──
+  // wry 侧 target/current 换算落地后 setZoom(1.0)=复位 100% 成为修复后契约；
+  // 判据见 manual_tests.md §36.12（新复验行——已归一的旧相对语义披露行不动）。
+  {
+    name: 'webview.setZoom (child abs round-trip 1.5→1.0)',
+    category: 'manual',
+    async fn() {},
+  },
+
   // @tauri-apps/api/path
   {
     name: '@tauri-apps/api/path.appCacheDir',
@@ -582,6 +1011,168 @@ export const coreTests: TestCase[] = [
       assert(typeof dir === 'string' && dir.length > 0, `expected non-empty path, got "${dir}"`);
       assert(dir.includes('/') || dir.includes('\\'), `path should contain separator, got "${dir}"`);
       assert(dir.toLowerCase().includes('cache'), `path should contain "cache" segment, got "${dir}"`);
+    },
+  },
+
+  // @tauri-apps/api/path 纯函数（C1a 平移自 api-gap cov 批，断言同源；SOW §三 S3-041~S3-046，2026-11-10）
+  {
+    name: '@tauri-apps/api/path.basename',
+    category: 'auto',
+    async fn() {
+      const b = await basename('/a/b/c.txt');
+      assert(b === 'c.txt', `basename should be c.txt, got ${b}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.dirname',
+    category: 'auto',
+    async fn() {
+      const d = await dirname('/a/b/c.txt');
+      assert(d === '/a/b', `dirname should be /a/b, got ${d}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.extname',
+    category: 'auto',
+    async fn() {
+      // Rust Path::extension 语义：无前导点（"txt"），与 Node path.extname（".txt"）不同
+      const e = await extname('/a/b/c.txt');
+      assert(e === 'txt', `extname should be txt, got ${e}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.isAbsolute',
+    category: 'auto',
+    async fn() {
+      assert((await isAbsolute('/a')) === true, 'isAbsolute(/a) should be true');
+      assert((await isAbsolute('a')) === false, 'isAbsolute(a) should be false');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.normalize',
+    category: 'auto',
+    async fn() {
+      const n = await normalize('/a/./b/../c');
+      assert(n === '/a/c', `normalize should be /a/c, got ${n}`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.resolve',
+    category: 'auto',
+    async fn() {
+      const r = await resolve('a', 'b');
+      assert((await isAbsolute(r)) === true, `resolve result should be absolute, got ${r}`);
+    },
+  },
+
+  // @tauri-apps/api/path 目录 API（C1b 新断言批，SOW §三 S3-048/S3-050~S3-058/S3-060，2026-11-10）。
+  // 断言形态：assertDirPath（非空+绝对通用腿 + el2 严格尾部，模块段可选见其头注勘误）；
+  // files 四兄弟两两交叉（appConfigDir===appLocalDataDir、configDir===dataDir，OHOS 同映射契约）。
+  {
+    name: '@tauri-apps/api/path.appConfigDir',
+    category: 'auto',
+    async fn() {
+      const dir = await appConfigDir();
+      await assertDirPath(dir, 'files', 'appConfigDir');
+      // OHOS 同映射交叉：appConfigDir 与 appLocalDataDir 都指向 …/files（模块级 el2 形态）
+      const sibling = await appLocalDataDir();
+      assert(dir === sibling, `appConfigDir should equal appLocalDataDir on OHOS, got "${dir}" vs "${sibling}"`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.appLocalDataDir',
+    category: 'auto',
+    async fn() {
+      const dir = await appLocalDataDir();
+      await assertDirPath(dir, 'files', 'appLocalDataDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.appLogDir',
+    category: 'auto',
+    async fn() {
+      const dir = await appLogDir();
+      await assertDirPath(dir, 'log', 'appLogDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.audioDir',
+    category: 'auto',
+    async fn() {
+      const dir = await audioDir();
+      await assertDirPath(dir, 'files/Audio', 'audioDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.configDir',
+    category: 'auto',
+    async fn() {
+      const dir = await configDir();
+      await assertDirPath(dir, 'files', 'configDir');
+      // OHOS 同映射交叉：configDir 与 dataDir 都指向 …/files（模块级 el2 形态）
+      const sibling = await dataDir();
+      assert(dir === sibling, `configDir should equal dataDir on OHOS, got "${dir}" vs "${sibling}"`);
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.dataDir',
+    category: 'auto',
+    async fn() {
+      const dir = await dataDir();
+      await assertDirPath(dir, 'files', 'dataDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.documentDir',
+    category: 'auto',
+    async fn() {
+      const dir = await documentDir();
+      await assertDirPath(dir, 'files/Documents', 'documentDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.downloadDir',
+    category: 'auto',
+    async fn() {
+      const dir = await downloadDir();
+      await assertDirPath(dir, 'files/Download', 'downloadDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.pictureDir',
+    category: 'auto',
+    async fn() {
+      const dir = await pictureDir();
+      await assertDirPath(dir, 'files/Pictures', 'pictureDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.tempDir',
+    category: 'auto',
+    async fn() {
+      const dir = await tempDir();
+      await assertDirPath(dir, 'temp', 'tempDir');
+    },
+  },
+  {
+    name: '@tauri-apps/api/path.runtimeDir (OHOS defined-absent, android-aligned)',
+    category: 'auto',
+    async fn() {
+      // S3-060：BaseDirectory::Runtime 在 Rust 侧被 cfg(not(android),
+      // not(ohos)) 摘除（path/mod.rs:175，与上游 Android 同款定义性缺席）——
+      // JS 层 invoke 目录号 22 无法反序列化，必然拒绝。断言=干净拒绝（拿到
+      // 后端错误）；resolve 或挂起才是失败。cov 层 driver: path.runtimeDir
+      // 经 blind() 包装吞掉拒绝，不构成本条证据。
+      let rejected = false;
+      let msg = '';
+      try {
+        await runtimeDir();
+      } catch (e: any) {
+        rejected = true;
+        msg = String(e?.message ?? e);
+      }
+      assert(rejected, 'runtimeDir() should reject on OHOS — BaseDirectory::Runtime is cfg-gated out (android-aligned); a resolve would mean the enum leaked');
+      assert(msg.length > 0, 'rejection should carry a backend error message');
     },
   },
 
@@ -1081,12 +1672,16 @@ export const coreTests: TestCase[] = [
         events.includes('WindowEvent::Destroyed'),
         `WindowEvent::Destroyed should be in tracked events, got: ${JSON.stringify(events)}`,
       );
-      // Also verify CloseRequested was fired before Destroyed
-      const closeReqIdx = events.indexOf('WindowEvent::CloseRequested');
-      const destroyedIdx = events.indexOf('WindowEvent::Destroyed');
+      // Also verify CloseRequested was fired before Destroyed.
+      // run_events 是 app 启动以来不清空的全局账（clear_tracked_events 刻意不动它，
+      // Ready 只发一次），而本套件其他用例会 destroy() 子窗——destroy 只发 Destroyed
+      // 不发 CloseRequested。indexOf 会拿到别人的 Destroyed → 必须用 lastIndexOf
+      // 断言「最近一次关窗链路」：本用例自己的 CloseRequested → Destroyed。
+      const closeReqIdx = events.lastIndexOf('WindowEvent::CloseRequested');
+      const destroyedIdx = events.lastIndexOf('WindowEvent::Destroyed');
       assert(
-        closeReqIdx !== -1 && closeReqIdx < destroyedIdx,
-        `WindowEvent::CloseRequested should fire before WindowEvent::Destroyed, got: ${JSON.stringify(events)}`,
+        closeReqIdx !== -1 && destroyedIdx !== -1 && closeReqIdx < destroyedIdx,
+        `the latest close chain should be WindowEvent::CloseRequested before WindowEvent::Destroyed, got closeReqIdx=${closeReqIdx} destroyedIdx=${destroyedIdx} (of ${events.length} tracked events)`,
       );
     },
   },
@@ -1169,6 +1764,51 @@ export const coreTests: TestCase[] = [
       const decorated = await win!.isDecorated();
       assert(decorated === false, `Transparent borderless window should have decorations=false, got ${decorated}`);
       // Intentionally NOT closing — leave for manual Close All cleanup.
+    },
+  },
+
+  // ─── Float sub-window hide + show + center（C1a 平移自 cov 层 float.hide+show+center
+  // smoke，SOW §一 S1-069「隐藏显示居中子窗口」，2026-11-10）───
+  // 断言集与 cov 原条目同源：hide() 必 resolve（#237/#241 kind-split——子窗分支，
+  // reject=主窗 hide 门泄漏到子窗即 FAIL）+ isVisible 镜像 2s 轮询读 false +
+  // show() 复原 + center() 重居中。ArkTS 侧 apply 判别器套件层不可构造（smoke，
+  // 详见 driver-generated.ts 原条目内决策注释）。destroy 挂 finally 全路径兜底。
+  {
+    name: 'float sub-window hide+show+center (visibility mirror asserted)',
+    category: 'side-effect',
+    timeout: 8000,
+    async fn() {
+      await skipOnMobile('the create_borderless_window command is cfg(desktop)-only in cmd.rs');
+      const windowId = 'test-float-hsc-' + Date.now();
+      await invoke('create_borderless_window', { windowId });
+      // creation/registration handshake settle（同 cov 原条目 600ms）
+      await new Promise((r) => setTimeout(r, 600));
+      const win = await WebviewWindow.getByLabel(windowId);
+      assert(win !== null, `float sub-window "${windowId}" not registered within the 600ms handshake window - creation race`);
+      try {
+        // hide() on a FLOAT SUB-WINDOW must resolve（kind-split 子窗分支）；
+        // reject = 主窗 hide 门泄漏到子窗（#237/#241 修复回归臂）
+        await win!.hide();
+        // isVisible() 读 tao Rust 侧可见性镜像；set_visible(false) 在 ArkTS 派发
+        // 前急切写镜像，首轮轮询通常已见 false——2s 循环仅为竞态容忍
+        let visible = await win!.isVisible();
+        const deadline = Date.now() + 2000;
+        while (visible && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+          visible = await win!.isVisible();
+        }
+        assert(visible === false, `float sub-window "${windowId}" still isVisible()=true 2000ms after hide() resolved - visibility mirror never read false（either a gate leak, or a windowStatusChange backfill re-set it）`);
+        await win!.show();
+        await new Promise((r) => setTimeout(r, 300));
+        await win!.center();
+      } finally {
+        // 全路径销毁探针子窗——失败轮不可向后续用例泄漏（cov 原条目 F6 兜底同源）
+        try {
+          await win!.destroy();
+        } catch (cleanupErr) {
+          console.warn(`float hide+show+center: cleanup destroy failed (leftover window "${windowId}"): ${String((cleanupErr as Error)?.message ?? cleanupErr)}`);
+        }
+      }
     },
   },
 
@@ -2116,6 +2756,58 @@ export const coreTests: TestCase[] = [
         // Restore the suite's window size so later window-geometry cases are
         // not affected by this case's resizes.
         try { await mainWindow.setSize(origPhysical); } catch { /* best-effort */ }
+      }
+    },
+  },
+
+  // ─── Webview reload (S2-004: plugin:webview|webview_reload routing) ───
+  {
+    // The reload command's full chain (JS api → plugin command → runtime-wry →
+    // wry PendingOp::Reload → ArkWeb WebviewController.refresh) only becomes
+    // observable through a CHILD webview: reloading the MAIN webview would
+    // reload this test runner itself. Acceptance = the child's document is
+    // re-fetched, which re-executes the probe page's script and appends a
+    // fresh viewport sample (no resize is issued in this case, so any new
+    // sample is the reload's load-time report — the same probe rig the
+    // sizing cases above trust).
+    name: 'webview child reload re-runs page script (probe re-reports)',
+    category: 'auto',
+    // 20s: creation wait (5s) + settled leg (7s) + reload poll (7s) must fit
+    // inside the case budget so a failure reports the leg message, not the
+    // outer timeout.
+    timeout: 20000,
+    async fn() {
+      await skipOnMobile('webview child creation (create_webview) is upstream cfg(desktop) and absent from the mobile build');
+      const tag = 'test-reload-child-' + Date.now();
+      const child = new Webview(getCurrentWindow(), tag, {
+        url: '/webview-viewport-probe.html',
+        x: 50,
+        y: 50,
+        width: 300,
+        height: 200,
+      });
+      try {
+        await waitForWebviewCreated(child, 'reload child');
+        // First load must settle before the reload: the probe uplink produces
+        // at least one sample for this tag.
+        await pollViewportProbeSettled(tag, 7000, 'reload child initial load');
+        const before = (await invoke<ViewportProbeSample[]>('get_tracked_webview_viewport_probes'))
+          .filter((s) => s.tag === tag).length;
+        await child.reload();
+        const start = Date.now();
+        let after = before;
+        while (Date.now() - start < 7000) {
+          after = (await invoke<ViewportProbeSample[]>('get_tracked_webview_viewport_probes'))
+            .filter((s) => s.tag === tag).length;
+          if (after > before) break;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        assert(
+          after > before,
+          `webview.reload(): probe sample count for "${tag}" stayed ${after} after reload — no fresh page load within 7000ms (command not routed or ArkWeb refresh failed)`
+        );
+      } finally {
+        try { await child.close(); } catch { /* cleanup best-effort */ }
       }
     },
   },

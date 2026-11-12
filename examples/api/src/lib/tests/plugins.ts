@@ -119,6 +119,71 @@ export const pluginTests: TestCase[] = [
       await error('test error message');
     },
   },
+  // attachLogger / attachConsole (SOW §六「统一日志输出」— the plugin's JS
+  // event surface). attachLogger(fn) subscribes to `log://log`, which the
+  // Rust side emits only when the app registers the plugin with a Webview
+  // target. This demo (src-tauri/src/lib.rs) uses clear_targets + Stdout +
+  // skip_logger, and on OHOS the global logger is ohos_log (hilog) — so
+  // `log://log` is never emitted here: front-end log calls unify into hilog
+  // instead (JS info() → Rust `log` command → log::logger() → ohos_log →
+  // hilog). The round-trip below asserts the full in-page loop when the
+  // Webview target is wired and honest-skips otherwise; both branches fire
+  // a uniquely marked info() that lands in hilog — the verification side
+  // greps `sow-log-` to confirm the unified sink on-device.
+  {
+    name: '@tauri-apps/plugin-log.attachLogger round-trip',
+    category: 'auto',
+    timeout: 8000,
+    async fn() {
+      const { attachLogger, info, LogLevel } = await import('@tauri-apps/plugin-log');
+      const marker = uniq('sow-log-logger');
+      const captured: { level: number; message: string }[] = [];
+      const unlisten = await attachLogger((entry) => captured.push(entry));
+      assert(typeof unlisten === 'function', `attachLogger should resolve an UnlistenFn, got ${typeof unlisten}`);
+      try {
+        await info(marker);
+        const deadline = Date.now() + 2000;
+        while (Date.now() < deadline && captured.length === 0) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (captured.length === 0) {
+          skip('log://log not emitted by this app config (skip_logger + Stdout-only targets; on OHOS the unified sink is hilog — grep the fired marker there)');
+        }
+        const hit = captured.find((c) => String(c.message).includes(marker));
+        if (!hit) throw new Error(`captured entries should contain the marker '${marker}', got: ${JSON.stringify(captured)}`);
+        assert(Number(hit.level) === LogLevel.Info, `marker entry level should be LogLevel.Info (${LogLevel.Info}), got ${hit.level}`);
+        // unlisten must stop delivery
+        const n = captured.length;
+        unlisten();
+        await info(`${marker}-after-unlisten`);
+        await new Promise((r) => setTimeout(r, 400));
+        assert(captured.length === n, `entries should not grow after unlisten (before ${n}, after ${captured.length})`);
+      } finally {
+        // drop the listener even if an assertion threw mid-way
+        try { unlisten(); } catch { /* already unlistened */ }
+      }
+    },
+  },
+  {
+    name: '@tauri-apps/plugin-log.attachConsole',
+    category: 'auto',
+    timeout: 8000,
+    async fn() {
+      const { attachConsole, info } = await import('@tauri-apps/plugin-log');
+      const marker = uniq('sow-log-console');
+      const unlisten = await attachConsole();
+      assert(typeof unlisten === 'function', `attachConsole should resolve an UnlistenFn, got ${typeof unlisten}`);
+      try {
+        // The marker lands in the unified sink (hilog on OHOS). Where the
+        // Webview target is wired, attachConsole additionally forwards the
+        // log://log event to console.* — observable via ARKWEB-CONSOLE /
+        // hilog, not in-page-assertable.
+        await info(marker);
+      } finally {
+        unlisten();
+      }
+    },
+  },
 
   // @tauri-apps/plugin-http
   //
@@ -289,6 +354,64 @@ export const pluginTests: TestCase[] = [
 
       const afterRemove = await exists(testFile);
       assert(afterRemove === false, 'file still exists after remove');
+    },
+  },
+
+  // SOW §六 S6-081「打开写入文件」— fs 句柄式 open+write+readFile 往返
+  // （api-gap.ts:113 同源平移为真断言：handle.write 返回字节数，readFile 逐字节比对）。
+  {
+    name: '@tauri-apps/plugin-fs.open+write+readFile',
+    category: 'side-effect',
+    async fn() {
+      const { open, readFile, remove, exists } = await import('@tauri-apps/plugin-fs');
+      const { appCacheDir } = await import('@tauri-apps/api/path');
+      const payload = new Uint8Array(68);
+      for (let i = 0; i < 68; i++) payload[i] = (i * 7 + 3) % 251;
+      try {
+        const dir = await appCacheDir();
+        const file = `${dir}/sow-fs-open-${Date.now()}.bin`;
+        const fh = await open(file, { write: true, create: true, truncate: true });
+        const n = await fh.write(payload);
+        assert(n === payload.length, `write should return ${payload.length} bytes written, got ${n}`);
+        await fh.close();
+        const back = await readFile(file);
+        assert(back.byteLength === payload.length, `readFile length mismatch: ${back.byteLength} vs ${payload.length}`);
+        for (let i = 0; i < payload.length; i++) {
+          assert(back[i] === payload[i], `byte mismatch at ${i}: ${back[i]} vs ${payload[i]}`);
+        }
+        await remove(file);
+        assert((await exists(file)) === false, 'file still exists after remove');
+      } catch (e) {
+        if (isMissing(e)) skip(`fs plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // SOW §六 S6-082「按行读取文件」— readTextFileLines 迭代器收齐两行
+  // （api-gap.ts:122 同源，补第二行与 done 断言）。
+  {
+    name: '@tauri-apps/plugin-fs.readTextFileLines',
+    category: 'side-effect',
+    async fn() {
+      const { writeTextFile, readTextFileLines, remove } = await import('@tauri-apps/plugin-fs');
+      const { appCacheDir } = await import('@tauri-apps/api/path');
+      try {
+        const dir = await appCacheDir();
+        const file = `${dir}/sow-fs-lines-${Date.now()}.txt`;
+        await writeTextFile(file, 'line1\nline2\n');
+        const lines = await readTextFileLines(file);
+        const first = await lines.next();
+        assert(first.value === 'line1', `first line should be 'line1', got ${first.value}`);
+        const second = await lines.next();
+        assert(second.value === 'line2', `second line should be 'line2', got ${second.value}`);
+        const third = await lines.next();
+        assert(third.done === true, `iterator should be done after 2 lines, got ${JSON.stringify(third)}`);
+        await remove(file);
+      } catch (e) {
+        if (isMissing(e)) skip(`fs plugin not available: ${e}`);
+        throw e;
+      }
     },
   },
 
@@ -563,6 +686,60 @@ export const pluginTests: TestCase[] = [
       }
     },
   },
+  // SOW §六「大图写入读回」— 64×64 gradient round-trip (B-auto). The 4×4 tests
+  // above prove the bridge path; this one proves a non-trivial payload
+  // (16 KiB rgba) survives writeImage → pasteboard → readImage → PNG
+  // decode: size must round-trip exactly and 5 sampled pixels (4 corners +
+  // center) must be byte-exact, with the same alpha=0 don't-care rule for
+  // rgb as the V5 #113 test (the OHOS pipeline zeroes rgb under zero
+  // alpha). The top-left corner is alpha=0 by design so that rule is
+  // exercised; the other sample points carry alpha=255 and compare rgb too.
+  {
+    name: '@tauri-apps/plugin-clipboard-manager.writeImage(64x64)+readImage',
+    category: 'side-effect',
+    timeout: 15000,
+    async fn() {
+      const { writeImage, readImage } = await import('@tauri-apps/plugin-clipboard-manager');
+      const SIZE = 64;
+      const rgba = new Uint8Array(SIZE * SIZE * 4);
+      for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+          const p = (y * SIZE + x) * 4;
+          rgba[p] = (x * 4) % 256;      // r: horizontal gradient
+          rgba[p + 1] = (y * 4) % 256;  // g: vertical gradient
+          rgba[p + 2] = (x + y) * 2 % 256; // b: diagonal
+          rgba[p + 3] = x === 0 && y === 0 ? 0 : 255; // top-left alpha=0 exercises the don't-care rule
+        }
+      }
+      const { Image } = await import('@tauri-apps/api/image');
+      const img = await Image.new(rgba, SIZE, SIZE);
+      try {
+        await writeImage(img);
+        const readBack = await readImage();
+        if (!readBack) throw new Error('readImage() resolved null/undefined (ArkTS reject swallowed by bridge?)');
+        assert(readBack.width === SIZE && readBack.height === SIZE, `size should round-trip ${SIZE}x${SIZE}, got ${readBack.width}x${readBack.height}`);
+        const back = await readBack.rgba();
+        assert(back.length === SIZE * SIZE * 4, `readback rgba length should be ${SIZE * SIZE * 4}, got ${back.length}`);
+        const samples = [[0, 0], [SIZE - 1, 0], [0, SIZE - 1], [SIZE - 1, SIZE - 1], [Math.floor(SIZE / 2), Math.floor(SIZE / 2)]];
+        for (const [x, y] of samples) {
+          const p = (y * SIZE + x) * 4;
+          assert(back[p + 3] === rgba[p + 3], `sample (${x},${y}) alpha should be ${rgba[p + 3]}, got ${back[p + 3]}`);
+          if (rgba[p + 3] > 0) {
+            assert(
+              back[p] === rgba[p] && back[p + 1] === rgba[p + 1] && back[p + 2] === rgba[p + 2],
+              `sample (${x},${y}) rgb should be (${rgba[p]},${rgba[p + 1]},${rgba[p + 2]}), got (${back[p]},${back[p + 1]},${back[p + 2]})`
+            );
+          }
+        }
+      } catch (e) {
+        if (isMissing(e)) skip(`clipboard readImage not available: ${e}`);
+        if (await isOhosClipboardReadDenied(e)) {
+          skip('readImage observed an empty pasteboard (READ_PASTEBOARD not granted) — known OHOS platform limitation');
+        }
+        throw e;
+      }
+    },
+  },
   // writeImage with { rgba, width, height } object — verifies visit_map → JsImage::Rgba
   {
     name: '@tauri-apps/plugin-clipboard-manager.writeImage(rgba-object)',
@@ -671,6 +848,43 @@ export const pluginTests: TestCase[] = [
       }
     },
   },
+  // SOW §六「清空窗口状态」— clear round-trip (B-auto). Uses the app-local
+  // `clear_window_state` command (cmd.rs — same one the TestRunner
+  // "Window-State Clear" manual button drives): save first so the state
+  // file exists, then assert the command reports deleting it, that the
+  // file path is <appConfigDir>/.window-state.json, that a second call is
+  // an idempotent no-op, and finally re-save so subsequent launches keep
+  // their window geometry (mirrors the save+restore test's exit state).
+  {
+    name: '@tauri-apps/plugin-window-state.clear round-trip',
+    category: 'side-effect',
+    timeout: 10000,
+    async fn() {
+      const { saveWindowState, StateFlags } = await import('@tauri-apps/plugin-window-state');
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { appConfigDir } = await import('@tauri-apps/api/path');
+      try {
+        await saveWindowState(StateFlags.SIZE);
+        const res = await invoke<{ deleted: boolean; state_file: string }>('clear_window_state');
+        assert(res.deleted === true, `first clear should report deleted=true (state file existed), got: ${JSON.stringify(res)}`);
+        assert(
+          typeof res.state_file === 'string' && res.state_file.endsWith('.window-state.json'),
+          `state_file should end with .window-state.json, got: ${res.state_file}`
+        );
+        let configDir = '';
+        try { configDir = await appConfigDir(); } catch { /* path API unavailable is non-fatal for the prefix check */ }
+        if (configDir) {
+          assert(res.state_file.startsWith(configDir), `state_file should live under appConfigDir (${configDir}), got: ${res.state_file}`);
+        }
+        const res2 = await invoke<{ deleted: boolean }>('clear_window_state');
+        assert(res2.deleted === false, `second clear should report deleted=false (idempotent), got: ${JSON.stringify(res2)}`);
+        await saveWindowState(StateFlags.ALL);
+      } catch (e) {
+        if (isMissing(e)) skip(`window-state clear command not available: ${e}`);
+        throw e;
+      }
+    },
+  },
 
   // @tauri-apps/plugin-autostart (side-effect tests moved to end — on OHOS,
   // enable()/disable() call startAbility which sends app to background;
@@ -773,6 +987,9 @@ export const pluginTests: TestCase[] = [
   },
 
   // @tauri-apps/plugin-shell (manual)
+  // SOW §六 S6-138「打开帮助」— manual 锚（TestRunner 按钮 wrapManual('@tauri-apps/plugin-shell.open')
+  // 字面量与本 name 逐字一致）。fn 不被 runner 执行——真实判据（帮助目标被打开
+  // 或按契约明确拒绝）见 manual_tests.md §四十 Shell 行。
   {
     name: '@tauri-apps/plugin-shell.open',
     category: 'manual',
@@ -906,7 +1123,24 @@ export const pluginTests: TestCase[] = [
         throw e;
       }
       console.log('[schedule-test] sendNotification resolved');
-      const pendingList = await pending();
+      // JS 契约注意：sendNotification 经 window.Notification 构造器 fire-and-forget
+      // （plugin init-iife.js：构造器内异步 invoke，promise 不外露）——上面的 await
+      // 只等构造器同步返回，真实派发/拒绝在后台（真机实测：本机 1700002 配额拒绝
+      // 在 await 返回 ~330ms 后才发生在 ArkTS 侧，JS 不可见）。必须轮询 pending()。
+      let pendingList = await pending();
+      let found = pendingList.some((p) => p.id === id);
+      const deadline = Date.now() + 4000;
+      while (!found && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 200));
+        pendingList = await pending();
+        found = pendingList.some((p) => p.id === id);
+      }
+      if (!found) {
+        // 4s 未出现：fire-and-forget 链上的拒绝被吞（hilog [NotificationPlugin]
+        // 才可见——本机为 1700002 reminder 配额/AGC 授权），JS 无法区分「未送达」
+        // 与「被拒」→ 按设备态归因 skip（与权限未开同族），不判产品失败
+        skip(`scheduled notification ${id} never appeared in pending() within 4s — reminder quota/entitlement suspected (1700002 swallowed by the fire-and-forget JS contract; see hilog [NotificationPlugin] publishReminder)`);
+      }
       console.log(`[schedule-test] pending=${JSON.stringify(pendingList.map((p) => p.id))}`);
       assert(
         pendingList.some((p) => p.id === id),
@@ -1164,6 +1398,16 @@ export const pluginTests: TestCase[] = [
       }
     },
   },
+  // SOW §六 S6-155「测试Sentry崩溃」— manual 锚（TestRunner 按钮
+  // 'sentryRustPanic'，wrapManual 字面量与本 name 逐字一致）。cmd.rs:1970
+  // #[cfg(debug_assertions)] 门控：debug 构建=真实崩溃+本地捕获（manual_tests.md
+  // §十五 debug 行）；release 构建=命令不存在 → invoke 拒绝 = dormant 契约
+  // （§十五 release 形态行判据）。
+  {
+    name: 'sentryRustPanic',
+    category: 'manual',
+    async fn() {},
+  },
   {
     name: '@tauri-apps/plugin-global-shortcut.noModifier_fails',
     category: 'auto',
@@ -1407,6 +1651,32 @@ export const pluginTests: TestCase[] = [
     },
   },
 
+  // SOW §六 S6-092「重置存储数据」— store.reset() 清空全部键
+  // （driver:400 同源：set k1/k2 → reset → 双 get undefined + length 0）。
+  {
+    name: '@tauri-apps/plugin-store.reset',
+    category: 'auto',
+    async fn() {
+      const { load } = await import('@tauri-apps/plugin-store');
+      try {
+        const store = await load(`${uniq('store-reset')}.json`);
+        await store.set('k1', 1);
+        await store.set('k2', 2);
+        const before = await store.length();
+        assert(before >= 2, `length should be >= 2 after two sets, got ${before}`);
+        await store.reset();
+        assert((await store.get('k1')) === undefined, 'k1 should be undefined after reset');
+        assert((await store.get('k2')) === undefined, 'k2 should be undefined after reset');
+        const after = await store.length();
+        assert(after === 0, `length should be 0 after reset, got ${after}`);
+        await store.close();
+      } catch (e) {
+        if (isMissing(e)) skip(`store plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
   // @tauri-apps/plugin-sql
   {
     name: '@tauri-apps/plugin-sql.load+execute+select+close',
@@ -1422,6 +1692,34 @@ export const pluginTests: TestCase[] = [
         const rows: any[] = Array.isArray(res) ? res : (res?.rows ?? []);
         assert(rows.length === 1, `select should return 1 row, got ${JSON.stringify(res)}`);
         assert(rows[0].name === 'alice', `name mismatch: ${rows[0]?.name}`);
+        assert((await db.close()) === true, 'close should return true');
+      } catch (e) {
+        if (isMissing(e)) skip(`sql plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // SOW §六 S6-096「测试内存数据库」— sqlite::memory: 形态（driver:403 同源：
+  // CREATE/INSERT 参数化/SELECT 往返/close；既有 std 用例只覆盖文件型 .db）。
+  {
+    name: '@tauri-apps/plugin-sql.sqlite.memory',
+    category: 'auto',
+    async fn() {
+      const Database = (await import('@tauri-apps/plugin-sql')).default;
+      try {
+        // 上游契约注意：sqlx 路径映射把 'sqlite::memory:' 落成 app_config_dir 下的
+        // 持久文件（wrapper.rs path_mapper，全平台一致，非 OHOS 特有）——重装不
+        // 清数据 → 标记行会跨轮累积。先清表保证幂等。
+        const db = await Database.load('sqlite::memory:');
+        await db.execute('CREATE TABLE IF NOT EXISTS sow_mem (id INTEGER PRIMARY KEY, v TEXT)');
+        await db.execute('DELETE FROM sow_mem');
+        const ins = await db.execute('INSERT INTO sow_mem (v) VALUES ($1)', ['sow-memory-row']);
+        assert(ins.rowsAffected === 1, `insert rowsAffected should be 1, got ${ins?.rowsAffected}`);
+        const res: any = await db.select('SELECT v FROM sow_mem WHERE v=$1', ['sow-memory-row']);
+        const rows: any[] = Array.isArray(res) ? res : (res?.rows ?? []);
+        assert(rows.length === 1, `select should return 1 row, got ${JSON.stringify(res)}`);
+        assert(rows[0].v === 'sow-memory-row', `v mismatch: ${rows[0]?.v}`);
         assert((await db.close()) === true, 'close should return true');
       } catch (e) {
         if (isMissing(e)) skip(`sql plugin not available: ${e}`);
@@ -1480,6 +1778,31 @@ export const pluginTests: TestCase[] = [
     },
   },
 
+  // SOW §六 S6-117「下载远程文件」— upload.download 打 plugin-localhost 自有
+  // 资产服务 127.0.0.1:3005（无外网依赖，std fetch 用例同源判活；断言=落盘
+  // size>0 + 首字节 '<' 0x3C 即 index.html）。
+  {
+    name: '@tauri-apps/plugin-upload.download (localhost:3005)',
+    category: 'side-effect',
+    async fn() {
+      const { download } = await import('@tauri-apps/plugin-upload');
+      const { readFile, remove } = await import('@tauri-apps/plugin-fs');
+      const { appCacheDir } = await import('@tauri-apps/api/path');
+      try {
+        const dir = await appCacheDir();
+        const target = `${dir}/${uniq('download')}.html`;
+        await download('http://127.0.0.1:3005/index.html', target);
+        const content = await readFile(target);
+        assert(content.byteLength > 0, `downloaded file should be non-empty, got ${content.byteLength} bytes`);
+        assert(content[0] === 0x3c, `first byte should be '<' (0x3C, index.html), got 0x${(content[0] ?? 0).toString(16)}`);
+        await remove(target);
+      } catch (e) {
+        if (isMissing(e)) skip(`upload/localhost plugin not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
   // @tauri-apps/plugin-persisted-scope (via existing helper commands)
   {
     name: '@tauri-apps/plugin-persisted-scope.allow+persist',
@@ -1497,6 +1820,41 @@ export const pluginTests: TestCase[] = [
         throw e;
       }
     },
+  },
+
+  // SOW §六 S6-105「清空持久化Scope」— clear_persisted_scope 断言本体
+  // （镜像 wsc B-auto：前置 allow 确保状态文件存在 → clear deleted===true →
+  // 幂等二断 deleted===false；上条的 clear 调用是前置非断言）。
+  {
+    name: '@tauri-apps/plugin-persisted-scope.clear',
+    category: 'auto',
+    async fn() {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        // 前置：确保 .persisted-scope 状态文件存在（复用 allow+persist 链）。
+        const pre: any = await invoke('test_persisted_scope');
+        assert(pre?.state_file_exists === true, `precondition: state file should exist, got: ${JSON.stringify(pre)}`);
+        const res: any = await invoke('clear_persisted_scope');
+        assert(res?.deleted === true, `first clear should report deleted=true, got: ${JSON.stringify(res)}`);
+        assert(String(res?.state_file ?? '').includes('.persisted-scope'), `state_file should be the .persisted-scope file, got: ${res?.state_file}`);
+        const again: any = await invoke('clear_persisted_scope');
+        assert(again?.deleted === false, `second clear should be idempotent (deleted=false), got: ${JSON.stringify(again)}`);
+      } catch (e) {
+        if (isMissing(e)) skip(`persisted-scope helper not available: ${e}`);
+        throw e;
+      }
+    },
+  },
+
+  // SOW §六 S6-103「恢复fs授权」— manual 锚（TestRunner 按钮
+  // 'persisted-scope test'，wrapManual 字面量与本 name 逐字一致）。判据=重启后
+  // .persisted-scope 跨重启留存 + Clear 读到 remaining_patterns_count>0——
+  // manual_tests.md §二十一 restore 行（08-31 复验已实收）为文档行载体，
+  // 审计/转录漏挂，C2 补注册表挂接（不新增行/按钮）。
+  {
+    name: 'persisted-scope test',
+    category: 'manual',
+    async fn() {},
   },
 
   // @tauri-apps/plugin-localhost (assets served on port 3005)
@@ -1538,6 +1896,31 @@ export const pluginTests: TestCase[] = [
   // doc/manual_tests.md "Opener" section + "Plugins Manual Tests" buttons in
   // TestRunner (openPath / revealItemInDir / openUrl). Side effects (system
   // file manager / browser actually opening) cannot be asserted automatically.
+  // SOW §六 S6-141/142 特化形态 manual 锚（wrapManual 字面量与 name 逐字一致）：
+  // 缓存目录本体 / localhost 本地链接（§二十二既有行是文件/https 相邻形态）。
+  {
+    name: 'opener.openPath (cache dir)',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'opener.openUrl (localhost)',
+    category: 'manual',
+    async fn() {},
+  },
+  // SOW §六 S6-123/124 扫码 manual 锚（wrapManual 字面量与 name 逐字一致）：
+  // barcode 无 JS 包，TestRunner 按钮走 raw invoke（同 ohos-mobile-plugins.ts
+  // 惯例）；判据见 manual_tests.md §三十一新增两行。
+  {
+    name: 'barcodeCancel',
+    category: 'manual',
+    async fn() {},
+  },
+  {
+    name: 'barcodeOpenAppSettings',
+    category: 'manual',
+    async fn() {},
+  },
 
   // @tauri-apps/plugin-positioner (smoke — OHOS desktop window coords unknown)
   {

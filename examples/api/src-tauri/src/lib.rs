@@ -1031,7 +1031,26 @@ pub fn run_app<R: Runtime, F: FnOnce(&App<R>) + Send + 'static>(
           if !LOGGED.swap(true, Ordering::Relaxed) {
             log::info!("[RunEvent] MainEventsCleared");
           }
-          "MainEventsCleared"
+          // tao-ohos emits MainEventsCleared after EVERY dispatched event
+          // (issue #84 wrapper), not once per loop iteration like desktop
+          // tao, so on a long-lived instance this arm fires at the loop's
+          // wake rate (tens per second idle, more under load). run_events
+          // is deliberately never cleared ("Ready fires only once"), so an
+          // ungated push grew the vector to 6.2M strings over a 4-hour
+          // idle session (2026-11-12 device round) — every
+          // get_tracked_run_events then cloned ~120MB and held the mutex
+          // long enough to stall the run callback and time out the
+          // RunEvent/zombie families. Tests only assert PRESENCE of
+          // MainEventsCleared (#67), so push once ever — same gate shape
+          // as LOGGED above. Disclosed trade-off: an assertion of "a NEW
+          // MainEventsCleared fired after my action" is no longer
+          // expressible via this tracker.
+          static PUSHED: AtomicBool = AtomicBool::new(false);
+          if !PUSHED.swap(true, Ordering::Relaxed) {
+            "MainEventsCleared"
+          } else {
+            ""
+          }
         }
         RunEvent::ExitRequested {
           code, api: _api, ..

@@ -60,6 +60,31 @@ export const imageTests: TestCase[] = [
     },
   },
   {
+    name: '@tauri-apps/api/image.fromPath',
+    category: 'auto',
+    async fn() {
+      const { Image } = await import('@tauri-apps/api/image');
+      const { appCacheDir } = await import('@tauri-apps/api/path');
+      const { writeFile, remove } = await import('@tauri-apps/plugin-fs');
+      // C1a 平移自 api-gap cov 批（SOW §三 S3-039「从路径加载图像」，2026-11-10）：
+      // cov 原断言 size 1x1，std 版补 rid>0。appCacheDir() 无尾斜杠（S10R3 定案）
+      // ——模板串必须自带 '/' 分隔符，否则路径逃出 $APPCACHE/** scope 被正确拒绝。
+      const p = `${await appCacheDir()}/image-fromPath-std.png`;
+      await writeFile(p, MINIMAL_PNG);
+      try {
+        const img = await Image.fromPath(p);
+        const size = await img.size();
+        assert(size.width === 1, `PNG width should be 1, got ${size.width}`);
+        assert(size.height === 1, `PNG height should be 1, got ${size.height}`);
+        assert(img.rid > 0, `Image.rid should be positive, got ${img.rid}`);
+      } finally {
+        await remove(p).catch(() => {
+          /* cleanup 失败不连坐（残留随 appCache 生命周期）*/
+        });
+      }
+    },
+  },
+  {
     name: '@tauri-apps/api/image.close',
     category: 'auto',
     async fn() {

@@ -1,27 +1,33 @@
 <script>
   import { onMount } from 'svelte';
   import { runTests } from '../lib/test-runner';
-  import { coreTests } from '../lib/tests/core';
-  import { pluginTests } from '../lib/tests/plugins';
-  import { dpiTests } from '../lib/tests/dpi';
-  import { windowDpiTests } from '../lib/tests/window-dpi';
-  import { imageTests } from '../lib/tests/image';
-  import { menuTests } from '../lib/tests/menu';
-  import { trayTests } from '../lib/tests/tray';
-  import { ohosAdapterTests } from '../lib/tests/ohos-adapter';
-  import { ohosInitTests } from '../lib/tests/ohos-init';
-  import { ohosGapTests } from '../lib/tests/ohos-gap';
-  import { ohosMobilePluginTests } from '../lib/tests/ohos-mobile-plugins';
-  import { ohosScreenshotTests } from '../lib/tests/ohos-screenshot';
-  import { ohosContinuationTests } from '../lib/tests/ohos-continuation';
-  import { windowOpsTests } from '../lib/tests/window-ops';
-  import { windowOpsExtraTests } from '../lib/tests/window-ops-extra';
-  import { driverTests, sideReplayTests, badInputTests } from '../lib/tests/driver-generated';
-  import { faultInjectionTests } from '../lib/tests/fault-injection-generated';
-  import { apiGapTests } from '../lib/tests/api-gap';
-  import { riskSupplementTests } from '../lib/tests/risk-supplement';
-  import { strongholdTests } from '../lib/tests/stronghold';
-  import { zombieCloseTests } from '../lib/tests/zombie-close';
+  import {
+    coreTests,
+    pluginTests,
+    dpiTests,
+    windowDpiTests,
+    imageTests,
+    menuTests,
+    trayTests,
+    ohosAdapterTests,
+    ohosInitTests,
+    ohosGapTests,
+    ohosMobilePluginTests,
+    ohosScreenshotTests,
+    ohosContinuationTests,
+    windowOpsTests,
+    windowOpsExtraTests,
+    driverTests,
+    sideReplayTests,
+    badInputTests,
+    faultInjectionTests,
+    apiGapTests,
+    riskSupplementTests,
+    strongholdTests,
+    zombieCloseTests
+  } from '../lib/tests';
+  // SOW Coverage 面板（Phase D）：注册表账本直读（不经 tests barrel——那是用例不是账本）
+  import { sowRegistry, SOW_SECTIONS } from '../lib/tests/sow-registry';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, currentMonitor, cursorPosition, Effect, LogicalSize, PhysicalPosition, PhysicalSize, UserAttentionType } from '@tauri-apps/api/window';
@@ -1952,6 +1958,224 @@ Expected behavior:
     });
   }
 
+  // ── C3 批（SOW §一 manual 6 条，2026-11-10）──
+  // 11. Webview zoom — zoom window content 1.0 ↔ 1.5 (S1-018；S2-032 共享)
+  let zoomState = $state(1.0);
+  async function manualSetZoom() {
+    await wrapManual('window.setZoom (1.5x visual)', async () => {
+      const next = zoomState === 1.0 ? 1.5 : 1.0;
+      zoomState = next;
+      await getCurrentWebview().setZoom(next);
+      manualResult = `setZoom(${next}) dispatched on webview.\n\nExpected: 页面内容缩放为 ${Math.round(next * 100)}%（无 getter，视觉判据）。\n内容放大且布局不破 → PASS；再点恢复 100%。\n(TR zoom 热键按钮是另一路径——zoomHotkeys flag，非 setZoom API。)`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 12. Skip taskbar — toggle taskbar icon visibility (S1-037)
+  let skipTaskbarState = $state(false);
+  async function manualSetSkipTaskbar() {
+    await wrapManual('window.setSkipTaskbar (taskbar icon toggle)', async () => {
+      const next = !skipTaskbarState;
+      skipTaskbarState = next;
+      await getCurrentWindow().setSkipTaskbar(next);
+      manualResult = `setSkipTaskbar(${next}) dispatched on main window.\n\nExpected: 任务栏上本应用图标 ${next ? '消失' : '恢复'}（无 getter，视觉判据）。\n再点恢复。\n注: 2in1 任务栏=底部 Dock 区。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 13. Window shadow — toggle window shadow (S1-040)
+  let shadowState = $state(true);
+  async function manualSetShadow() {
+    await wrapManual('window.setShadow (visual toggle)', async () => {
+      const next = !shadowState;
+      shadowState = next;
+      await getCurrentWindow().setShadow(next);
+      manualResult = `setShadow(${next}) dispatched on main window.\n\nExpected: 窗口投影/阴影 ${next ? '恢复' : '消失'}（无 getter，目检窗口边缘外圈）。\n再点恢复。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 14. Window icon — setIcon with a tiny PNG (S1-042)
+  async function manualSetIcon() {
+    await wrapManual('window.setIcon (1x1 PNG)', async () => {
+      // 1x1 透明 PNG（与 cov windowOpsExtra setIcon 批同源的极小载荷）
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      await getCurrentWindow().setIcon(png);
+      manualResult = `setIcon(1x1 PNG, ${png.length} bytes) dispatched.\n\nExpected: 命令干净 resolve（dispatcher 链路）。\n视觉: 标题栏/任务栏图标可能变化或不变（窗口层运行时图标在 OHOS 上无静态配置优先，无视觉变化=记录形态不判 FAIL）。\n链路 PASS = resolve 无错误。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 15. Scale changed listener — watch onScaleChanged while user flips system display scale (S1-061)
+  let scaleEvents = $state([]);
+  let scaleUnlisten = null;
+  async function manualWatchScaleChanged() {
+    await wrapManual('window.onScaleChanged (system display settings)', async () => {
+      if (scaleUnlisten) {
+        // 第二次点击=停止监听并报告
+        scaleUnlisten();
+        scaleUnlisten = null;
+        manualResult = `已停止监听 onScaleChanged。本次共收到 ${scaleEvents.length} 个事件：\n${scaleEvents.map((e) => `  scale=${e.scale} @ ${e.at}`).join('\n') || '  (无)'}\n\n字体大小切档期间事件数 > 0 → PASS；0 → 回归信号（fix 批④ 后 config 驱动边沿应翻，判读见 manual_tests.md §36.10 备注；「显示大小」切档 0 事件维持已披露——两者区分）。`;
+        onMessage(manualResult);
+        return;
+      }
+      const win = getCurrentWindow();
+      scaleEvents = [];
+      scaleUnlisten = await win.onScaleChanged(({ payload }) => {
+        scaleEvents.push({ scale: payload.scaleFactor, at: new Date().toLocaleTimeString() });
+      });
+      manualResult = `onScaleChanged 监听已开启。\n\n步骤: 系统设置 > 显示和亮度 > **字体大小**（切档；非「显示大小」——其改 VPR，fix 批④ 两条腿都不转发，0 事件维持已披露）\n预期: 每次字体档位变化产生一个事件（fix 批④ 后 payload=组合值 density×font_size_scale，档位变化应翻边沿）。\n切完档回到本应用，再点本按钮停止并判定。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 16. Window dragging — startDragging then user drags with mouse (S1-088)
+  async function manualStartDragging() {
+    await wrapManual('window.startDragging (mouse drag)', async () => {
+      await getCurrentWindow().startDragging();
+      manualResult = `startDragging() dispatched — 窗口已进入拖拽模式。\n\n立即按住鼠标拖动窗口 → 窗口跟随移动（位移 ≥ 10 逻辑 px）→ PASS。\n(边缘拉伸=同 API 族 startResizeDragging；本按钮承载拖拽主路径。)`;
+      onMessage(manualResult);
+    });
+  }
+
+  // ── C4 批（SOW §二 子 Webview manual 3 条，2026-11-10）──
+  // 17. Child-webview zoom — setZoom on a child webview (S2-032)
+  // 两击式（第 5 轮修正）：一击建子窗+setZoom(1.5)，二击 close。
+  // 旧 1.0↔1.5 toggle 两处误导：ArkWeb zoom() 相对/乘法语义下 setZoom(1.0)=×1.0
+  // 无操作（「只放大不缩小」= 判据②披露行为本身）；且旧实现无关闭路径
+  // （manualResult 引用的 "Close All" 按钮不存在）→ 子窗无法关闭。
+  let sowWvZoom = $state(null);
+  async function manualWebviewSetZoom() {
+    await wrapManual('webview.setZoom (child webview 1.5x visual)', async () => {
+      if (sowWvZoom) {
+        // 第二次点击=关闭子 Webview（相对语义下复原的唯一路径：重开=100% 新基线）
+        const wv = sowWvZoom;
+        await wv.close();
+        sowWvZoom = null;
+        manualResult = `子 Webview 已关闭。\n\n清理完成；再点本按钮 = 新建子窗 = 100% 新基线。`;
+        onMessage(manualResult);
+        return;
+      }
+      sowWvZoom = new Webview(getCurrentWindow(), 'sow-wv-zoom-' + Date.now(), {
+        url: 'data:text/html,<html><body style="margin:0;padding:30px;font-family:sans-serif;background:mintcream"><h2>Child Webview — setZoom target</h2><p>子 Webview 为 setZoom 作用目标（区别于主窗 §36.10 按钮）</p></body></html>',
+        x: 80, y: 120, width: 420, height: 280,
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+      await sowWvZoom.setZoom(1.5);
+      manualResult = `webview.setZoom(1.5) dispatched on child webview.\n\n判据①: 子 Webview 内容放大 150% 且布局不破 → 放大生效即 PASS。\n判据②（披露）: setZoom(1.0) 不复原——ArkWeb zoom() 相对/乘法语义，1.0 = ×1.0 无操作（第 5 轮「只放大不缩小」即此行为；上游 Tauri JS 契约为绝对值，语义错配已在披露清单，与 §36.10 同因）。\n清理: 再点本按钮关闭子窗；重开 = 100% 新基线（复原唯一路径）。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // ── fix 批⑤（S1-018/S2-032 绝对语义复验，2026-11-10）──
+  // 三击式：建子窗+setZoom(1.5) → setZoom(1.0)（判定步=复原）→ close。
+  // wry 侧已改 target/current 换算（wry/src/ohos/mod.rs zoom_model）：
+  // setZoom(1.0) 复位 100% 是修复后契约；不复原=回归信号。
+  // 旧相对语义披露的历史行（§36.10 Set Zoom / §36.11 Set Zoom 判据②）已
+  // ✅ 归一不动，本按钮 + §36.12 复验行承载修复后的绝对语义判读。
+  // 坐标 (80,420) 与 zoom(120)/focus(200) 子窗纵向错开（120+280=400 下沿）。
+  let sowWvZoomAbs = $state(null);
+  let sowWvZoomAbsStage = $state(0); // 0=未建 1=已放大 2=已复位
+  async function manualWebviewSetZoomAbs() {
+    await wrapManual('webview.setZoom (child abs round-trip 1.5→1.0)', async () => {
+      if (sowWvZoomAbsStage === 0) {
+        sowWvZoomAbs = new Webview(getCurrentWindow(), 'sow-wv-zoomabs-' + Date.now(), {
+          url: 'data:text/html,<html><body style="margin:0;padding:30px;font-family:sans-serif;background:mistyrose"><h2>Child Webview — setZoom abs round-trip</h2><p>绝对语义复验目标（fix 批⑤）：1.5 放大 → 1.0 复原</p></body></html>',
+          x: 80, y: 420, width: 420, height: 240,
+        });
+        await new Promise((r) => setTimeout(r, 1000));
+        await sowWvZoomAbs.setZoom(1.5);
+        sowWvZoomAbsStage = 1;
+        manualResult = `webview.setZoom(1.5) dispatched on child webview.\n\n判据①: 子 Webview 内容放大 150% 且布局不破 → 确认后点本按钮执行 setZoom(1.0) 判定步。`;
+        onMessage(manualResult);
+        return;
+      }
+      if (sowWvZoomAbsStage === 1) {
+        await sowWvZoomAbs.setZoom(1.0);
+        sowWvZoomAbsStage = 2;
+        manualResult = `webview.setZoom(1.0) dispatched — 判定步（fix 批⑤）。\n\n判据②（修复后契约）: 内容复原至 100% → PASS。\n不复原 = 回归信号（wry 侧 target/current 换算失效，wry/src/ohos/mod.rs zoom_model）。\n再点本按钮关闭清理。`;
+        onMessage(manualResult);
+        return;
+      }
+      const wv = sowWvZoomAbs;
+      await wv.close();
+      sowWvZoomAbs = null;
+      sowWvZoomAbsStage = 0;
+      manualResult = `子 Webview 已关闭，状态复位。\n\n再点本按钮 = 新建子窗重新验证。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 18. Child-webview focus — setFocus on a child webview (S2-034)
+  // 第 6 轮修正：补关闭击（与 setZoom 按钮同款问题——旧实现创建后无关闭路径）。
+  let sowWvFocus = $state(null);
+  async function manualWebviewSetFocus() {
+    await wrapManual('webview.setFocus (child webview z-order)', async () => {
+      if (sowWvFocus) {
+        // 第二次点击=关闭子 Webview
+        const wv = sowWvFocus;
+        await wv.close();
+        sowWvFocus = null;
+        manualResult = `子 Webview 已关闭，状态复位。\n\n再点本按钮 = 新建子窗重新验证。`;
+        onMessage(manualResult);
+        return;
+      }
+      sowWvFocus = new Webview(getCurrentWindow(), 'sow-wv-focus-' + Date.now(), {
+        url: 'data:text/html,<html><body style="margin:0;padding:30px;font-family:sans-serif;background:lavender"><h2>Child Webview — setFocus target</h2><input placeholder="键盘焦点观察位（点按可聚焦）" style="font-size:16px;padding:8px"/></body></html>',
+        x: 140, y: 200, width: 420, height: 280,
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+      await sowWvFocus.setFocus();
+      manualResult = `webview.setFocus() dispatched on child webview.\n\n判据: 子 Webview 置前（z-order 抬升至主窗之上）→ PASS。\n注: 程序化 focus 只抬 z-order 不转移键盘焦点（raiseToAppTop 语义，2026-08-27 A/B 定案，§36.7 setFocusable 行同结论）——键盘输入进子窗不是本 API 承诺，子窗内输入框需手动点按聚焦。\n清理: 再点本按钮关闭子窗。`;
+      onMessage(manualResult);
+    });
+  }
+
+  // 19. Child-webview hide+show — four-press: create / hide / show / close (S2-035)
+  // 第 5 轮修正两处：① 计数页换实资产 /sow-wv-vis.html + 外链 JS——CSP
+  // default-src 'self' 无 'unsafe-inline'，data:URL 内联 onclick 被静默拦截
+  // （点击已到子窗、脚本不执行，webview-viewport-probe.html:21 同约束先例）；
+  // ② 旧「建+1.5s+立即 hide」不给点计数的时间窗——改四击式，判定步=show。
+  // 坐标 (580,160) 与 zoom(≤500)/focus(≤560) 子窗横向错开，消除重叠误点。
+  let sowWvVis = $state(null);
+  let sowWvVisStage = $state(0); // 0=未建 1=已建可见 2=已隐藏 3=已复原
+  async function manualWebviewHideShow() {
+    await wrapManual('webview.hide+show (child webview)', async () => {
+      if (sowWvVisStage === 0) {
+        // 第一次点击=创建（可见，计数按钮+uptime 计时器已跑）
+        sowWvVis = new Webview(getCurrentWindow(), 'sow-wv-vis-' + Date.now(), {
+          url: '/sow-wv-vis.html',
+          x: 580, y: 160, width: 420, height: 300,
+        });
+        sowWvVisStage = 1;
+        manualResult = `子 Webview 已创建（右侧，带计数按钮 + uptime 计时器）。\n\n步骤: 在子窗内点几下计数按钮（数字递增、秒表在跑）→ 再点本按钮执行 hide。`;
+        onMessage(manualResult);
+        return;
+      }
+      if (sowWvVisStage === 1) {
+        await sowWvVis.hide();
+        sowWvVisStage = 2;
+        manualResult = `webview.hide() 已派发 — 子 Webview 内容应已消失。\n\n确认: 子窗消失、主窗与其他窗口不受影响 → 再点本按钮 show 复原。`;
+        onMessage(manualResult);
+        return;
+      }
+      if (sowWvVisStage === 2) {
+        await sowWvVis.show();
+        sowWvVisStage = 3;
+        manualResult = `webview.show() 已派发 — 子 Webview 复原显示（判定步）。\n\n判据: ① 内容重现 ② 计数按钮保留此前数值 ③ uptime 计时不归零（隐藏期间暂停节流可接受，归零=重载）→ 三条合成 PASS（页面未重载、JS 状态不丢）。\n再点本按钮关闭清理。`;
+        onMessage(manualResult);
+        return;
+      }
+      // 第四次点击=关闭清理
+      const wv = sowWvVis;
+      await wv.close();
+      sowWvVis = null;
+      sowWvVisStage = 0;
+      manualResult = `子 Webview 已关闭，状态复位。\n\n（隐藏期间的计时节流不影响判定——判据是计数保留与计时不归零，不是计时连续。）`;
+      onMessage(manualResult);
+    });
+  }
+
   async function manualRequestUserAttention() {
     await wrapManual('requestUserAttention', async () => {
       const win = getCurrentWindow();
@@ -2006,13 +2230,46 @@ Expected behavior:
 
   // ─── Process & Updater Manual Tests ───
   async function manualRelaunch() {
-    await wrapManual('relaunch', async () => {
+    await wrapManual('@tauri-apps/plugin-process.relaunch', async () => {
       const { relaunch } = await import('@tauri-apps/plugin-process');
       manualResult = 'relaunch() called. The app will restart now (process hard-kill, no onDestroy).\nOn OHOS: restartApp(want) triggers a cold restart.\nThe JS promise will NOT resolve — the process is killed before IPC response.\nVerify: app disappears and reappears within ~2 seconds.';
       onMessage(manualResult);
       // Small delay so the user can read the message before the process dies
       await new Promise(r => setTimeout(r, 1500));
       await relaunch();
+    });
+  }
+
+  // SOW §六 S6-138「打开帮助」— plugin-shell.open('help')（cov 镜像
+  // driver-generated.ts:1014 side.shell.open.help）。判据=帮助目标被打开，
+  // 或按契约明确拒绝——两种结局皆 PASS（manual_tests.md §四十）。
+  async function manualShellOpenHelp() {
+    await wrapManual('@tauri-apps/plugin-shell.open', async () => {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      try {
+        await open('help');
+        manualResult = `open('help') called.\nCheck: a handler opens the help target.\nNo error → PASS.`;
+      } catch (e) {
+        manualResult = `open('help') rejected:\n${String(e)}\n(A clear, documented rejection is also PASS — record the exact error.)`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  // SOW §六「打开更新对话框」— showAppGalleryUpdateDialog opens the AppGallery
+  // system update dialog (user-driven; promise resolving ≠ update installed).
+  async function manualShowAppGalleryUpdateDialog() {
+    await wrapManual('@tauri-apps/plugin-updater.showAppGalleryUpdateDialog', async () => {
+      const { showAppGalleryUpdateDialog } = await import('@tauri-apps/plugin-updater');
+      manualResult = 'showAppGalleryUpdateDialog() called.\nOn OHOS: AppGallery should open its native update dialog for this app.\nVerify: the system dialog appears (update/download options or a no-update notice).';
+      onMessage(manualResult);
+      try {
+        await showAppGalleryUpdateDialog();
+        manualResult += '\npromise resolved (dialog was dismissed or closed).';
+      } catch (e) {
+        manualResult += `\npromise rejected: ${e}\n(rejection = AppGallery link failure, e.g. app not on the store — record the exact error).`;
+      }
+      onMessage(manualResult);
     });
   }
 
@@ -3141,6 +3398,37 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
     });
   }
 
+  // SOW §六 S6-124「打开扫码设置」— raw invoke open_app_settings（barcode 无
+  // JS 包，同区按钮惯例）。判据=系统设置（应用管理/扫码权限页）弹出。
+  async function manualBarcodeOpenAppSettings() {
+    await wrapManual('barcodeOpenAppSettings', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('plugin:barcode-scanner|open_app_settings');
+        manualResult = '✅ open_app_settings() resolve\n断言：系统设置页弹出（应用管理/扫码权限相关页面）';
+      } catch (e) {
+        manualResult = `❌ open_app_settings() reject：${e}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  // SOW §六 S6-123「取消扫码」— raw invoke cancel。OHOS 无程序化 cancel API
+  // （Plugin.ets handleCancel 直接 resolve），desktop 判据=干净 resolve；
+  // mobile 全流程判据=扫码中点按 → 扫码页面关闭。
+  async function manualBarcodeCancel() {
+    await wrapManual('barcodeCancel', async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      try {
+        await invoke('plugin:barcode-scanner|cancel');
+        manualResult = '✅ cancel() resolve（desktop 契约判据：无程序化 cancel API，干净 resolve 即链路验证）\nmobile 形态判据：先 Barcode Scan 拉起扫码 UI，扫码中点本按钮 → 扫码页面关闭';
+      } catch (e) {
+        manualResult = `❌ cancel() reject：${e}`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
   async function manualBiometricAuth() {
     await wrapManual('biometricAuth', async () => {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -3362,8 +3650,11 @@ initial=${report.initial}, after_open=${report.after_open}, after_close=${report
       } catch (e) {
         const msg = String(e);
         if (msg.includes('not found') || msg.includes('command')) {
-          // Command not registered (shouldn't happen — sentry_test_panic has no cfg gate)
-          manualResult += '\n\n⚠️ sentry_test_panic command not found.';
+          // release 构建的预期形态：sentry_test_panic 被 #[cfg(debug_assertions)]
+          // 门控（cmd.rs:1970），release 下命令不存在 → invoke 拒绝 = dormant 契约
+          // PASS（manual_tests.md §十五 release 形态行判据②；2026-11-10 C2 修正
+          // 过时注释「无 debug 门控」）。
+          manualResult += '\n\n⚠️ sentry_test_panic command not found (release build — dormant contract, see manual_tests.md §十五 release row).';
         } else {
           // Expected: IPC will fail because the thread panicked
           manualResult += `\n\nPanic triggered. IPC error (expected): ${e}`;
@@ -3680,6 +3971,38 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     });
   }
 
+  // SOW §六 S6-141「打开缓存目录」— openPath 的目录本体形态（§二十二既有
+  // openPath 行是「新建临时文件」文件形态；本条打开 appCacheDir 目录）。
+  async function manualOpenerOpenPathCache() {
+    await wrapManual('opener.openPath (cache dir)', async () => {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      const dir = await appCacheDir();
+      try {
+        await openPath(dir);
+        manualResult = `openPath(${dir}) called.\nCheck: file manager opens the cache directory (or an AppSelector "choose how to open" dialog as the directory fallback).\nNo error → PASS.`;
+      } catch (e) {
+        manualResult = `openPath(${dir}) rejected:\n${String(e)}\n(A clear, documented rejection (e.g. app-sandbox path) is also PASS — record the exact error.)`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
+  // SOW §六 S6-142「打开本地链接」— openUrl 的 localhost 形态（§二十二既有行
+  // 是 https://tauri.app 外链；本条打 plugin-localhost 自有 3005 资产服务，
+  // 无外网依赖）。
+  async function manualOpenerOpenUrlLocalhost() {
+    await wrapManual('opener.openUrl (localhost)', async () => {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      try {
+        await openUrl('http://127.0.0.1:3005/index.html');
+        manualResult = `openUrl('http://127.0.0.1:3005/index.html') called.\nCheck: system browser opens the localhost page (plugin-localhost asset server, port 3005).\nNo error → PASS.`;
+      } catch (e) {
+        manualResult = `openUrl(localhost) rejected:\n${String(e)}\n(A clear, documented rejection is also PASS — record the exact error.)`;
+      }
+      onMessage(manualResult);
+    });
+  }
+
   async function manualStorePersist() {
     await wrapManual('store.persist', async () => {
       const { load } = await import('@tauri-apps/plugin-store');
@@ -3739,6 +4062,54 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
     });
   }
 
+  // ── SOW Coverage 面板（Phase D，2026-11-10）──
+  // 读 src/lib/tests/sow-registry.ts 账本，按 §一~§六 渲染四档 + excluded。
+  // 档位推导与 scripts/sow-check.mjs 同口径：✅=std 有 auto 真断言 或 有文档行；
+  // 🟡=仅 cov；⚠️=std 全 manual 锚且无文档行；❌=全空；⊘=plan excluded。
+  // 面板只做展示（读账本），机检门（引用存在性/计数对账/selftest 红臂）仍在
+  // sow-check——页面内不重复校验。
+  const stdCategoryMap = new Map();
+  for (const arr of [coreTests, pluginTests, dpiTests, windowDpiTests, imageTests, menuTests, trayTests, ohosAdapterTests, ohosInitTests, ohosGapTests, ohosMobilePluginTests, ohosScreenshotTests, ohosContinuationTests, windowOpsTests, riskSupplementTests, strongholdTests, zombieCloseTests]) {
+    for (const tc of arr) stdCategoryMap.set(tc.name, tc.category);
+  }
+
+  function sowTier(item) {
+    if (item.plan?.kind === 'excluded') return 'excluded';
+    const hasAuto = (item.std ?? []).some((n) => {
+      const cat = stdCategoryMap.get(n);
+      return cat !== undefined && cat !== 'manual';
+    });
+    if (hasAuto || (item.manual ?? []).length > 0) return 'ok';
+    if ((item.cov ?? []).length > 0) return 'cov';
+    if ((item.std ?? []).length > 0) return 'warn';
+    return 'missing';
+  }
+
+  const SOW_TIER_BADGE = { ok: '✅', cov: '🟡', warn: '⚠️', missing: '❌', excluded: '⊘' };
+  const SOW_TIER_LABEL = { ok: '✅ 有 auto 真断言或文档行', cov: '🟡 仅 cov 盲调', warn: '⚠️ 仅 manual 锚无文档行', missing: '❌ 无证据', excluded: '⊘ excluded（有因登记）' };
+
+  const sowTiered = sowRegistry.map((item) => ({ ...item, tier: sowTier(item) }));
+  const sowSectionStats = SOW_SECTIONS.map((sec) => {
+    const rows = sowTiered.filter((it) => it.section === sec);
+    const count = (tier) => rows.filter((it) => it.tier === tier).length;
+    return { sec, total: rows.length, ok: count('ok'), cov: count('cov'), warn: count('warn'), missing: count('missing'), excluded: count('excluded') };
+  });
+  const sowGrand = sowSectionStats.reduce(
+    (acc, s) => ({ ok: acc.ok + s.ok, cov: acc.cov + s.cov, warn: acc.warn + s.warn, missing: acc.missing + s.missing, excluded: acc.excluded + s.excluded }),
+    { ok: 0, cov: 0, warn: 0, missing: 0, excluded: 0 },
+  );
+
+  let sowPanelOpen = $state(false);
+  let sowOpenSections = $state({});
+  let sowFilter = $state('');
+  const sowFiltered = $derived(sowFilterTrim(sowFilter, sowTiered));
+
+  function sowFilterTrim(filter, rows) {
+    const q = filter.trim().toLowerCase();
+    if (q === '') return null;
+    return rows.filter((it) => (it.id + ' ' + it.name + ' ' + it.group + ' ' + (it.note ?? '')).toLowerCase().includes(q));
+  }
+
 </script>
 
 <div class="flex flex-col gap-2">
@@ -3783,6 +4154,79 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       {/each}
     </div>
   {/if}
+
+  <!-- SOW Coverage 面板（Phase D）：504 能力 ×四档账，读注册表渲染 -->
+  <div class="mt-2 pt-2 border-t-1 border-solid border-code">
+    <button class="btn" onclick={() => (sowPanelOpen = !sowPanelOpen)}>
+      {sowPanelOpen ? '▼' : '▶'} SOW Coverage（{sowTiered.length} 项四档账）
+    </button>
+    {#if sowPanelOpen}
+      <div class="text-xs mt-2 p-2 rd-1 bg-black/10 dark:bg-white/10">
+        <div class="flex flex-wrap gap-2 items-center">
+          <span class="font-bold">总计：</span>
+          <span>✅ {sowGrand.ok}</span>
+          <span>🟡 {sowGrand.cov}</span>
+          <span>⚠️ {sowGrand.warn}</span>
+          <span>❌ {sowGrand.missing}</span>
+          <span>⊘ {sowGrand.excluded}</span>
+          <span class="text-gray-500">（§四 10 条流程级豁免含于 ⊘）</span>
+          <input
+            type="text"
+            placeholder="按 id/名称/域/备注过滤…"
+            bind:value={sowFilter}
+            class="ml-auto p-1 border border-gray-300 rounded text-xs w-56 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100"
+          />
+        </div>
+        <p class="text-gray-500 mt-1">
+          口径：{SOW_TIER_LABEL.ok}；{SOW_TIER_LABEL.cov}；{SOW_TIER_LABEL.warn}；{SOW_TIER_LABEL.missing}；{SOW_TIER_LABEL.excluded}。机检门=npm run sow:check（本面板只读账本不重复校验）。
+        </p>
+
+        {#if sowFiltered}
+          <div class="flex flex-col gap-1 mt-2 max-h-96 overflow-y-auto">
+            {#each sowFiltered as it (it.id)}
+              <div class="p-1 rd-1 bg-black/5 dark:bg-white/5">
+                <span>{SOW_TIER_BADGE[it.tier]}</span>
+                <span class="font-mono ml-1">{it.id}</span>
+                <span class="ml-1">{it.name}</span>
+                <span class="text-gray-500 ml-1">（{it.section}·{it.group}）</span>
+              </div>
+            {/each}
+            {#if sowFiltered.length === 0}
+              <span class="text-gray-500">无匹配条目</span>
+            {/if}
+          </div>
+        {:else}
+          {#each sowSectionStats as s (s.sec)}
+            <div class="mt-2">
+              <button class="text-left w-full p-1 rd-1 bg-black/5 dark:bg-white/5" onclick={() => (sowOpenSections = { ...sowOpenSections, [s.sec]: !sowOpenSections[s.sec] })}>
+                <span class="font-bold">§{s.sec === '五菜单' || s.sec === '五托盘' ? '五（' + s.sec.slice(1) + '）' : s.sec}</span>
+                <span class="ml-2">✅ {s.ok} / 🟡 {s.cov} / ⚠️ {s.warn} / ❌ {s.missing} / ⊘ {s.excluded}</span>
+                <span class="text-gray-500 ml-2">共 {s.total} 条</span>
+                <span class="ml-1">{sowOpenSections[s.sec] ? '▾' : '▸'}</span>
+              </button>
+              {#if sowOpenSections[s.sec]}
+                <div class="flex flex-col gap-1 mt-1 max-h-72 overflow-y-auto pl-2 border-l-1 border-solid border-gray-300 dark:border-gray-600">
+                  {#each sowTiered.filter((it) => it.section === s.sec) as it (it.id)}
+                    <div class="p-1 rd-1 bg-black/5 dark:bg-white/5">
+                      <div>
+                        <span>{SOW_TIER_BADGE[it.tier]}</span>
+                        <span class="font-mono ml-1">{it.id}</span>
+                        <span class="ml-1">{it.name}</span>
+                        <span class="text-gray-500 ml-1">{it.group}</span>
+                      </div>
+                      {#if it.note}
+                        <div class="text-gray-500 text-[11px] mt-0.5">{it.note}</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+  </div>
 
   <div class="mt-4 pt-3 border-t-1 border-solid border-code">
     <h4 class="my-2">Manual Tests</h4>
@@ -3924,6 +4368,16 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
         <button class="btn" onclick={manualSetMinAndMaxSize}>Set Min+Max (1600×1200 / 2400×1800 px)</button>
         <button class="btn" onclick={manualResetMinSize}>Reset Min Size (null)</button>
         <button class="btn" onclick={manualSetTheme}>Set Theme (toggle Light/Dark/System)</button>
+        <button class="btn" onclick={manualSetZoom}>setZoom (webview 1.0↔1.5x)</button>
+        <button class="btn" onclick={manualSetSkipTaskbar}>setSkipTaskbar (toggle)</button>
+        <button class="btn" onclick={manualSetShadow}>setShadow (toggle)</button>
+        <button class="btn" onclick={manualSetIcon}>setIcon (1x1 PNG)</button>
+        <button class="btn" onclick={manualWatchScaleChanged}>onScaleChanged (watch/stop)</button>
+        <button class="btn" onclick={manualStartDragging}>startDragging (mouse drag)</button>
+        <button class="btn" onclick={manualWebviewSetZoom}>webview setZoom (child 1.5x + close)</button>
+        <button class="btn" onclick={manualWebviewSetZoomAbs}>webview setZoom abs round-trip (1.5→1.0 + close)</button>
+        <button class="btn" onclick={manualWebviewSetFocus}>webview setFocus (child + close)</button>
+        <button class="btn" onclick={manualWebviewHideShow}>webview hide+show (child)</button>
         <button class="btn" onclick={manualRequestUserAttention}>Request User Attention (notification)</button>
         <button class="btn" onclick={manualSetImePosition}>Set IME Position (200,400)</button>
       </div>
@@ -3939,6 +4393,8 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualRelaunch}>relaunch() (app will restart)</button>
         <button class="btn" onclick={manualDownloadAndInstall}>downloadAndInstall() (system dialog)</button>
+        <button class="btn" onclick={manualShowAppGalleryUpdateDialog}>showAppGalleryUpdateDialog() (AppGallery dialog)</button>
+        <button class="btn" onclick={manualShellOpenHelp}>shell.open('help')</button>
       </div>
     </div>
     <div class="mt-2 pt-2 border-t-1 border-solid border-code">
@@ -4140,6 +4596,8 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
       <div class="flex gap-2 flex-wrap">
         <button class="btn" onclick={manualBarcodeScan}>Barcode Scan (camera)</button>
         <button class="btn" onclick={manualBarcodeVibrate}>Barcode Vibrate (扫码振动反馈)</button>
+        <button class="btn" onclick={manualBarcodeOpenAppSettings}>Barcode Open App Settings</button>
+        <button class="btn" onclick={manualBarcodeCancel}>Barcode Cancel</button>
         <button class="btn" onclick={manualBiometricAuth}>Biometric Authenticate</button>
         <button class="btn" onclick={manualNfcIsAvailable}>NFC isAvailable</button>
         <button class="btn" onclick={manualNfcScan}>NFC scan (贴标签)</button>
@@ -4186,6 +4644,8 @@ Mutex released, no cascade deadlock: ${ok ? 'PASS ✅' : 'FAIL ❌'}`;
           <button class="btn" onclick={manualOpenerRevealPublic}>Opener revealItemInDir (public dir→FM)</button>
         </div>
         <button class="btn" onclick={manualOpenerOpenUrl}>Opener openUrl (open browser)</button>
+        <button class="btn" onclick={manualOpenerOpenPathCache}>Opener openPath (open cache dir)</button>
+        <button class="btn" onclick={manualOpenerOpenUrlLocalhost}>Opener openUrl (localhost)</button>
         <button class="btn" onclick={manualStorePersist}>Store Persist (set+save)</button>
         <button class="btn" onclick={manualStoreVerify}>Store Verify (after restart)</button>
         <button class="btn" onclick={manualUploadProgress}>Upload (echo+progress)</button>
