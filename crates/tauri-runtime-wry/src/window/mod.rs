@@ -46,6 +46,10 @@ pub trait WindowExt {
   /// ## Platform-specific:
   ///
   /// - **Android / iOS**: Unsupported.
+  /// - **OpenHarmony**: Computes the work-area center of the window's current
+  ///   monitor (first available monitor as fallback) and moves the window
+  ///   there via `set_outer_position` — the same geometry the shared
+  ///   `#[cfg(desktop)]` creation-time `.center()` block computes.
   fn center(&self) {}
 
   /// Clears the window surface. i.e make it transparent.
@@ -65,6 +69,23 @@ impl WindowExt for tao::window::Window {
   fn set_enabled(&self, _: bool) {}
   fn is_enabled(&self) -> bool {
     true
+  }
+
+  /// OpenHarmony runtime centering. Android/iOS keep the trait-default no-op
+  /// (method-level cfg: adding the method to this shared impl block would
+  /// change the mobile surface too).
+  #[cfg(target_env = "ohos")]
+  fn center(&self) {
+    let monitor = self
+      .current_monitor()
+      .or_else(|| self.available_monitors().next());
+    let Some(monitor) = monitor else {
+      // No monitor info (early window_rect, no displays) — centering is
+      // unjudgeable; keep the old no-op behavior instead of moving blind.
+      return;
+    };
+    let position = calculate_window_center_position(self.outer_size(), monitor);
+    self.set_outer_position(position);
   }
 }
 
